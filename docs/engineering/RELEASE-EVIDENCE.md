@@ -278,6 +278,126 @@ test ALT-DEF-001/002 yang sudah ada. **Belum ada** migrasi nyata ke Postgres
 maupun test integrasi/isolasi-tenant sungguhan - karena itu status kedua
 defect di `DEFECT-LEDGER.md` adalah `SIAP_DIVERIFIKASI`, BUKAN `DITUTUP`.
 
+## Pass correction-loop 2026-07-25 (lanjutan): perbaikan ALT-DEF-003 dan ALT-DEF-013
+
+Cakupan: pengerasan autentikasi/sesi/PIN - `TokenResetKataSandi`,
+`PercobaanLogin`, `PinOutlet` (composite-FK ganda seperti
+`KeanggotaanOutlet`), `RiwayatPerangkat`, field lockout eksplisit di
+`Pengguna` (`terkunciSampai`, `jumlahPercobaanGagal`), dan `Sesi` diperkeras
+(`tokenHash`, `keanggotaanTenantId`, `terakhirAktifPada`,
+`alasanPencabutan`, `ipHash`, `userAgent`). Lihat
+`docs/engineering/DECISION-LOG.md` ADR-014/ADR-015 untuk desain lengkap.
+
+### 1. `prisma format`
+
+```
+$ npx prisma format --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 59ms 🚀
+```
+
+Tidak ada error sintaks yang perlu diperbaiki pada pass ini (berbeda dari
+pass ALT-DEF-010/014 yang sempat menemukan dua error "ambiguous relation"/
+"one-to-one relation" - pola composite-FK ganda `PinOutlet` mengikuti persis
+pola `KeanggotaanOutlet` yang sudah terbukti valid, termasuk penamaan
+relasi eksplisit `PinOutletOutlet`/`PinOutletTenantScoped` sejak awal
+penulisan skema, sehingga tidak memicu error yang sama).
+
+### 2. `prisma validate`
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/altora_resto" npx prisma validate --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+```
+
+### 3. `prisma generate` (tanpa koneksi database nyata)
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/altora_resto" npx prisma generate --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 641ms
+```
+
+`npx prisma` (versi 5.20.0 yang sudah terinstal dari pass-pass sebelumnya di
+`node_modules`) berjalan langsung tanpa perlu workaround
+`npm install --no-save --no-package-lock @prisma/client@5.20.0 prisma@5.20.0`
+pada pass ini - dependency sudah tersedia dari batch ALT-DEF-010/014
+sebelumnya di environment yang sama.
+
+### 4. Test struktur/arsitektur (dijalankan nyata)
+
+`packages/test-support/src/architecture/sesi-auth-pin-constraints.test.ts`
+(baru, ALT-DEF-003/ALT-DEF-013) dijalankan lewat Node type-stripping:
+
+```
+$ node --experimental-strip-types packages/test-support/src/architecture/sesi-auth-pin-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-003/ALT-DEF-013 lulus.
+```
+
+Kedua test lama dijalankan ulang untuk memverifikasi tidak ada regresi dari
+penambahan model/field pass ini:
+
+```
+$ node --experimental-strip-types packages/test-support/src/architecture/keanggotaan-outlet-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-001/ALT-DEF-002 lulus.
+
+$ node --experimental-strip-types packages/test-support/src/architecture/tenant-outlet-composite-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-010/ALT-DEF-014 lulus.
+```
+
+`tsc --noEmit` atas seluruh file test arsitektur (baru + lama) plus
+`izin.seed.ts` - semuanya **bersih, tanpa error**:
+
+```
+$ npx tsc --noEmit --strict --module ESNext --moduleResolution Bundler --target ES2022 --skipLibCheck --types node packages/test-support/src/architecture/sesi-auth-pin-constraints.test.ts
+(tidak ada output - bersih)
+
+$ npx tsc --noEmit --strict --module ESNext --moduleResolution Bundler --target ES2022 --skipLibCheck packages/test-support/src/architecture/prisma-client-shape-auth-pin.test.ts
+(tidak ada output - bersih)
+
+$ npx tsc --noEmit --strict --module ESNext --moduleResolution Bundler --target ES2022 --skipLibCheck --types node packages/test-support/src/architecture/*.test.ts prisma/seed/izin.seed.ts
+(tidak ada output - bersih, mencakup keanggotaan-outlet-constraints.test.ts,
+tenant-outlet-composite-constraints.test.ts, prisma-client-shape.test.ts,
+prisma-client-shape-tenant-outlet.test.ts, sesi-auth-pin-constraints.test.ts,
+prisma-client-shape-auth-pin.test.ts sekaligus)
+```
+
+**DIBLOKIR:** eksekusi lewat `pnpm --filter @altora/test-support test`
+(vitest) tetap tidak bisa dijalankan di environment ini (sama seperti
+pass-pass sebelumnya - lihat `ALT-DEF-027`). Assertion yang sama sudah
+dibuktikan lulus secara nyata lewat `node --experimental-strip-types` di
+atas.
+
+### 5. `prisma migrate dev` - DIBLOKIR (konsisten dengan pass sebelumnya)
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/altora_resto_migrate_test" npx prisma migrate dev --schema=prisma/schema/schema.prisma --name alt_def_003_013_auth_pin_hardening --create-only
+Prisma schema loaded from prisma/schema/schema.prisma
+Datasource "db": PostgreSQL database "altora_resto_migrate_test", schema "public" at "localhost:5432"
+
+Error: P1010: User `user` was denied access on the database `altora_resto_migrate_test.public`
+```
+
+**DIBLOKIR: migrasi belum dapat diverifikasi karena PostgreSQL nyata tidak
+tersedia di environment ini** (konsisten dengan `ALT-DEF-029`). Tidak ada
+file migrasi yang dibuat/di-commit dari percobaan ini
+(`prisma/migrations/` tetap kosong).
+
+### Kesimpulan status
+
+Schema untuk ALT-DEF-003/ALT-DEF-013 sudah benar secara sintaks
+(`format`+`validate`), tipe yang dihasilkan sudah benar secara bentuk
+(`generate` + `tsc --noEmit`, termasuk `Unchecked...CreateInput` untuk
+`PinOutlet`, `TokenResetKataSandi`, `PercobaanLogin`, `RiwayatPerangkat`,
+`Sesi`), dan seluruh model/field yang diklaim di ADR-014/ADR-015 sudah
+dibuktikan ada lewat test struktur nyata, tanpa regresi pada test
+ALT-DEF-001/002/010/014 yang sudah ada. **Belum ada** migrasi nyata ke
+Postgres, implementasi handler auth/PIN sungguhan, maupun test integrasi
+login/PIN sungguhan - karena itu status kedua defect di
+`DEFECT-LEDGER.md` adalah `SIAP_DIVERIFIKASI`, BUKAN `DITUTUP`.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```
