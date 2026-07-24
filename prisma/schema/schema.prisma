@@ -64,6 +64,14 @@ enum StatusPerangkat {
   NONAKTIF
 }
 
+// ALT-DEF-003/ALT-DEF-013: aksi riwayat asosiasi Pengguna<->Perangkat, dicatat
+// append-only di RiwayatPerangkat (lihat DECISION-LOG.md ADR-015).
+enum AksiRiwayatPerangkat {
+  DIDAFTARKAN
+  DIGUNAKAN
+  DICABUT
+}
+
 model Tenant {
   id        String       @id
   nama      String
@@ -124,6 +132,7 @@ model Outlet {
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
   keanggotaanOutlet       KeanggotaanOutlet[]       @relation("KeanggotaanOutletOutlet")
+  pinOutlet               PinOutlet[]               @relation("PinOutletOutlet")
   perangkat               Perangkat[]
   pengaturanOutlet        PengaturanOutlet[]
   kategoriMenu            KategoriMenu[]
@@ -182,11 +191,23 @@ model Pengguna {
   status                 StatusPengguna @default(AKTIF)
   emailTerverifikasiPada DateTime?
   terakhirLoginPada      DateTime?
+  // ALT-DEF-003: penguncian sementara akun (account lockout) setelah beruntun
+  // gagal login - dipilih sebagai field eksplisit di Pengguna (bukan dihitung
+  // ulang dari PercobaanLogin tiap request) karena lebih sederhana untuk
+  // dibaca/di-guard di jalur login (satu row lookup, bukan agregasi COUNT
+  // setiap percobaan) - lihat DECISION-LOG.md ADR-014 untuk rasionalnya.
+  // jumlahPercobaanGagal di-reset ke 0 saat login berhasil; terkunciSampai
+  // diisi begitu ambang batas gagal beruntun terlampaui (nilai ambang dan
+  // durasi kunci adalah keputusan service-layer, bukan bagian skema).
+  terkunciSampai         DateTime?
+  jumlahPercobaanGagal   Int            @default(0)
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
 
   keanggotaanTenant               KeanggotaanTenant[]
   sesi                            Sesi[]
+  tokenResetKataSandi             TokenResetKataSandi[]
+  riwayatPerangkat                RiwayatPerangkat[]
   auditLog                        AuditLog[]
   karyawan                        Karyawan?
   giliranKasir                    GiliranKasir[]
@@ -229,6 +250,9 @@ model KeanggotaanTenant {
   keanggotaanPeran              KeanggotaanPeran[]
   izinSementara                 IzinSementara[]
   permintaanPersetujuanPemohon  PermintaanPersetujuan[] @relation("PersetujuanPemohon")
+  sesi                          Sesi[]
+  pinOutlet                     PinOutlet[]
+  pinOutletTenantScoped         PinOutlet[]             @relation("PinOutletTenantScoped")
 
   @@unique([penggunaId, tenantId])
   // Diperlukan agar KeanggotaanOutlet bisa memakai composite FK
@@ -446,24 +470,160 @@ model Perangkat {
   status       StatusPerangkat @default(AKTIF)
   lastSeenAt   DateTime?
 
-  outlet Outlet @relation(fields: [tenantId, outletId], references: [tenantId, id])
-  sesi   Sesi[]
+  outlet           Outlet             @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  sesi             Sesi[]
+  // ALT-DEF-003/ALT-DEF-013: riwayat asosiasi Pengguna<->Perangkat ini (lihat
+  // model RiwayatPerangkat) - append-only, terpisah dari baris Perangkat itu
+  // sendiri (yang hanya menyimpan state TERKINI perangkat, bukan histori).
+  riwayatPerangkat RiwayatPerangkat[]
 
   @@map("perangkat")
 }
 
+// ALT-DEF-003/ALT-DEF-013: sesi login diperkeras (session hardening).
+// Keputusan desain (lihat DECISION-LOG.md ADR-014 untuk detail lengkap):
+// - `tokenHash` (bukan menyimpan token bearer mentah) ditambahkan sebagai
+//   kolom eksplisit yang unik - lookup sesi HARUS lewat hash token, tidak
+//   pernah lewat `id` yang bisa ditebak/enumerasi.
+// - `keanggotaanTenantId` NULLABLE - merepresentasikan konteks tenant AKTIF
+//   dari sesi ini. Nullable karena alur login (`POST /api/v1/auth/masuk`,
+//   lihat API-CONTRACT.md) menghasilkan Sesi GLOBAL dulu (identitas
+//   `Pengguna`, ALT-DEF-001) SEBELUM klien memilih tenant lewat
+//   `GET /api/v1/tenant-saya` - sesi tanpa tenant dipilih adalah state valid
+//   (mis. baru login, belum pilih tenant; atau pengguna dengan tepat satu
+//   `KeanggotaanTenant` yang bisa auto-select tanpa mengubah makna field ini).
+//   TIDAK memakai composite-FK ke tenant karena Sesi sendiri tidak membawa
+//   kolom tenantId - relasi ini murni "konteks yang sedang dipakai", bukan
+//   kepemilikan data tenant-scoped.
 model Sesi {
-  id             String    @id
-  penggunaId     String
-  perangkatId    String?
-  dibuatPada     DateTime  @default(now())
-  kadaluarsaPada DateTime
-  dicabutPada    DateTime?
+  id                  String    @id
+  penggunaId          String
+  keanggotaanTenantId String?
+  perangkatId         String?
+  // Hash dari token bearer sesi (never simpan token mentah) - unik agar
+  // lookup sesi dari token yang disodorkan klien selalu tepat satu baris.
+  tokenHash           String    @unique
+  dibuatPada          DateTime  @default(now())
+  kadaluarsaPada      DateTime
+  // Diperbarui setiap request terautentikasi berhasil menggunakan sesi ini -
+  // dipakai untuk mendeteksi sesi idle/dorman terlepas dari kadaluarsaPada.
+  terakhirAktifPada   DateTime  @default(now())
+  dicabutPada         DateTime?
+  // Alasan pencabutan sesi (mis. "logout", "ganti kata sandi",
+  // "dicabut manual oleh pengguna", "dicabut manual oleh admin",
+  // "terdeteksi kompromi") - bebas teks, diisi service-layer saat mencabut.
+  alasanPencabutan    String?
+  ipHash              String?
+  userAgent           String?
 
-  pengguna  Pengguna   @relation(fields: [penggunaId], references: [id])
-  perangkat Perangkat? @relation(fields: [perangkatId], references: [id])
+  pengguna          Pengguna           @relation(fields: [penggunaId], references: [id])
+  keanggotaanTenant KeanggotaanTenant? @relation(fields: [keanggotaanTenantId], references: [id])
+  perangkat         Perangkat?         @relation(fields: [perangkatId], references: [id])
 
   @@map("sesi")
+}
+
+// ALT-DEF-003: permintaan reset kata sandi. Satu baris per permintaan reset -
+// token MENTAH dikirim ke email pengguna dan TIDAK PERNAH disimpan, hanya
+// `tokenHash` (mis. SHA-256) yang disimpan di sini, sama seperti pola
+// `Sesi.tokenHash`. `digunakanPada` menandai token sudah dipakai; Prisma
+// tidak bisa menyatakan "unique tapi hanya saat digunakanPada IS NULL"
+// (conditional uniqueness) di level skema - enforcement "token yang sudah
+// dipakai atau kadaluarsa tidak boleh dipakai ulang" WAJIB dilakukan di
+// service-layer (cek `digunakanPada IS NULL AND kadaluarsaPada > now()`
+// sebelum menerima konsumsi token) - lihat DECISION-LOG.md ADR-014.
+model TokenResetKataSandi {
+  id             String    @id
+  penggunaId     String
+  tokenHash      String    @unique
+  kadaluarsaPada DateTime
+  digunakanPada  DateTime?
+  createdAt      DateTime  @default(now())
+
+  pengguna Pengguna @relation(fields: [penggunaId], references: [id])
+
+  @@map("token_reset_kata_sandi")
+}
+
+// ALT-DEF-003: log percobaan login, APPEND-ONLY (tidak ada update/delete di
+// level aplikasi) - dipakai untuk mendeteksi brute-force dan sebagai bagian
+// jejak audit "audit login berhasil/gagal". Sengaja TIDAK di-FK ke Pengguna -
+// percobaan login dengan email yang tidak terdaftar/salah ketik HARUS tetap
+// tercatat (mis. untuk mendeteksi enumerasi email), dan FK wajib akan
+// menolak baris semacam itu. `email` disimpan sebagai teks bebas (identifier
+// yang dicoba), bukan referensi.
+model PercobaanLogin {
+  id        String   @id
+  email     String
+  berhasil  Boolean
+  ipHash    String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@map("percobaan_login")
+}
+
+// ALT-DEF-013: PIN per KOMBINASI keanggotaan-tenant + outlet (+ perangkat
+// opsional) - BUKAN PIN global per Pengguna (pinHash lama sudah dihapus dari
+// Pengguna sejak ALT-DEF-001, lihat catatan di model Pengguna). Memakai pola
+// composite-FK ganda yang SAMA seperti KeanggotaanOutlet (ADR-011/ADR-013):
+// kolom tenantId denormalisasi dipakai bersama oleh DUA relasi composite -
+// (tenantId, outletId) -> Outlet(tenantId, id) dan
+// (tenantId, keanggotaanTenantId) -> KeanggotaanTenant(tenantId, id) - agar
+// PIN outlet tidak bisa dibuat untuk kombinasi keanggotaan-tenant dan outlet
+// yang berasal dari tenant berbeda.
+//
+// Catatan NULL pada @@unique([keanggotaanTenantId, outletId, perangkatId])
+// (lihat DECISION-LOG.md ADR-015 untuk detail lengkap): Postgres/Prisma
+// menganggap NULL tidak pernah sama dengan NULL pada unique constraint,
+// sehingga constraint ini TIDAK mencegah dua baris dengan perangkatId NULL
+// (PIN "berlaku di semua perangkat") untuk kombinasi keanggotaanTenantId+
+// outletId yang sama. Keputusan: dibiarkan sebagai keterbatasan yang
+// didokumentasikan, enforcement "hanya satu PIN tanpa-perangkat-spesifik
+// per keanggotaan-tenant+outlet" WAJIB dilakukan di service-layer (cek
+// existing row dengan perangkatId IS NULL sebelum insert) - BUKAN
+// mengandalkan constraint database untuk kasus ini.
+model PinOutlet {
+  id                  String              @id
+  keanggotaanTenantId String
+  tenantId            String
+  outletId            String
+  // Opsional - PIN bisa dibatasi berlaku hanya di satu perangkat tertentu.
+  // Sengaja TIDAK di-FK ke model Perangkat (yang men-scope perangkat
+  // fisik/infrastruktur outlet - KASIR/KDS/PRINTER/TABLET_PELAYAN) karena PIN
+  // staf lazimnya dipakai dari perangkat pribadi/perangkat yang tidak selalu
+  // teregistrasi sebagai Perangkat outlet (lihat DECISION-LOG.md ADR-015).
+  perangkatId         String?
+  pinHash             String
+  status              StatusAktifNonaktif @default(AKTIF)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  outlet                        Outlet            @relation("PinOutletOutlet", fields: [tenantId, outletId], references: [tenantId, id])
+  keanggotaanTenant             KeanggotaanTenant @relation(fields: [keanggotaanTenantId], references: [id])
+  keanggotaanTenantTenantScoped KeanggotaanTenant @relation("PinOutletTenantScoped", fields: [tenantId, keanggotaanTenantId], references: [tenantId, id])
+
+  @@unique([keanggotaanTenantId, outletId, perangkatId])
+  @@map("pin_outlet")
+}
+
+// ALT-DEF-003/ALT-DEF-013: riwayat APPEND-ONLY asosiasi Pengguna<->Perangkat -
+// berbeda dari model Perangkat (yang menyimpan state TERKINI satu perangkat
+// fisik/infrastruktur outlet, mis. status AKTIF/NONAKTIF, lastSeenAt). Baris
+// di sini dicatat setiap kali seorang Pengguna didaftarkan ke suatu
+// Perangkat, memakainya untuk login/aktivitas, atau dicabut aksesnya -
+// dipakai sebagai jejak audit keamanan perangkat per pengguna.
+model RiwayatPerangkat {
+  id          String               @id
+  penggunaId  String
+  perangkatId String
+  aksi        AksiRiwayatPerangkat
+  createdAt   DateTime             @default(now())
+
+  pengguna  Pengguna  @relation(fields: [penggunaId], references: [id])
+  perangkat Perangkat @relation(fields: [perangkatId], references: [id])
+
+  @@map("riwayat_perangkat")
 }
 
 model AuditLog {

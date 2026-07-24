@@ -363,9 +363,167 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
   test integrasi isolasi-tenant sungguhan tetap `DIBLOKIR` (`ALT-DEF-029`),
   konsisten dengan status ADR-011/ADR-012 sebelumnya.
 
+## ADR-014: Pengerasan kredensial/sesi - reset kata sandi, lockout, session-tenant-scoping (ALT-DEF-003)
+
+- **Status:** DITERIMA
+- **Konteks:** `ALT-DEF-003` di `DEFECT-LEDGER.md` mencatat bahwa model
+  autentikasi sebelum batch ini (`Pengguna.passwordHash` nullable dari
+  ALT-DEF-001, model `Sesi` sederhana) tidak punya fondasi untuk: (a) alur
+  lupa/reset kata sandi, (b) deteksi brute-force dan penguncian sementara
+  akun, (c) lifecycle sesi yang aman (token bearer tidak boleh disimpan
+  mentah, sesi tidak menyatakan konteks tenant mana yang sedang aktif,
+  tidak ada jejak IP/user-agent/alasan pencabutan).
+- **Keputusan 1 - Lockout: field eksplisit di `Pengguna`, bukan dihitung
+  ulang dari `PercobaanLogin` tiap request.** Dua pendekatan dipertimbangkan:
+  (a) computed lockout - service login melakukan `COUNT` baris
+  `PercobaanLogin` gagal dalam jendela waktu tertentu setiap kali ada upaya
+  login; (b) field eksplisit `Pengguna.terkunciSampai` (`DateTime?`) +
+  `Pengguna.jumlahPercobaanGagal` (`Int @default(0)`), diperbarui oleh
+  service-layer setiap kali login gagal/berhasil. **Dipilih (b)** karena:
+  - Jalur login yang benar butuh SATU baris lookup (`Pengguna` sudah
+    di-fetch untuk verifikasi password) untuk tahu status kunci, bukan query
+    agregasi `COUNT` terpisah ke `PercobaanLogin` setiap request login -
+    lebih murah dan lebih sederhana untuk diimplementasikan sebagai guard.
+  - `PercobaanLogin` tetap ada dan tetap dipertahankan APPEND-ONLY (lihat
+    Keputusan 3) sebagai jejak audit brute-force yang lebih kaya (per-IP,
+    per-user-agent) - kedua mekanisme tidak saling meniadakan, field di
+    `Pengguna` adalah "state kunci saat ini", `PercobaanLogin` adalah
+    "riwayat lengkap" untuk investigasi/analitik keamanan.
+  - Trade-off yang diterima: field eksplisit bisa "basi" bila diperbarui
+    lewat lebih dari satu jalur tanpa transaksi yang konsisten - ini adalah
+    tanggung jawab implementasi service-layer di batch fitur berikutnya
+    (di luar scope batch ini, yang hanya schema), bukan sesuatu yang bisa
+    dijamin skema Prisma semata.
+- **Keputusan 2 - Reset kata sandi: `TokenResetKataSandi` terpisah, hash-only,
+  conditional-uniqueness didokumentasikan sebagai keterbatasan Prisma.**
+  Token MENTAH dikirim ke pengguna (email) dan TIDAK PERNAH disimpan - hanya
+  `tokenHash` (mis. SHA-256 dari token mentah) yang disimpan, `@unique`,
+  sama pola dengan `Sesi.tokenHash` (lihat Keputusan 3). `digunakanPada`
+  (`DateTime?`) menandai token sudah dikonsumsi. **Keterbatasan Prisma yang
+  didokumentasikan secara eksplisit:** tidak ada cara menyatakan "sebuah
+  token hanya valid dipakai SATU kali, dan dianggap tidak valid lagi begitu
+  `digunakanPada` terisi ATAU `kadaluarsaPada` terlampaui" sebagai
+  constraint level-database di Prisma (ini butuh conditional/partial unique
+  index atau check constraint dengan klausa waktu, tidak didukung Prisma
+  schema language) - enforcement wajib dilakukan di service-layer:
+  endpoint konsumsi token HARUS memvalidasi
+  `digunakanPada IS NULL AND kadaluarsaPada > now()` sebelum menerima reset,
+  lalu menulis `digunakanPada = now()` di baris yang sama secara atomik
+  (transaksi/`UPDATE ... WHERE digunakanPada IS NULL`).
+- **Keputusan 3 - Session hardening: `tokenHash` wajib, `keanggotaanTenantId`
+  nullable sebagai konteks tenant aktif.** `Sesi.tokenHash` (`String @unique`)
+  ditambahkan eksplisit - lookup sesi dari header/cookie klien HARUS lewat
+  hash token yang disodorkan, bukan lewat `Sesi.id` (yang bisa dienumerasi/
+  ditebak bila dipakai sebagai bearer). `Sesi.keanggotaanTenantId` ditambahkan
+  sebagai **nullable** (bukan wajib) FK skalar (bukan composite) ke
+  `KeanggotaanTenant.id` - alasan nullable: alur login di `API-CONTRACT.md`
+  (`POST /api/v1/auth/masuk`) menghasilkan `Sesi` GLOBAL dulu (identitas
+  `Pengguna`, ALT-DEF-001) SEBELUM klien memilih konteks tenant lewat
+  `GET /api/v1/tenant-saya` - sesi yang belum memilih tenant adalah state
+  valid, bukan error. Field ini TIDAK di-composite-kan ke tenant (pola
+  ADR-013) karena `Sesi` sendiri tidak membawa kolom `tenantId` - relasi ini
+  murni menyatakan "konteks operasional yang sedang dipakai sesi ini", bukan
+  kepemilikan data tenant-scoped yang butuh jaminan anti-lintas-tenant di
+  level database. Field tambahan lain: `terakhirAktifPada` (dipakai deteksi
+  sesi idle terlepas dari `kadaluarsaPada`), `alasanPencabutan` (teks bebas,
+  mis. "logout"/"ganti kata sandi"/"dicabut manual oleh admin"), `ipHash`,
+  `userAgent`. `dicabutPada`, `perangkatId`, `dibuatPada`, `kadaluarsaPada`
+  dipertahankan dari skema sebelumnya.
+- **Keputusan 4 - `PercobaanLogin`: append-only, TIDAK di-FK ke `Pengguna`.**
+  `email` disimpan sebagai teks bebas (identifier yang dicoba), bukan
+  referensi ke `Pengguna.email` - percobaan login dengan email yang tidak
+  terdaftar/salah ketik HARUS tetap tercatat (justru inilah sinyal brute-force/
+  enumerasi email yang paling relevan untuk dideteksi), dan FK wajib ke
+  `Pengguna` akan MENOLAK baris semacam itu di level database. Tidak ada
+  update/delete yang diasumsikan pada model ini (append-only), diverifikasi
+  di test arsitektur (lihat `packages/test-support`).
+- **Cakupan yang SENGAJA TIDAK dikerjakan di batch ini:** implementasi
+  handler auth nyata (endpoint login/reset/lockout), pengiriman email reset,
+  algoritma hashing konkret (bcrypt/argon2 - dipilih di implementasi, bukan
+  skema), migrasi Postgres nyata, dan test integrasi login sungguhan -
+  semuanya `BELUM DIKERJAKAN`/`DIBLOKIR` (`ALT-DEF-029`), konsisten dengan
+  pass-pass correction-loop sebelumnya. Batch ini murni schema + dokumentasi
+  kontrak API + traceability, sesuai instruksi cakupan correction-loop.
+
+## ADR-015: PIN per outlet (`PinOutlet`) dan riwayat perangkat (ALT-DEF-013)
+
+- **Status:** DITERIMA
+- **Konteks:** `ALT-DEF-013` mencatat bahwa `Pengguna.pinHash` lama (PIN
+  global per pengguna) sudah dihapus sejak ALT-DEF-001 tanpa pengganti - PIN
+  seharusnya scoped ke kombinasi pengguna+outlet (bahkan +perangkat), bukan
+  atribut identitas global, agar kebocoran PIN di satu outlet/perangkat tidak
+  memaksa rotasi PIN pengguna tersebut di semua outlet lain tempat ia
+  bertugas.
+- **Keputusan 1 - `PinOutlet` di-scope ke `KeanggotaanTenant`, bukan langsung
+  ke `Pengguna`.** Mengikuti pola ALT-DEF-001: akses/kredensial operasional
+  scoped-tenant selalu digantung ke `KeanggotaanTenant` (representasi "satu
+  Pengguna sebagai anggota satu Tenant tertentu"), bukan ke `Pengguna` global
+  langsung - konsisten dengan `KeanggotaanOutlet`, `KeanggotaanPeran`,
+  `IzinSementara`.
+- **Keputusan 2 - Composite-FK ganda, pola identik `KeanggotaanOutlet`
+  (ADR-011/ADR-013).** `PinOutlet` membawa `tenantId` denormalisasi yang
+  dipakai bersama oleh DUA relasi composite: `(tenantId, outletId) ->
+  Outlet(tenantId, id)` (relasi `outlet`, nama relasi `PinOutletOutlet`) dan
+  `(tenantId, keanggotaanTenantId) -> KeanggotaanTenant(tenantId, id)` (relasi
+  `keanggotaanTenantTenantScoped`, nama relasi `PinOutletTenantScoped`) - ini
+  menjamin level-database bahwa PIN outlet tidak bisa dibuat untuk kombinasi
+  outlet dan keanggotaan-tenant yang berasal dari tenant berbeda, sama
+  seperti jaminan `KeanggotaanOutlet`. Divalidasi nyata oleh `prisma
+  validate`/`generate` (lihat `RELEASE-EVIDENCE.md`).
+- **Keputusan 3 - Uniqueness dengan NULL pada `perangkatId`: didokumentasikan
+  sebagai keterbatasan, enforcement di service-layer.**
+  `@@unique([keanggotaanTenantId, outletId, perangkatId])` dipakai sesuai
+  spesifikasi, TETAPI Postgres (dan karenanya Prisma, yang menerjemahkan
+  constraint ini langsung ke unique index Postgres) menganggap **NULL tidak
+  pernah sama dengan NULL** pada evaluasi unique constraint. Konsekuensi
+  konkret: dua baris `PinOutlet` dengan `keanggotaanTenantId`+`outletId` yang
+  sama dan `perangkatId` NULL pada KEDUANYA (PIN "berlaku di semua
+  perangkat") **tidak akan ditolak** oleh constraint ini - keduanya dianggap
+  baris yang berbeda oleh Postgres. Dua alternatif dipertimbangkan untuk
+  menutup celah ini: (a) memaksa `perangkatId` non-null dengan nilai
+  sentinel (mis. string kosong `""` merepresentasikan "tanpa perangkat
+  spesifik") sehingga constraint database murni mencegahnya; (b) membiarkan
+  `perangkatId` nullable apa adanya dan memindahkan enforcement "hanya satu
+  PIN tanpa-perangkat-spesifik per keanggotaan-tenant+outlet" ke
+  service-layer (cek baris `perangkatId IS NULL` yang sudah ada sebelum
+  insert baru). **Dipilih (b)** karena sentinel string kosong mengaburkan
+  makna "tidak ada perangkat" vs "perangkat dengan id kosong" di seluruh
+  query/laporan yang membaca `perangkatId` (query harus tahu untuk
+  memperlakukan `""` secara khusus, alih-alih memakai `IS NULL` yang jauh
+  lebih eksplisit) - trade-off yang diterima: constraint database SENDIRI
+  TIDAK cukup untuk kasus PIN tanpa-perangkat-spesifik, harus dibantu guard
+  aplikasi saat implementasi endpoint "ganti PIN"/"reset PIN" di batch
+  fitur berikutnya (di luar scope batch ini).
+- **Keputusan 4 - `PinOutlet.perangkatId` SENGAJA bukan FK ke model
+  `Perangkat`.** Berbeda dari `RiwayatPerangkat.perangkatId` (Keputusan 5) -
+  `Perangkat` men-scope perangkat FISIK/infrastruktur outlet yang sudah
+  teregistrasi lewat `kodeAktivasi` (KASIR/KDS/PRINTER/TABLET_PELAYAN, lihat
+  `JenisPerangkat`). PIN staf pada praktiknya sering dipakai dari perangkat
+  yang TIDAK selalu punya baris `Perangkat` sendiri (mis. tablet pribadi
+  pelayan untuk absensi mandiri) - mewajibkan FK ke `Perangkat` akan
+  menghalangi kasus valid tersebut. `perangkatId` di sini tetap `String?`
+  bebas (identifier perangkat apa pun, mis. device fingerprint), bukan
+  referensi berkendala FK.
+- **Keputusan 5 - `RiwayatPerangkat` terpisah dari `Perangkat`, DAN
+  `RiwayatPerangkat.perangkatId` di-FK ke `Perangkat`.** `Perangkat`
+  (skema sebelumnya) hanya menyimpan state TERKINI satu perangkat fisik
+  (`status`, `lastSeenAt`) - tidak ada jejak historis siapa saja yang pernah
+  diasosiasikan dengannya. `RiwayatPerangkat` adalah tabel APPEND-ONLY baru
+  yang mencatat setiap kali seorang `Pengguna` didaftarkan
+  (`DIDAFTARKAN`)/memakai (`DIGUNAKAN`)/dicabut aksesnya (`DICABUT`) dari
+  suatu `Perangkat` - di sini FK ke `Perangkat` DIWAJIBKAN (bukan seperti
+  Keputusan 4) karena konteksnya secara eksplisit adalah "riwayat asosiasi
+  dengan perangkat yang sudah teregistrasi sebagai infrastruktur outlet",
+  bukan PIN yang bisa dipakai dari perangkat pribadi mana pun.
+- **Cakupan yang SENGAJA TIDAK dikerjakan di batch ini:** endpoint nyata
+  "ganti PIN"/"reset PIN oleh manajer", algoritma hashing PIN konkret,
+  migrasi Postgres nyata, dan test integrasi PIN sungguhan - semuanya
+  `BELUM DIKERJAKAN`/`DIBLOKIR` (`ALT-DEF-029`), konsisten dengan pass-pass
+  correction-loop sebelumnya.
+
 ## Status ringkas
 
 Semua ADR di atas berstatus **DITERIMA sebagai keputusan desain**, tetapi
 implementasinya di kode berstatus **BELUM DIKERJAKAN** kecuali skema Prisma awal
-(ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013 sudah tercermin di
-`prisma/schema/schema.prisma`).
+(ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015 sudah
+tercermin di `prisma/schema/schema.prisma`).

@@ -85,6 +85,9 @@ export const IZIN_SEED: readonly IzinSeedEntry[] = [
 
   // data
   { kode: "data.ekspor", nama: "Ekspor data", domain: "data", deskripsi: "Mengekspor data tenant (laporan, backup) ke file eksternal." },
+
+  // akun (baru, ALT-DEF-003/ALT-DEF-013 - lihat docs/keamanan/PERMISSION-MATRIX.md bagian 1a)
+  { kode: "akun.reset-pin", nama: "Reset PIN karyawan lain", domain: "akun", deskripsi: "Mereset PinOutlet milik KeanggotaanTenant lain (mis. oleh pemilik/manajer outlet saat staf lupa PIN)." },
 ] as const;
 
 // Sanity check struktural sederhana - dipakai oleh

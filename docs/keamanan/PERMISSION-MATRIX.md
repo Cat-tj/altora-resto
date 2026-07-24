@@ -32,7 +32,9 @@ konkret per tenant, bukan payload Json.
 ## 1a. Katalog kode Izin starter (seed)
 
 Daftar kode `Izin.kode` berikut adalah starter set yang di-seed lewat
-`prisma/seed/izin.seed.ts` (32 kode), dikelompokkan per `domain`:
+`prisma/seed/izin.seed.ts` (33 kode, ditambah 1 kode baru `akun.reset-pin`
+pada batch ALT-DEF-003/ALT-DEF-013 - lihat catatan di bawah tabel),
+dikelompokkan per `domain`:
 
 | Domain | Kode Izin |
 |---|---|
@@ -50,6 +52,28 @@ Daftar kode `Izin.kode` berikut adalah starter set yang di-seed lewat
 | izin | `izin.kelola` |
 | audit | `audit.lihat` |
 | data | `data.ekspor` |
+| akun | `akun.reset-pin` |
+
+**Kode baru batch ALT-DEF-003/ALT-DEF-013 (`domain akun`):** diperiksa dulu
+terhadap katalog yang sudah ada sebelum menambah - `karyawan.kelola` HANYA
+mencakup data kepegawaian (jabatan, nomor induk, tanggal bergabung, lihat
+`docs/database/12-karyawan-absensi.md`), BUKAN kredensial autentikasi (PIN),
+sehingga genuinely tidak ada kode izin yang sudah menaungi "reset PIN
+karyawan lain". Satu kode baru ditambahkan:
+
+- `akun.reset-pin` - mereset `PinOutlet` milik `KeanggotaanTenant` lain (mis.
+  oleh pemilik/manajer outlet saat staf lupa PIN), dipakai oleh
+  `POST /api/v1/karyawan/{keanggotaanTenantId}/pin/reset` (lihat
+  `docs/api/API-CONTRACT.md`). Ganti PIN milik sendiri (self-service, `POST
+  /api/v1/auth/pin/ganti`) TIDAK butuh izin ini - itu selalu boleh dilakukan
+  pengguna terhadap `PinOutlet` miliknya sendiri.
+
+Mencabut satu/seluruh sesi (`POST /api/v1/auth/sesi/{id}/cabut`, `.../sesi/
+cabut-semua`) di batch ini SENGAJA dibatasi ke sesi MILIK SENDIRI (lihat
+`docs/api/API-CONTRACT.md` bagian 2) - tidak butuh izin baru karena setiap
+pengguna terautentikasi selalu boleh mencabut sesinya sendiri. Endpoint
+"cabut sesi milik pengguna lain" (butuh izin terpisah) tidak diminta di
+batch ini dan tidak ditambahkan di sini.
 
 ## 1. Peran dasar
 
@@ -81,6 +105,7 @@ Legenda: `M` = boleh (Miliki akses penuh), `B` = boleh dengan approval Bertingka
 |---|---|---|---|---|---|---|---|---|---|
 | **Platform** |
 | Kelola tenant & pengaturan | M | - | - | - | - | - | - | - | - |
+| Reset PIN karyawan lain (`akun.reset-pin`) | M | B | - | - | - | - | - | - | - |
 | Kelola outlet | M | B | - | - | - | - | - | - | - |
 | Kelola pengguna & peran | M | B | - | - | - | - | - | - | - |
 | Lihat audit log | M | L | - | - | - | - | - | - | - |

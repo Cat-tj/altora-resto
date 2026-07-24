@@ -22,7 +22,7 @@ ini sampai pekerjaan sinkronisasi tersebut selesai.
 | ALT-PLT-001 | `Tenant`, `Pengguna`, `KeanggotaanTenant` | `POST /api/v1/tenant` (belum ada di kontrak v1, TODO tambah) | `/register` (belum ada di ROUTE-MAP, TODO tambah) | OWNER (pembuat) | BELUM DIKERJAKAN | - |
 | ALT-PLT-002 | `Pengguna`, `KeanggotaanTenant` (diperbarui ALT-DEF-001: `Pengguna` global, `KeanggotaanTenant.isOwner=true` dibuat saat registrasi, bukan lagi `Pengguna.tenantId`) | `POST /api/v1/tenant/registrasi` | `/daftar` | OWNER (pembuat) | BELUM DIKERJAKAN | - |
 | ALT-PLT-003 | `KeanggotaanTenant` (diperbarui ALT-DEF-001: satu `Pengguna` bisa punya banyak baris `KeanggotaanTenant` aktif) | `GET /api/v1/tenant-saya` | `/pilih-tenant` | platform.keanggotaan.lihat | BELUM DIKERJAKAN | - |
-| ALT-PLT-004 | `Pengguna`, `Sesi`, `Perangkat` | `POST /api/v1/auth/masuk-pin` | `/masuk-pin` | publik (perangkat outlet) | BELUM DIKERJAKAN | - |
+| ALT-PLT-004 | `Pengguna`, `Sesi`, `Perangkat`, `PinOutlet` (diperbarui ALT-DEF-013: PIN sekarang model `PinOutlet` scoped `KeanggotaanTenant`+`Outlet`, bukan lagi field di `Pengguna`) | `POST /api/v1/auth/masuk-pin` | `/masuk-pin` | publik (perangkat outlet) | BELUM DIKERJAKAN | - |
 | ALT-PLT-005 | `Perangkat` | `GET /api/v1/perangkat`, `POST /api/v1/auth/perangkat/aktivasi` | `/pengaturan/perangkat` | MANAJER | BELUM DIKERJAKAN | - |
 | ALT-PLT-006 | `AuditLog` | `GET /api/v1/audit-log` | (belum ada rute dedicated, TODO tambah ke ROUTE-MAP) | OWNER (lihat), MANAJER (lihat, L) | BELUM DIKERJAKAN | - |
 | ALT-PLT-007 | `KeanggotaanOutlet` (diperbarui ALT-DEF-001: menggantikan `PenggunaOutlet`, sekarang scoped ke `KeanggotaanTenant` dengan composite-FK tenant-outlet - lihat ADR-011) | `GET /api/v1/pengguna/{id}/akses-outlet` | `/pengaturan/tim` | platform.akses-outlet.kelola | BELUM DIKERJAKAN | - |
@@ -98,6 +98,24 @@ ini yang ditambahkan, bukan sinkronisasi penuh 249-requirement (tetap `ALT-DEF-0
 | ALT-SEC-001 | Semua model tenant-scoped di `prisma/schema/schema.prisma` (lihat ADR-013 untuk daftar lengkap) | middleware semua endpoint (belum diimplementasikan sebagai kode - lihat `ALT-DEF-027`) | - | keamanan.tenant.isolasi | SEBAGIAN (jaminan level-skema selesai, middleware aplikasi BELUM DIKERJAKAN) | `prisma format`/`validate`/`generate` + `tenant-outlet-composite-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
 | ALT-SEC-002 | `Outlet`, `Gudang`, `Meja`, `AreaMeja`, `StasiunDapur`, `Pesanan`, `TiketDapur`, `GiliranKasir`, `Pembayaran`, `Karyawan`, `PurchaseOrder`, `PenerimaanBarang`, `MutasiStok`, `StokBahan`, `HargaItemOutlet`, `RekapKasHarian`, `BiayaOperasional`, `RmPenjualanHarian`, `RmPenjualanItemHarian`, `RmStokKritis`, `RmKinerjaKaryawanHarian` (composite-FK tenant/outlet ditambahkan pass ini, ALT-DEF-010) | - | - | keamanan.tenant.isolasi | SIAP_DIVERIFIKASI (constraint level-database ada dan tervalidasi; migrasi Postgres nyata + test integrasi sungguhan DIBLOKIR, lihat ALT-DEF-029) | `tenant-outlet-composite-constraints.test.ts`, `prisma-client-shape-tenant-outlet.test.ts` (lihat RELEASE-EVIDENCE.md) |
 | ALT-SEC-003 | `KeanggotaanOutlet` (composite-FK verifikasi ulang, ALT-DEF-001, tidak berubah pass ini) | middleware semua endpoint outlet-scoped (BELUM DIKERJAKAN sebagai kode) | - | keamanan.outlet.isolasi | SEBAGIAN (jaminan level-skema dari ALT-DEF-001 sudah ada; enforcement runtime BELUM DIKERJAKAN) | `keanggotaan-outlet-constraints.test.ts` (regresi diverifikasi ulang, lihat RELEASE-EVIDENCE.md) |
+
+## Autentikasi/Sesi/PIN (`ALT-DEF-003`, `ALT-DEF-013`) - baris ditambahkan pass correction-loop auth/sesi/PIN
+
+Baris berikut ditambahkan pada pass ini untuk requirement `ALT-PLT-013`,
+`ALT-PLT-014`, `ALT-PLT-016`, `ALT-SEC-005`, `ALT-SEC-010` yang langsung
+tersentuh oleh pengerasan skema autentikasi/sesi/PIN - lihat
+`docs/engineering/DECISION-LOG.md` ADR-014/ADR-015 dan
+`docs/engineering/RELEASE-EVIDENCE.md`. Hanya baris yang langsung tersentuh
+yang ditambahkan, bukan sinkronisasi penuh 249-requirement (tetap
+`ALT-DEF-020`).
+
+| Requirement ID | Entitas ERD | Endpoint API | Rute UI | Permission | Status | Bukti Uji |
+|---|---|---|---|---|---|---|
+| ALT-PLT-013 | `Pengguna.passwordHash`/`terkunciSampai`/`jumlahPercobaanGagal`, `TokenResetKataSandi`, `PercobaanLogin` (baru, ALT-DEF-003) | `POST /api/v1/auth/masuk`, `/auth/lupa-kata-sandi`, `/auth/reset-kata-sandi` | `/masuk`, `/lupa-kata-sandi`, `/reset-kata-sandi` (belum ada di ROUTE-MAP, TODO tambah) | publik (login), pemilik akun (reset) | SIAP_DIVERIFIKASI (schema) | `sesi-auth-pin-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
+| ALT-PLT-014 | `Sesi` (diperbarui ALT-DEF-003: `tokenHash`, `keanggotaanTenantId`, `terakhirAktifPada`, `alasanPencabutan`, `ipHash`, `userAgent`) | `GET /api/v1/auth/sesi-saya`, `POST /auth/sesi/{id}/cabut`, `/auth/sesi/cabut-semua` | `/pengaturan/keamanan/sesi` (belum ada di ROUTE-MAP, TODO tambah) | pemilik akun | SIAP_DIVERIFIKASI (schema) | `sesi-auth-pin-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
+| ALT-PLT-016 | `PinOutlet`, `RiwayatPerangkat` (baru, ALT-DEF-013) | `POST /api/v1/auth/masuk-pin`, `/auth/pin/ganti`, `/karyawan/{keanggotaanTenantId}/pin/reset` | `/masuk-pin`, `/pengaturan/keamanan/pin` (belum ada di ROUTE-MAP, TODO tambah) | pemilik PIN (ganti), `akun.reset-pin` (reset karyawan lain) | SIAP_DIVERIFIKASI (schema) | `sesi-auth-pin-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
+| ALT-SEC-005 | `PercobaanLogin`, `Pengguna.terkunciSampai`/`jumlahPercobaanGagal` (baru/diperbarui, ALT-DEF-003) | dipicu internal di `POST /api/v1/auth/masuk` | - | sistem | SIAP_DIVERIFIKASI (schema) | `sesi-auth-pin-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
+| ALT-SEC-010 | `Sesi.tokenHash`, `TokenResetKataSandi.tokenHash` (hash-only, never raw token, ALT-DEF-003) | seluruh endpoint auth di atas | - | sistem | SIAP_DIVERIFIKASI (schema) | `sesi-auth-pin-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
 
 ## Catatan gap yang ditemukan saat menyusun matriks ini
 

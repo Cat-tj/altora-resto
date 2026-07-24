@@ -1,11 +1,17 @@
 # ERD - Platform (Tenant, Outlet, Pengguna, Perangkat)
 
-Status dokumen: **DIPERBARUI (correction loop ALT-DEF-001, ALT-DEF-002)**.
+Status dokumen: **DIPERBARUI (correction loop ALT-DEF-001, ALT-DEF-002,
+ALT-DEF-003, ALT-DEF-013)**.
 `PENGGUNA` sekarang identitas GLOBAL (bukan tenant-scoped); keanggotaan
 tenant/outlet/peran dipisah ke `KEANGGOTAAN_TENANT`/`KEANGGOTAAN_OUTLET`/
 `KEANGGOTAAN_PERAN`. `PERAN.permissions Json` diganti model ternormalisasi
 `IZIN`/`PERAN_IZIN`/`BATAS_IZIN`/`IZIN_SEMENTARA`/`PERMINTAAN_PERSETUJUAN`.
 Lihat `docs/engineering/DECISION-LOG.md` ADR-011/ADR-012 untuk rasionalnya.
+
+Batch ALT-DEF-003/ALT-DEF-013 menambahkan pengerasan autentikasi/sesi/PIN:
+`TOKEN_RESET_KATA_SANDI`, `PERCOBAAN_LOGIN`, `PIN_OUTLET`,
+`RIWAYAT_PERANGKAT`, plus field lockout di `PENGGUNA` dan field keamanan
+tambahan di `SESI`. Lihat `docs/engineering/DECISION-LOG.md` ADR-014/ADR-015.
 
 ```mermaid
 erDiagram
@@ -26,7 +32,13 @@ erDiagram
     KEANGGOTAAN_TENANT ||--o{ PERMINTAAN_PERSETUJUAN : memohon
     OUTLET ||--o{ PERANGKAT : terdaftar
     PENGGUNA ||--o{ SESI : membuat
+    KEANGGOTAAN_TENANT ||--o{ SESI : konteks_aktif
     PENGGUNA ||--o{ AUDIT_LOG : melakukan
+    PENGGUNA ||--o{ TOKEN_RESET_KATA_SANDI : meminta
+    KEANGGOTAAN_TENANT ||--o{ PIN_OUTLET : punya_pin
+    OUTLET ||--o{ PIN_OUTLET : diakses_pin
+    PENGGUNA ||--o{ RIWAYAT_PERANGKAT : beraksi
+    PERANGKAT ||--o{ RIWAYAT_PERANGKAT : diriwayatkan
     OUTLET ||--o{ PENGATURAN_OUTLET : punya
     TENANT ||--o{ PENGATURAN_TENANT : punya
 
@@ -55,6 +67,8 @@ erDiagram
         string status "AKTIF|NONAKTIF"
         datetime emailTerverifikasiPada
         datetime terakhirLoginPada
+        datetime terkunciSampai "nullable - lockout sementara, ADR-014"
+        int jumlahPercobaanGagal "default 0, ADR-014"
         datetime createdAt
         datetime updatedAt
         note "TIDAK PUNYA tenantId/outletId/pinHash lagi - identitas global murni"
@@ -165,10 +179,53 @@ erDiagram
     SESI {
         string id PK
         string penggunaId FK
+        string keanggotaanTenantId FK "nullable - konteks tenant aktif, ADR-014"
         string perangkatId FK
+        string tokenHash UK "hash token bearer, tidak pernah simpan mentah"
         datetime dibuatPada
         datetime kadaluarsaPada
+        datetime terakhirAktifPada "ADR-014"
         datetime dicabutPada "nullable, bukan hard-delete"
+        string alasanPencabutan "nullable"
+        string ipHash "nullable"
+        string userAgent "nullable"
+    }
+    TOKEN_RESET_KATA_SANDI {
+        string id PK
+        string penggunaId FK
+        string tokenHash UK "hash token reset, tidak pernah simpan mentah"
+        datetime kadaluarsaPada
+        datetime digunakanPada "nullable - conditional uniqueness di service-layer, ADR-014"
+        datetime createdAt
+    }
+    PERCOBAAN_LOGIN {
+        string id PK
+        string email "teks bebas, TIDAK FK ke Pengguna - lihat ADR-014"
+        boolean berhasil
+        string ipHash "nullable"
+        string userAgent "nullable"
+        datetime createdAt
+        note "append-only, dipakai deteksi brute-force"
+    }
+    PIN_OUTLET {
+        string id PK
+        string keanggotaanTenantId FK
+        string tenantId "denormalisasi - wajib sama dgn Outlet.tenantId & KeanggotaanTenant.tenantId"
+        string outletId FK
+        string perangkatId "nullable, BUKAN FK ke Perangkat - lihat ADR-015"
+        string pinHash
+        string status "AKTIF|NONAKTIF"
+        datetime createdAt
+        datetime updatedAt
+        note "Composite FK ganda seperti KEANGGOTAAN_OUTLET; NULL pada perangkatId TIDAK dicegah unique constraint - ADR-015"
+    }
+    RIWAYAT_PERANGKAT {
+        string id PK
+        string penggunaId FK
+        string perangkatId FK
+        string aksi "DIDAFTARKAN|DIGUNAKAN|DICABUT"
+        datetime createdAt
+        note "append-only, berbeda dari state terkini di PERANGKAT"
     }
     AUDIT_LOG {
         string id PK
@@ -226,3 +283,28 @@ Catatan:
 - `SESI` tidak pernah di-hard-delete; pencabutan sesi memakai `dicabutPada`.
 - `AUDIT_LOG` bersifat append-only, sumber kebenaran untuk jejak audit semua domain lain.
 - **ALT-DEF-010 (composite tenant/outlet-scoped FK, lihat ADR-013 di `docs/engineering/DECISION-LOG.md`):** `PERANGKAT.outletId` kini composite-FK `(tenantId, outletId) -> Outlet(tenantId, id)`, bukan FK ID tunggal - menjamin `Perangkat` tidak bisa merujuk `Outlet` milik tenant lain. `PENGATURAN_OUTLET` dijudge aman tanpa composite (hanya satu relasi ke `Outlet`, tidak ada FK kedua yang bisa menyimpang).
+- **ALT-DEF-003 (pengerasan kredensial/sesi, lihat ADR-014):** `PENGGUNA`
+  mendapat `terkunciSampai`/`jumlahPercobaanGagal` (lockout sementara,
+  field eksplisit - bukan dihitung ulang dari `PERCOBAAN_LOGIN` tiap
+  request). `TOKEN_RESET_KATA_SANDI` (baru) menyimpan hanya `tokenHash`
+  (never raw token) untuk alur lupa/reset kata sandi; conditional
+  uniqueness ("token dipakai/kadaluarsa tidak boleh dipakai ulang") adalah
+  keterbatasan Prisma yang didokumentasikan, enforcement di service-layer.
+  `PERCOBAAN_LOGIN` (baru) adalah log append-only, sengaja TIDAK di-FK ke
+  `Pengguna` supaya percobaan dengan email tak terdaftar tetap tercatat
+  (deteksi enumerasi email). `SESI` mendapat `tokenHash` (unik, wajib -
+  lookup sesi lewat hash, bukan `id`), `keanggotaanTenantId` (nullable -
+  konteks tenant aktif sesi, lihat rasional nullable di ADR-014),
+  `terakhirAktifPada`, `alasanPencabutan`, `ipHash`, `userAgent`.
+- **ALT-DEF-013 (PIN per outlet, lihat ADR-015):** `PIN_OUTLET` (baru)
+  menggantikan konsep PIN global yang sudah dihapus dari `PENGGUNA` di
+  ALT-DEF-001 - PIN sekarang scoped ke `(KeanggotaanTenant, Outlet,
+  perangkat opsional)` memakai composite-FK ganda identik
+  `KEANGGOTAAN_OUTLET`. `perangkatId` di `PIN_OUTLET` sengaja BUKAN FK ke
+  `PERANGKAT` (PIN staf bisa dipakai dari perangkat pribadi yang tak
+  teregistrasi); NULL pada `perangkatId` tidak dicegah oleh unique
+  constraint database (keterbatasan Postgres NULL != NULL), enforcement
+  "hanya satu PIN tanpa-perangkat-spesifik" ada di service-layer.
+  `RIWAYAT_PERANGKAT` (baru) adalah jejak audit append-only asosiasi
+  `Pengguna`<->`Perangkat` (DIDAFTARKAN/DIGUNAKAN/DICABUT), berbeda dari
+  `PERANGKAT` yang hanya menyimpan state terkini satu perangkat fisik.

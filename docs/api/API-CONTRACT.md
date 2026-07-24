@@ -48,18 +48,38 @@ tenant"; setelah autentikasi berhasil, klien harus memilih/mendapatkan
 
 | Metode | Path | Deskripsi |
 |---|---|---|
-| POST | `/api/v1/auth/masuk` | Login email + kata sandi (`Pengguna.passwordHash`) - mengembalikan `Sesi` global, BUKAN sesi ter-scope tenant. Response menyertakan daftar `KeanggotaanTenant` aktif milik pengguna untuk dipilih klien. |
-| GET | `/api/v1/tenant-saya` | Daftar `KeanggotaanTenant` aktif milik pengguna yang sedang login (`ALT-PLT-003`) - dipakai klien untuk memilih tenant konteks setelah login. |
-| POST | `/api/v1/auth/masuk-pin` | Login PIN cepat di perangkat kasir (kasir/pelayan) - PIN scoped ke `KeanggotaanOutlet` (lihat `ALT-DEF-013`, dibangun di batch auth berikutnya). |
-| POST | `/api/v1/auth/keluar` | Mencabut sesi aktif (`Sesi.dicabutPada`). |
+| POST | `/api/v1/auth/masuk` | Login email + kata sandi (`Pengguna.passwordHash`) - mengembalikan `Sesi` global, BUKAN sesi ter-scope tenant. Response menyertakan daftar `KeanggotaanTenant` aktif milik pengguna untuk dipilih klien. Setiap upaya (berhasil/gagal) dicatat ke `PercobaanLogin`; gagal beruntun memicu `Pengguna.terkunciSampai` (lihat `ALT-DEF-003`, ADR-014). |
+| GET | `/api/v1/tenant-saya` | Daftar `KeanggotaanTenant` aktif milik pengguna yang sedang login (`ALT-PLT-003`) - dipakai klien untuk memilih tenant konteks setelah login; memilih salah satu mengisi `Sesi.keanggotaanTenantId`. |
+| POST | `/api/v1/auth/masuk-pin` | Login PIN cepat di perangkat kasir (kasir/pelayan) - PIN scoped ke `KeanggotaanTenant`+`Outlet` (+ perangkat opsional) lewat model `PinOutlet` (`ALT-DEF-013`, ADR-015). |
+| POST | `/api/v1/auth/keluar` | Mencabut sesi aktif (`Sesi.dicabutPada`, `Sesi.alasanPencabutan = "logout"`). |
 | GET | `/api/v1/auth/sesi-saya` | Info sesi & pengguna yang sedang login, termasuk `keanggotaanTenantAktif` bila klien sudah memilih konteks tenant. |
 | POST | `/api/v1/auth/perangkat/aktivasi` | Aktivasi perangkat KDS/kasir/printer via `kodeAktivasi`. |
+| POST | `/api/v1/auth/lupa-kata-sandi` | Minta reset kata sandi (`ALT-DEF-003`). Membuat baris `TokenResetKataSandi`, mengirim token MENTAH lewat email (token mentah tidak pernah disimpan, hanya `tokenHash`). **Idempotent/aman-enumerasi:** response HARUS sama persis (mis. `200 { "pesan": "Jika email terdaftar, tautan reset telah dikirim." }`) baik email terdaftar maupun tidak - lihat catatan keamanan di bawah. |
+| POST | `/api/v1/auth/reset-kata-sandi` | Konsumsi token reset (`ALT-DEF-003`) - body `{ "token": "...", "kataSandiBaru": "..." }`. Wajib validasi `TokenResetKataSandi.digunakanPada IS NULL AND kadaluarsaPada > now()` sebelum menerima (conditional uniqueness didokumentasikan sebagai keterbatasan Prisma di ADR-014, enforcement di service-layer, bukan skema). |
+| POST | `/api/v1/auth/sesi/{id}/cabut` | Cabut SATU sesi milik pengguna yang sedang login (`ALT-DEF-003`) - mengisi `Sesi.dicabutPada` + `alasanPencabutan`. |
+| POST | `/api/v1/auth/sesi/cabut-semua` | Cabut SELURUH sesi aktif milik pengguna yang sedang login (`ALT-DEF-003`), mis. saat mendeteksi kompromi akun atau setelah ganti kata sandi - opsional mengecualikan sesi yang sedang dipakai untuk memanggil endpoint ini. |
+| POST | `/api/v1/auth/pin/ganti` | Ganti PIN self-service (`ALT-DEF-013`) - pengguna yang sedang login mengganti `PinOutlet.pinHash` miliknya sendiri di outlet yang sedang aktif; wajib verifikasi PIN lama atau kata sandi akun. |
+| POST | `/api/v1/karyawan/{keanggotaanTenantId}/pin/reset` | Reset PIN karyawan lain (`ALT-DEF-013`), dipanggil oleh pemilik/manajer outlet - membuat `pinHash` baru untuk `PinOutlet` milik `keanggotaanTenantId` target di outlet yang dikelola pemanggil. Permission: `akun.reset-pin` (lihat `docs/keamanan/PERMISSION-MATRIX.md`). |
 
 Contoh request `POST /api/v1/auth/masuk-pin`:
 
 ```json
 { "outletId": "01J9...OUTLET", "perangkatId": "01J9...PRK", "pin": "482913" }
 ```
+
+**Catatan keamanan - anti-enumerasi email pada `lupa-kata-sandi`:** endpoint
+ini HARUS mengembalikan response identik (status code, bentuk body, dan
+kira-kira waktu respons) baik untuk email yang terdaftar maupun tidak, agar
+penyerang tidak bisa memakai endpoint ini untuk memverifikasi email mana
+saja yang punya akun di platform (email enumeration). Detail apakah token
+benar-benar dibuat/dikirim tidak boleh bocor lewat perbedaan response.
+
+**Catatan idempotency:** `lupa-kata-sandi` aman dipanggil berulang untuk
+email yang sama (setiap panggilan membuat baris `TokenResetKataSandi` baru,
+token lama tetap valid sampai dipakai/kadaluarsa - tidak ada efek samping
+merusak dari pemanggilan ganda). `reset-kata-sandi` TIDAK idempotent by
+design - token hanya bisa dikonsumsi sekali (`digunakanPada`); pemanggilan
+kedua dengan token yang sama HARUS ditolak.
 
 ## 3. Platform (Tenant, Outlet, Pengguna, KeanggotaanTenant/Outlet, Peran, Izin)
 
