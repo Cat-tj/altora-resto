@@ -521,9 +521,148 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
   `BELUM DIKERJAKAN`/`DIBLOKIR` (`ALT-DEF-029`), konsisten dengan pass-pass
   correction-loop sebelumnya.
 
+## ADR-016: Infrastruktur idempotency-key, transactional outbox, dan notifikasi in-app (ALT-DEF-017)
+
+- **Status:** DITERIMA
+- **Konteks:** `ALT-DEF-017` di `DEFECT-LEDGER.md` mencatat bahwa schema tidak
+  punya model apa pun untuk tiga kebutuhan cross-cutting yang sudah eksplisit
+  di `MASTER-CHECKLIST.md` (`ALT-PLT-018` idempotency, `ALT-PLT-019` outbox,
+  `ALT-PLT-020` notifikasi in-app): (a) endpoint kritis (checkout, pembayaran,
+  refund, dsb) yang di-retry klien (mis. timeout koneksi) berisiko membuat
+  efek ganda (pesanan/pembayaran duplikat); (b) event domain (pesanan siap,
+  approval diminta) bisa hilang jika publish ke message broker/consumer gagal
+  sementara, karena tidak ada jaminan atomicity antara perubahan data dan
+  emisi event; (c) tidak ada cara memberi tahu pengguna di dalam aplikasi
+  (pesanan siap, approval dibutuhkan, stok kritis, dsb) tanpa saluran
+  eksternal. `ALT-DEF-022` (API-CONTRACT.md belum menyebut requirement header
+  `Idempotency-Key`) juga tersentuh langsung oleh keputusan berikut.
+- **Keputusan 1 - `IdempotencyKey`: `requestHash` sebagai pembeda "retry aman"
+  vs "konflik", `status` mendeteksi duplikat YANG SEDANG BERLANGSUNG.**
+  Setiap baris menyimpan `key` (idempotency key yang disodorkan klien lewat
+  header `Idempotency-Key`), `scope` (command mana, mis. `"checkout"`,
+  `"pembayaran.konfirmasi"`, `"promo.terapkan"` - String bebas seperti
+  `Izin.domain`/`PermintaanPersetujuan.jenisAksi`, karena daftar scope akan
+  terus bertambah), dan `requestHash` (hash payload request, mis. SHA-256).
+  **Kenapa `requestHash` penting:** tanpanya, endpoint hanya bisa menjamin
+  "key yang sama = kembalikan response tersimpan", TANPA memverifikasi bahwa
+  request KEDUA benar-benar request YANG SAMA. Klien yang (secara bug atau
+  jahat) memakai ulang key yang sama dengan payload BERBEDA (mis. jumlah
+  refund berbeda) akan diam-diam menerima response dari request PERTAMA yang
+  tidak sesuai dengan apa yang baru saja ia kirim - berbahaya khusus untuk
+  endpoint finansial (checkout, pembayaran, refund). Dengan `requestHash`,
+  service-layer WAJIB membandingkan hash payload baru dengan `requestHash`
+  tersimpan; bila berbeda, endpoint HARUS menolak dengan `409 Conflict`
+  eksplisit (bukan mengembalikan response basi atau memproses ulang secara
+  diam-diam). `status` (`MEMPROSES`/`SELESAI`/`GAGAL`) menutup celah race
+  condition yang tidak bisa ditangani `responseBody` semata: dua request
+  konkuren dengan key yang sama yang TIBA BERSAMAAN (request kedua tiba
+  SEBELUM request pertama selesai, jadi `responseBody` belum terisi) harus
+  tetap terdeteksi sebagai duplikat-in-flight (`status = MEMPROSES`) dan
+  ditolak/ditunda, bukan diam-diam diizinkan berjalan paralel sampai
+  keduanya menyelesaikan efek yang sama.
+- **Keputusan 2 - `IdempotencyKey.tenantId` FK biasa ke `Tenant`, BUKAN
+  composite-FK ganda seperti `KeanggotaanOutlet`/`PinOutlet`.** Pola
+  composite-FK ganda (ADR-011/ADR-013/ADR-015) dipakai KHUSUS ketika sebuah
+  baris anak membawa DUA relasi ke entitas tenant-owned yang independen (mis.
+  `Outlet` DAN `KeanggotaanTenant` sekaligus) yang secara teori bisa berasal
+  dari tenant berbeda tanpa jaminan tambahan. `IdempotencyKey` TIDAK bernaung
+  di bawah kondisi ini - ia hanya punya SATU relasi tenant-owned langsung
+  (`Tenant` itu sendiri, yang menurut ADR-013 poin 4 tidak pernah perlu
+  composite karena `Tenant.id` sudah jadi identitas tenant itu sendiri).
+  `outletId` sengaja TIDAK diberi relasi FK apa pun (bahkan bukan FK tunggal
+  ke `Outlet`) - ia kolom informational nullable murni ("operasi ini
+  tenant-level atau outlet-level"), pola yang identik dengan
+  `AuditLog.outletId` yang sudah ada di skema ini sejak awal.
+  `@@unique([tenantId, scope, key])` menjamin satu kombinasi
+  tenant+scope+key hanya punya satu baris aktif.
+- **Keputusan 3 - `DomainOutboxEvent`: transactional outbox, bukan publish
+  langsung di transaksi yang sama.** Alternatif yang dipertimbangkan: (a)
+  publish event langsung ke message broker/WebSocket di titik yang sama saat
+  transaksi database business-state di-commit; (b) tulis event sebagai baris
+  di tabel yang sama (`DomainOutboxEvent`) DALAM TRANSAKSI DATABASE YANG SAMA
+  dengan perubahan business-state, lalu relay worker terpisah membaca baris
+  `TERTUNDA` dan mem-publish secara asinkron. **Dipilih (b)** karena inti
+  masalah yang mau dipecahkan adalah ATOMICITY: publish langsung (a) berarti
+  ada DUA operasi terpisah (commit database + publish ke sistem lain) yang
+  tidak bisa dijamin sukses/gagal BERSAMA-SAMA oleh satu transaksi -
+  kegagalan publish setelah commit database berhasil (mis. broker down
+  sesaat) berarti event HILANG PERMANEN meski data bisnis sudah berubah,
+  padahal konsumen event (worker agregasi analitik ADR-008, notifikasi
+  real-time, KDS) butuh jaminan bahwa setiap perubahan state PASTI
+  menghasilkan event yang PASTI sampai (eventually). Dengan outbox (b), event
+  ditulis sebagai baris database biasa dalam transaksi yang SAMA - artinya
+  event tidak akan pernah hilang selama transaksi database itu sendiri
+  sukses; relay worker yang mem-publish ke broker/consumer bisa retry
+  sepuasnya (`attemptCount`, `availableAt` untuk backoff, `lastError`) tanpa
+  risiko kehilangan data sumber. Trade-off yang diterima: ada latensi antara
+  commit dan publish nyata (worker polling/dispatch terjadwal), konsisten
+  dengan latensi read-model yang sudah diterima di ADR-008.
+  - **Daftar `eventType`** didokumentasikan penuh di komentar model
+    `DomainOutboxEvent` (`prisma/schema/schema.prisma`) dan
+    `docs/api/API-CONTRACT.md`: `order.submitted`, `order.accepted`,
+    `order.rejected`, `order.updated`, `order.cancelled`,
+    `order.sent_to_kitchen`, `kitchen.started`, `kitchen.ready`,
+    `order.served`, `payment.awaiting_confirmation`, `payment.confirmed`,
+    `stock.low`, `stock.adjusted`, `shift.opened`, `shift.closed`,
+    `attendance.created`. **Publisher NYATA setiap event ini adalah pekerjaan
+    domain terkait (Pesanan/Dapur/Pembayaran/Persediaan/Karyawan) di batch
+    fitur berikutnya - SENGAJA TIDAK diimplementasikan di batch ini**, sesuai
+    batas cakupan `ALT-DEF-017` (infrastruktur saja, bukan business logic
+    domain manapun).
+  - `@@index([status, availableAt])` mendukung query polling/dispatch relay
+    worker yang efisien (`WHERE status IN ('TERTUNDA','GAGAL') AND
+    availableAt <= now() ORDER BY availableAt`).
+- **Keputusan 4 - `Notification`: internal Altora SAJA, TIDAK ADA
+  WhatsApp/SMS/push eksternal.** Model ini murni merepresentasikan baris yang
+  dibaca klien Altora sendiri (in-app, lewat polling atau realtime) - TIDAK
+  ADA integrasi WhatsApp Business API, SMS gateway, push notification native
+  (FCM/APNs), atau saluran eksternal apa pun di batch ini maupun yang
+  didesain untuk menggantikan model ini nantinya. Bila kebutuhan saluran
+  eksternal muncul di masa depan, itu akan menjadi model TERPISAH (mis.
+  `PengirimanEksternal` yang mereferensikan `Notification` sebagai sumber
+  konten), bukan perluasan field pada model ini - keputusan ini didorong
+  oleh scope produk rilis awal (WhatsApp/SMS butuh kontrak provider dan biaya
+  per pesan yang di luar cakupan correction-loop ini, sama seperti alasan
+  `QrisKonfirmasiManual` di ADR-003 memilih mode manual dulu).
+- **Keputusan 5 - `Notification.penggunaId` nullable: trade-off yang
+  didokumentasikan, bukan `NotificationTarget` terpisah.** Notifikasi bisa
+  berupa broadcast ke SEMUA pengguna dengan role/akses tertentu di suatu
+  outlet (mis. `STOK_KRITIS` ditujukan ke siapa pun berperan GUDANG di outlet
+  itu, bukan satu `Pengguna` spesifik), bukan selalu satu penerima
+  individual. Dua pendekatan dipertimbangkan: (a) tambahkan model
+  `NotificationTarget` (many-to-many `Notification` <-> penerima, baik
+  `Pengguna` maupun `Peran`/`Outlet`) yang secara ternormalisasi memodelkan
+  banyak-penerima-per-notifikasi; (b) biarkan `penggunaId` nullable, dan
+  ketika `NULL` targeting nyata (siapa yang berhak melihat baris ini)
+  ditentukan oleh service-layer query (mis. filter berdasarkan `outletId` +
+  peran pemanggil) saat endpoint `GET /api/v1/notifikasi` dipanggil, bukan
+  dijamin di level skema. **Dipilih (b) untuk batch ini** karena (a)
+  menambah kompleksitas skema signifikan (tabel junction + query join
+  tambahan di jalur baca notifikasi yang butuh performa cepat/real-time)
+  untuk kebutuhan yang belum ada implementasi endpoint nyatanya sama sekali
+  di batch ini - **dicatat secara eksplisit sebagai simplifikasi yang
+  DIKETAHUI/DISENGAJA untuk sekarang**, bukan kelalaian; bila volume
+  broadcast-per-role ternyata signifikan di implementasi nyata,
+  `NotificationTarget` harus ditambahkan di batch fitur notifikasi
+  berikutnya. `penggunaId` TIDAK di-composite-kan ke tenant (sama seperti
+  seluruh relasi `Pengguna` lain di skema ini, ADR-011/ADR-013 poin 5) karena
+  `Pengguna` adalah identitas global.
+- **Cakupan yang SENGAJA TIDAK dikerjakan di batch ini:** middleware
+  idempotency nyata (intersepsi header `Idempotency-Key` di jalur HTTP),
+  relay worker outbox nyata (proses yang benar-benar membaca `TERTUNDA` dan
+  publish ke broker/WebSocket), publisher event nyata di domain manapun
+  (Pesanan/Dapur/Pembayaran/dst. TIDAK diubah untuk menulis
+  `DomainOutboxEvent` pada batch ini), endpoint notifikasi nyata (skema
+  kontrak `GET /api/v1/notifikasi`/`POST /api/v1/notifikasi/{id}/read` sudah
+  didokumentasikan di `API-CONTRACT.md`, tetapi implementasi handler BELUM
+  DIKERJAKAN), migrasi Postgres nyata, dan test integrasi sungguhan -
+  semuanya `BELUM DIKERJAKAN`/`DIBLOKIR` (`ALT-DEF-029`), konsisten dengan
+  pass-pass correction-loop sebelumnya. Status `ALT-DEF-017` diset
+  `SIAP_DIVERIFIKASI` (bukan `DITUTUP`) karena alasan yang sama.
+
 ## Status ringkas
 
 Semua ADR di atas berstatus **DITERIMA sebagai keputusan desain**, tetapi
 implementasinya di kode berstatus **BELUM DIKERJAKAN** kecuali skema Prisma awal
-(ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015 sudah
-tercermin di `prisma/schema/schema.prisma`).
+(ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015, ADR-016
+sudah tercermin di `prisma/schema/schema.prisma`).

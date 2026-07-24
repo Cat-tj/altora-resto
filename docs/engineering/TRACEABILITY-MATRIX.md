@@ -117,6 +117,22 @@ yang ditambahkan, bukan sinkronisasi penuh 249-requirement (tetap
 | ALT-SEC-005 | `PercobaanLogin`, `Pengguna.terkunciSampai`/`jumlahPercobaanGagal` (baru/diperbarui, ALT-DEF-003) | dipicu internal di `POST /api/v1/auth/masuk` | - | sistem | SIAP_DIVERIFIKASI (schema) | `sesi-auth-pin-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
 | ALT-SEC-010 | `Sesi.tokenHash`, `TokenResetKataSandi.tokenHash` (hash-only, never raw token, ALT-DEF-003) | seluruh endpoint auth di atas | - | sistem | SIAP_DIVERIFIKASI (schema) | `sesi-auth-pin-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
 
+## Idempotency/Outbox/Notifikasi (`ALT-DEF-017`) - baris ditambahkan pass correction-loop infrastruktur platform
+
+Baris berikut ditambahkan pada pass ini untuk requirement `ALT-PLT-018`,
+`ALT-PLT-019`, `ALT-PLT-020` yang langsung tersentuh oleh penambahan model
+`IdempotencyKey`/`DomainOutboxEvent`/`Notification` - lihat
+`docs/engineering/DECISION-LOG.md` ADR-016 dan
+`docs/engineering/RELEASE-EVIDENCE.md`. Hanya baris yang langsung tersentuh
+yang ditambahkan, bukan sinkronisasi penuh 249-requirement (tetap
+`ALT-DEF-020`).
+
+| Requirement ID | Entitas ERD | Endpoint API | Rute UI | Permission | Status | Bukti Uji |
+|---|---|---|---|---|---|---|
+| ALT-PLT-018 | `IdempotencyKey` (baru, ALT-DEF-017) | header `Idempotency-Key` pada endpoint kritis (lihat `API-CONTRACT.md` bagian 17.1 untuk daftar lengkap) | - | sistem (middleware) | SIAP_DIVERIFIKASI (schema) | `idempotency-outbox-notification-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
+| ALT-PLT-019 | `DomainOutboxEvent` (baru, ALT-DEF-017) | internal (relay worker, belum diimplementasikan) | - | sistem | SIAP_DIVERIFIKASI (schema) | `idempotency-outbox-notification-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
+| ALT-PLT-020 | `Notification` (baru, ALT-DEF-017) | `GET /api/v1/notifikasi`, `POST /api/v1/notifikasi/{id}/read` | `/notifikasi` (belum ada di ROUTE-MAP, TODO tambah) | platform.notifikasi.lihat | SIAP_DIVERIFIKASI (schema) | `idempotency-outbox-notification-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
+
 ## Catatan gap yang ditemukan saat menyusun matriks ini
 
 - `ALT-PLT-001` (registrasi tenant baru) dan `ALT-PLT-006` (halaman audit log) belum

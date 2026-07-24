@@ -161,13 +161,24 @@ Contoh response `GET /api/v1/item-menu/{itemMenuId}`:
 | GET | `/api/v1/gudang` | Daftar gudang per outlet. |
 | GET | `/api/v1/stok-bahan` | Saldo stok bahan per gudang (derived dari mutasi). |
 | GET | `/api/v1/mutasi-stok` | Riwayat mutasi stok (append-only, filter jenis/tanggal). |
-| POST | `/api/v1/mutasi-stok/penyesuaian` | Catat mutasi penyesuaian manual (butuh alasan). |
+| POST | `/api/v1/mutasi-stok/penyesuaian` | Catat mutasi penyesuaian manual (butuh alasan). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "posting mutasi stok" di master spec). |
 | POST | `/api/v1/mutasi-stok/{mutasiId}/balik` | Buat mutasi pembalik (koreksi, no hard-delete). |
 | GET | `/api/v1/stok-opname` | Daftar sesi stok opname. |
 | POST | `/api/v1/stok-opname` | Jadwalkan opname baru. |
 | POST | `/api/v1/stok-opname/{id}/mulai` | Mulai perhitungan fisik (DIRENCANAKAN -> BERLANGSUNG). |
 | POST | `/api/v1/stok-opname/{id}/baris` | Input hasil hitung fisik per bahan. |
-| POST | `/api/v1/stok-opname/{id}/selesaikan` | Selesaikan opname, hasilkan mutasi penyesuaian. |
+| POST | `/api/v1/stok-opname/{id}/selesaikan` | Selesaikan opname, hasilkan mutasi penyesuaian. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "posting opname" di master spec). |
+
+**Catatan gap - "transfer stok" (ALT-PLT-018):** master spec idempotency
+menyebut "transfer stok" sebagai salah satu operasi kritis yang wajib
+`Idempotency-Key`, TETAPI belum ada endpoint transfer-stok-antar-gudang/outlet
+eksplisit di kontrak ini - `JenisMutasiStok` di schema sudah punya varian
+`TRANSFER_MASUK`/`TRANSFER_KELUAR`, namun endpoint yang memicu keduanya belum
+dirancang di dokumen ini. Dicatat sebagai gap terpisah, lihat
+`docs/engineering/DEFECT-LEDGER.md` `ALT-DEF-032` - begitu endpoint transfer
+stok ditambahkan di batch domain persediaan berikutnya, endpoint tersebut
+WAJIB langsung menyertakan requirement `Idempotency-Key` ini sejak awal
+perancangan, bukan ditambahkan belakangan.
 
 ## 7. Supplier & Pembelian (`packages/pembelian`)
 
@@ -181,7 +192,7 @@ Contoh response `GET /api/v1/item-menu/{itemMenuId}`:
 | POST | `/api/v1/purchase-order/{id}/setujui` | DIAJUKAN -> DISETUJUI (approval manajer/owner). |
 | POST | `/api/v1/purchase-order/{id}/kirim` | DISETUJUI -> DIKIRIM_SUPPLIER. |
 | POST | `/api/v1/purchase-order/{id}/batalkan` | Batalkan PO (status DIBATALKAN, no hard-delete). |
-| POST | `/api/v1/purchase-order/{id}/penerimaan` | Catat penerimaan barang (sebagian/penuh). |
+| POST | `/api/v1/purchase-order/{id}/penerimaan` | Catat penerimaan barang (sebagian/penuh). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "penerimaan barang" di master spec). |
 | POST | `/api/v1/penerimaan-barang/{id}/retur` | Ajukan retur pembelian. |
 
 ## 8. Meja & Reservasi (`packages/meja`, `packages/reservasi`)
@@ -204,14 +215,14 @@ Contoh response `GET /api/v1/item-menu/{itemMenuId}`:
 | Metode | Path | Deskripsi |
 |---|---|---|
 | GET | `/api/v1/pesanan` | Daftar pesanan (filter status/outlet/tanggal/meja). |
-| POST | `/api/v1/pesanan` | Buat pesanan baru (kanal KASIR/PELAYAN/QR_PELANGGAN). |
+| POST | `/api/v1/pesanan` | Buat pesanan baru (kanal KASIR/PELAYAN/QR_PELANGGAN). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`) - mencakup dua kasus kritis dari master spec sekaligus: "checkout" (kanal KASIR/PELAYAN) dan "submit pesanan QR" (kanal QR_PELANGGAN), karena keduanya memakai endpoint pembuatan pesanan yang sama. |
 | GET | `/api/v1/pesanan/{id}` | Detail pesanan + item + riwayat status. |
 | POST | `/api/v1/pesanan/{id}/item` | Tambah item ke pesanan. |
 | PATCH | `/api/v1/pesanan/{id}/item/{itemPesananId}` | Ubah kuantitas/catatan item (sebelum dikirim dapur). |
-| POST | `/api/v1/pesanan/{id}/konfirmasi` | BARU -> DIKONFIRMASI (memicu pembuatan tiket dapur). |
+| POST | `/api/v1/pesanan/{id}/konfirmasi` | BARU -> DIKONFIRMASI (memicu pembuatan tiket dapur). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "accept pesanan" di master spec). |
 | POST | `/api/v1/pesanan/{id}/tandai-disajikan` | SIAP_DISAJIKAN -> DISAJIKAN. |
 | POST | `/api/v1/pesanan/{id}/batalkan` | Batalkan pesanan (butuh approval supervisor jika sudah DIPROSES_DAPUR). |
-| POST | `/api/v1/pesanan/{id}/promo` | Terapkan kode promo/kupon ke pesanan. |
+| POST | `/api/v1/pesanan/{id}/promo` | Terapkan kode promo/kupon ke pesanan. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "penerapan promo" di master spec). |
 
 Contoh request `POST /api/v1/pesanan`:
 
@@ -255,11 +266,11 @@ endpoint di bawah hanya mengelola tiket dapur miliknya sendiri.
 | POST | `/api/v1/giliran-kasir/{id}/tutup` | Tutup giliran, hitung kas fisik. |
 | POST | `/api/v1/giliran-kasir/{id}/verifikasi` | Supervisor verifikasi selisih kas. |
 | GET | `/api/v1/metode-bayar` | Daftar metode pembayaran aktif. |
-| POST | `/api/v1/pembayaran` | Inisiasi pembayaran untuk pesanan (mendukung split bill). |
-| POST | `/api/v1/pembayaran/{id}/konfirmasi-qris-manual` | Kasir konfirmasi QRIS manual (lihat catatan mode manual). |
+| POST | `/api/v1/pembayaran` | Inisiasi pembayaran untuk pesanan (mendukung split bill). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "pembayaran" di master spec). |
+| POST | `/api/v1/pembayaran/{id}/konfirmasi-qris-manual` | Kasir konfirmasi QRIS manual (lihat catatan mode manual). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "konfirmasi QRIS" di master spec). |
 | POST | `/api/v1/pembayaran/{id}/konfirmasi` | Tandai pembayaran DIKONFIRMASI (tunai/kartu). |
 | POST | `/api/v1/pembayaran/{id}/batalkan` | Batalkan pembayaran sebelum selesai. |
-| POST | `/api/v1/pembayaran/{id}/refund` | Ajukan/proses refund (butuh approval supervisor). |
+| POST | `/api/v1/pembayaran/{id}/refund` | Ajukan/proses refund (butuh approval supervisor). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "refund" di master spec). |
 | POST | `/api/v1/pembayaran/{id}/struk/cetak-ulang` | Cetak ulang struk (increment `jumlahCetakUlang`). |
 
 Catatan QRIS: rilis awal memakai **mode manual** - kasir memverifikasi notifikasi masuk
@@ -286,7 +297,7 @@ mengubah bentuk resource `Pembayaran`.
 | GET | `/api/v1/pelanggan/{id}/keanggotaan` | Info tier & poin aktif. |
 | POST | `/api/v1/pelanggan/{id}/keanggotaan` | Daftarkan ke program membership. |
 | GET | `/api/v1/pelanggan/{id}/poin-riwayat` | Riwayat perolehan/penukaran poin. |
-| POST | `/api/v1/keanggotaan/{id}/tukar-poin` | Tukar poin (jenis PENUKARAN). |
+| POST | `/api/v1/keanggotaan/{id}/tukar-poin` | Tukar poin (jenis PENUKARAN). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "penukaran poin" di master spec). |
 
 ## 14. Karyawan & Absensi (`packages/karyawan`, `packages/absensi`)
 
@@ -328,7 +339,64 @@ Endpoint di atas **tidak pernah** mengagregasi langsung dari tabel transaksional
 request masuk - semua dibaca dari tabel `RM_*` yang sudah pre-agregasi (lihat
 `docs/database/14-analitik-read-model.md`).
 
-## 17. Status implementasi
+## 17. Idempotency-Key, Outbox, dan Notifikasi (Infrastruktur Platform, `ALT-DEF-017`)
+
+Status: **BARU (ALT-DEF-017)** - lihat `docs/engineering/DECISION-LOG.md` ADR-016
+dan `docs/database/15-platform-infra.md` untuk model `IdempotencyKey`/
+`DomainOutboxEvent`/`Notification`.
+
+### 17.1 Header `Idempotency-Key` (`ALT-PLT-018`)
+
+Endpoint kritis berikut **WAJIB** menerima dan menghormati header
+`Idempotency-Key: <string>` yang disodorkan klien (lihat catatan inline di
+setiap baris tabel endpoint pada dokumen ini untuk detail per-endpoint):
+
+| Kasus (master spec) | Endpoint |
+|---|---|
+| checkout | `POST /api/v1/pesanan` (kanal KASIR/PELAYAN) |
+| submit pesanan QR | `POST /api/v1/pesanan` (kanal QR_PELANGGAN) |
+| accept pesanan | `POST /api/v1/pesanan/{id}/konfirmasi` |
+| pembayaran | `POST /api/v1/pembayaran` |
+| konfirmasi QRIS | `POST /api/v1/pembayaran/{id}/konfirmasi-qris-manual` |
+| refund | `POST /api/v1/pembayaran/{id}/refund` |
+| penerimaan barang | `POST /api/v1/purchase-order/{id}/penerimaan` |
+| posting mutasi stok | `POST /api/v1/mutasi-stok/penyesuaian` |
+| posting opname | `POST /api/v1/stok-opname/{id}/selesaikan` |
+| transfer stok | **belum ada endpoint** - lihat catatan gap di bagian 6, `ALT-DEF-032` |
+| penukaran poin | `POST /api/v1/keanggotaan/{id}/tukar-poin` |
+| penerapan promo | `POST /api/v1/pesanan/{id}/promo` |
+
+Perilaku wajib (lihat `docs/database/15-platform-infra.md` bagian
+`IdempotencyKey` untuk alur lengkap): key yang sama + payload sama (hash
+sama) selama permintaan pertama belum kadaluarsa -> kembalikan response
+tersimpan tanpa efek ganda; key sama + payload BERBEDA (`requestHash`
+berbeda) -> tolak `409 Conflict`; key sama + permintaan pertama masih
+`MEMPROSES` -> tolak/tunda, jangan proses paralel. Tidak menyertakan header
+ini pada endpoint di atas adalah kesalahan implementasi klien - server
+TETAP wajib menegakkan keamanan (validasi bisnis, dsb) meski header tidak
+ada, tetapi tanpa header ini klien kehilangan jaminan anti-duplikasi.
+
+### 17.2 Notifikasi in-app (`ALT-PLT-020`)
+
+Status: **internal Altora SAJA - TIDAK ADA WhatsApp/SMS/push eksternal**
+(lihat ADR-016 Keputusan 4). Endpoint berikut belum ada scaffold sebelumnya di
+dokumen ini (bukan duplikat dari pass sebelumnya).
+
+| Metode | Path | Deskripsi |
+|---|---|---|
+| GET | `/api/v1/notifikasi` | Daftar `Notification` milik pengguna yang sedang login (join implisit penggunaId = pengguna aktif ATAU broadcast sesuai `outletId`+peran, lihat catatan targeting `penggunaId` nullable di `docs/database/15-platform-infra.md`), diurutkan terbaru dulu, filter opsional `?belumDibaca=true` (`dibacaPada IS NULL`). |
+| POST | `/api/v1/notifikasi/{id}/read` | Tandai satu `Notification` sebagai dibaca (`dibacaPada = now()`). Idempotent secara alami - memanggil ulang pada notifikasi yang sudah dibaca tidak mengubah apa pun selain kemungkinan `dibacaPada` (kebijakan: pertahankan waktu baca PERTAMA, jangan timpa dengan `now()` pada panggilan kedua). |
+
+### 17.3 Transactional outbox (`ALT-PLT-019`)
+
+`DomainOutboxEvent` adalah infrastruktur **internal** (tidak diekspos sebagai
+endpoint publik) - relay worker (proses terpisah, belum diimplementasikan di
+batch ini) yang membaca baris `TERTUNDA`/`GAGAL` dan mem-publish ke
+konsumen. Lihat daftar `eventType` lengkap dan rasional pola outbox di
+`docs/database/15-platform-infra.md` bagian `DomainOutboxEvent` dan
+`docs/engineering/DECISION-LOG.md` ADR-016 Keputusan 3.
+
+## 18. Status implementasi
 
 Semua endpoint pada dokumen ini berstatus **BELUM DIKERJAKAN** kecuali dicatat lain
 di `docs/engineering/TRACEABILITY-MATRIX.md` dan `docs/engineering/MASTER-CHECKLIST.md`.

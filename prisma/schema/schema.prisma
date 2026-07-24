@@ -116,6 +116,9 @@ model Tenant {
   rmKinerjaKaryawanHarian RmKinerjaKaryawanHarian[]
   pembayaran              Pembayaran[]
   permintaanPersetujuan   PermintaanPersetujuan[]
+  idempotencyKey          IdempotencyKey[]
+  domainOutboxEvent       DomainOutboxEvent[]
+  notification            Notification[]
 
   @@map("tenant")
 }
@@ -224,6 +227,10 @@ model Pengguna {
   biayaOperasionalDicatat         BiayaOperasional[]      @relation("BiayaDicatatOleh")
   izinSementaraDiberikan          IzinSementara[]         @relation("IzinSementaraDiberikanOleh")
   permintaanPersetujuanDiputuskan PermintaanPersetujuan[] @relation("PersetujuanDisetujuiOleh")
+  // ALT-DEF-017: notifikasi in-app - Pengguna adalah identitas GLOBAL (ADR-011),
+  // sengaja TIDAK di-composite-kan ke tenant, sama seperti relasi Pengguna lain
+  // di seluruh skema ini (lihat ADR-013 poin 5).
+  notifikasi                      Notification[]
 
   @@map("pengguna")
 }
@@ -2092,4 +2099,192 @@ model RmKinerjaKaryawanHarian {
 
   @@unique([outletId, karyawanId, tanggal])
   @@map("rm_kinerja_karyawan_harian")
+}
+
+// =====================================================================================
+// 15. PLATFORM INFRASTRUKTUR - IDEMPOTENCY / OUTBOX / NOTIFIKASI
+// (docs/database/15-platform-infra.md, ALT-DEF-017, ALT-PLT-018/019/020)
+// =====================================================================================
+//
+// Batch ini HANYA menambah model infrastruktur cross-cutting (idempotency-key,
+// transactional outbox, notifikasi in-app) dan mendokumentasikan di mana model
+// ini akan dipakai oleh domain lain (checkout, pembayaran, dapur, stok, promo,
+// membership, HR) - TIDAK mengubah/menyentuh business logic domain-domain
+// tersebut sama sekali (sesuai batas cakupan correction-loop, lihat
+// DECISION-LOG.md ADR-016 untuk rasional lengkap).
+
+enum StatusIdempotencyKey {
+  MEMPROSES
+  SELESAI
+  GAGAL
+}
+
+// ALT-DEF-017/ALT-PLT-018: menyimpan hash request + response endpoint kritis
+// (checkout, submit pesanan QR, accept pesanan, pembayaran, konfirmasi QRIS,
+// refund, penerimaan barang, posting mutasi stok, posting opname, transfer
+// stok, penukaran poin, penerapan promo - lihat daftar lengkap di
+// docs/api/API-CONTRACT.md bagian "Idempotency-Key wajib") - lihat ADR-016
+// untuk rasional requestHash dan status MEMPROSES/SELESAI/GAGAL.
+//
+// tenantId di sini CUKUP relasi FK biasa ke Tenant (bukan composite-FK ganda
+// seperti KeanggotaanOutlet/PinOutlet, ADR-011/ADR-013/ADR-015) - berbeda
+// dengan model-model itu, IdempotencyKey TIDAK bernaung di bawah DUA parent
+// tenant-scoped independen yang bisa saling menyimpang (mis. Outlet DAN
+// KeanggotaanTenant sekaligus). Baris ini hanya scoped langsung ke Tenant;
+// outletId adalah kolom informational nullable (operasi tenant-level vs
+// outlet-level), BUKAN bagian dari FK apa pun - sama seperti pola
+// AuditLog.outletId di model AuditLog di atas. Composite-FK ganda hanya
+// diperlukan ketika ada risiko nyata pencampuran DUA relasi tenant-owned yang
+// independen; di sini tidak ada relasi kedua semacam itu untuk dijamin.
+model IdempotencyKey {
+  id             String               @id
+  tenantId       String
+  // Nullable - beberapa operasi bersifat tenant-level (mis. penerapan promo
+  // lintas outlet), bukan selalu outlet-level. Lihat catatan di atas: kolom
+  // informational, bukan FK.
+  outletId       String?
+  // Idempotency key yang disodorkan klien lewat header `Idempotency-Key`.
+  key            String
+  // Identifikasi command mana yang memakai key ini (mis. "checkout",
+  // "pembayaran.konfirmasi", "promo.terapkan") - String bebas (bukan enum)
+  // karena daftar scope akan terus bertambah seiring endpoint kritis baru
+  // ditambahkan, tanpa perlu migrasi skema tiap kali (pola sama seperti
+  // Izin.domain/PermintaanPersetujuan.jenisAksi).
+  scope          String
+  // Hash SHA-256 (atau algoritma setara) dari body request - dipakai untuk
+  // mendeteksi key yang dipakai ulang dengan payload BERBEDA, yang harus
+  // ditolak sebagai konflik (409), bukan diam-diam mengembalikan response
+  // tersimpan dari request lain. Lihat ADR-016 untuk rasional lengkap.
+  requestHash    String
+  responseStatus Int?
+  responseBody   Json?
+  // MEMPROSES: request pertama masih berjalan (dipakai mendeteksi request
+  // duplikat yang datang SEBELUM request pertama selesai - bukan hanya
+  // setelah selesai). SELESAI: response tersimpan siap dikembalikan ke
+  // duplikat berikutnya. GAGAL: request pertama gagal - kebijakan retry
+  // (izinkan re-attempt dengan key sama atau tidak) adalah keputusan
+  // service-layer, bukan bagian skema.
+  status         StatusIdempotencyKey @default(MEMPROSES)
+  expiresAt      DateTime
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, scope, key])
+  @@map("idempotency_key")
+}
+
+enum StatusOutboxEvent {
+  TERTUNDA
+  DIPROSES
+  TERKIRIM
+  GAGAL
+}
+
+// ALT-DEF-017/ALT-PLT-019: transactional outbox - event domain ditulis DALAM
+// TRANSAKSI YANG SAMA dengan perubahan data bisnis yang memicunya (mis. baris
+// ini dan perubahan status Pesanan di-commit bersama), lalu relay worker
+// terpisah membaca baris berstatus TERTUNDA dan mem-publish ke
+// broker/consumer (WebSocket realtime, job agregasi analitik, dsb) secara
+// asinkron. Lihat ADR-016 untuk rasional lengkap kenapa outbox dipilih
+// dibanding publish langsung di transaksi yang sama.
+//
+// Publisher NYATA setiap eventType di bawah adalah pekerjaan fitur
+// domain-domain terkait (Pesanan/Dapur/Pembayaran/Persediaan/Karyawan) di
+// batch berikutnya - TIDAK diimplementasikan di batch ini (lihat batasan
+// cakupan ALT-DEF-017 di DEFECT-LEDGER.md). Daftar eventType berikut
+// didokumentasikan di sini sekaligus di docs/api/API-CONTRACT.md agar
+// domain-domain tersebut punya kontrak nama event yang konsisten begitu
+// publisher-nya dibangun:
+//   order.submitted, order.accepted, order.rejected, order.updated,
+//   order.cancelled, order.sent_to_kitchen, kitchen.started, kitchen.ready,
+//   order.served, payment.awaiting_confirmation, payment.confirmed,
+//   stock.low, stock.adjusted, shift.opened, shift.closed,
+//   attendance.created
+model DomainOutboxEvent {
+  id            String            @id
+  tenantId      String
+  // Nullable - sebagian event bisa jadi tenant-level (mis. shift.opened bila
+  // shift tidak diikat ke satu outlet - didokumentasikan sebagai kemungkinan,
+  // bukan diasumsikan tunggal).
+  outletId      String?
+  // Tipe aggregate root yang memicu event (mis. "Pesanan", "Pembayaran",
+  // "TiketDapur") - String bebas, bukan enum, karena daftar aggregate akan
+  // terus bertambah seiring domain baru menulis event.
+  aggregateType String
+  aggregateId   String
+  // Nama event, mengikuti daftar lengkap di komentar model di atas (mis.
+  // "order.submitted") - String bebas agar domain lain bisa menambah event
+  // baru tanpa migrasi skema di package platform ini.
+  eventType     String
+  payload       Json
+  status        StatusOutboxEvent @default(TERTUNDA)
+  attemptCount  Int               @default(0)
+  // Dipakai untuk retry backoff terjadwal - relay worker memfilter
+  // `availableAt <= now()` agar percobaan ulang tidak langsung beruntun tanpa
+  // jeda saat publish gagal sementara.
+  availableAt   DateTime
+  processedAt   DateTime?
+  lastError     String?
+  createdAt     DateTime          @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  // Index untuk polling/dispatch efisien oleh relay worker: cari baris
+  // TERTUNDA/GAGAL yang availableAt-nya sudah lewat, terurut untuk diproses.
+  @@index([status, availableAt])
+  @@map("domain_outbox_event")
+}
+
+enum TipeNotifikasi {
+  PESANAN_QR_MASUK
+  PESANAN_BERUBAH
+  PESANAN_SIAP
+  PEMBAYARAN_MENUNGGU_KONFIRMASI
+  STOK_KRITIS
+  SELISIH_KAS
+  PERSETUJUAN_DIBUTUHKAN
+  KARYAWAN_TERLAMBAT
+}
+
+// ALT-DEF-017/ALT-PLT-020: notifikasi in-app Altora SAJA - TIDAK ADA
+// WhatsApp/SMS/push ke sistem eksternal apa pun di batch ini maupun yang
+// direncanakan menggantikan model ini; "notifikasi" di sini murni berarti
+// baris yang dibaca klien Altora sendiri (polling/realtime in-app), lihat
+// ADR-016 untuk rasional pembatasan cakupan ini secara eksplisit.
+//
+// penggunaId NULLABLE: notifikasi bisa berupa broadcast ke SEMUA pengguna
+// dengan role/akses tertentu di suatu outlet (mis. "STOK_KRITIS" ditujukan ke
+// siapa pun berperan GUDANG di outlet itu), bukan selalu satu Pengguna
+// spesifik. Keputusan pass ini: TIDAK menambah model NotificationTarget
+// terpisah (yang akan memetakan satu Notification ke banyak target
+// peran/outlet) - dicatat sebagai simplifikasi yang diketahui/disengaja,
+// bukan kelalaian (lihat ADR-016). Saat penggunaId NULL, targeting nyata
+// (siapa yang berhak melihat baris ini) adalah tanggung jawab service-layer
+// query (mis. filter berdasarkan outletId + peran pemanggil), bukan
+// dijamin skema.
+model Notification {
+  id         String         @id
+  tenantId   String
+  outletId   String?
+  // Nullable - lihat catatan di atas model ini. Sengaja BUKAN composite-FK ke
+  // tenant (Pengguna adalah identitas global, ADR-011, sama seperti seluruh
+  // relasi Pengguna lain di skema ini).
+  penggunaId String?
+  tipe       TipeNotifikasi
+  judul      String
+  pesan      String
+  // Payload terstruktur untuk deep-link sisi klien (mis. {"orderId": "..."}
+  // agar tap notifikasi langsung membuka pesanan terkait).
+  data       Json?
+  dibacaPada DateTime?
+  createdAt  DateTime       @default(now())
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  pengguna Pengguna? @relation(fields: [penggunaId], references: [id])
+
+  // Index untuk query "notifikasi belum dibaca milik pengguna X" yang efisien.
+  @@index([penggunaId, dibacaPada])
+  @@map("notification")
 }

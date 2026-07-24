@@ -26,5 +26,6 @@ ERD dipecah per domain agar mudah dibaca. Semua entitas mengikuti aturan umum (l
 | [12-karyawan-absensi.md](./12-karyawan-absensi.md) | Karyawan, Jabatan, Shift, Absensi, Cuti |
 | [13-keuangan.md](./13-keuangan.md) | Rekap Kas, Biaya Operasional, Jurnal Sederhana |
 | [14-analitik-read-model.md](./14-analitik-read-model.md) | Read model harian/agregat untuk dashboard analitik |
+| [15-platform-infra.md](./15-platform-infra.md) | Idempotency Key, Domain Outbox Event, Notification (in-app) |
 
 Skema Prisma yang mengimplementasikan ERD ini ada di `prisma/schema/`.
