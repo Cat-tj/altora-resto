@@ -1,0 +1,32 @@
+{
+  "name": "altora-resto",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Altora Resto - sistem operasional restoran/F&B multi-tenant multi-outlet",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e",
+    "depcheck": "depcruise --config .dependency-cruiser.cjs --output-type err packages apps",
+    "prisma:format": "prisma format --schema prisma/schema/schema.prisma",
+    "prisma:validate": "prisma validate --schema prisma/schema/schema.prisma",
+    "prisma:generate": "prisma generate --schema prisma/schema/schema.prisma",
+    "clean": "turbo run clean && rimraf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.1.0",
+    "typescript": "^5.6.0",
+    "dependency-cruiser": "^16.4.0",
+    "prisma": "^5.20.0",
+    "rimraf": "^6.0.0"
+  }
+}

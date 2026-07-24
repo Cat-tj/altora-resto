@@ -1,0 +1,29 @@
+{
+  "name": "@altora/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Aplikasi web Next.js (App Router) Altora Resto - juga berfungsi sebagai PWA dan API backend (/api/v1).",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@altora/desain": "workspace:*",
+    "@altora/ui": "workspace:*",
+    "@playwright/test": "^1.47.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

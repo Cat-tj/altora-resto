@@ -1,0 +1,24 @@
+{
+  "name": "@altora/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pembungkus Capacitor (Android/iOS) di atas @altora/web untuk Altora Resto.",
+  "type": "module",
+  "scripts": {
+    "sync": "cap sync",
+    "open:android": "cap open android",
+    "open:ios": "cap open ios",
+    "build:android": "cap build android",
+    "build:ios": "cap build ios",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.0",
+    "@capacitor/core": "^6.1.0",
+    "@capacitor/ios": "^6.1.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.0",
+    "typescript": "^5.6.0"
+  }
+}
