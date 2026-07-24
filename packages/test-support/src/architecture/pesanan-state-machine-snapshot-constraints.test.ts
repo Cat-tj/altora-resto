@@ -33,14 +33,26 @@ function readSchema(): string {
   return readFileSync(SCHEMA_PATH, "utf-8");
 }
 
+// ALT-DEF-033: cocokkan needle dengan runs spasi/tab horizontal dinormalisasi.
+// `prisma format` menyelaraskan lebar kolom antar-field, sehingga menambah satu
+// field baru ke sebuah model menggeser spasi pada baris LAIN yang tidak
+// disentuh - assertion whitespace-exact akan gagal PALSU. Ditambahkan pada batch
+// ALT-DEF-004/014/015 setelah field `alokasiPembayaran` baru di model `Pesanan`
+// menggeser perataan `perubahan PesananPerubahan[]` dan membuat file ini gagal
+// tanpa ada perubahan semantik apa pun pada assertion-nya. Newline TIDAK
+// dinormalisasi supaya needle yang memakai "\n" tetap bermakna.
+function normalisasiSpasiHorizontal(teks: string): string {
+  return teks.replace(/[ \t]+/g, " ");
+}
+
 function assertContains(haystack: string, needle: string, pesan: string): void {
-  if (!haystack.includes(needle)) {
+  if (!normalisasiSpasiHorizontal(haystack).includes(normalisasiSpasiHorizontal(needle))) {
     throw new Error(`ASSERTION GAGAL: ${pesan}\nTidak ditemukan: ${JSON.stringify(needle)}`);
   }
 }
 
 function assertNotContains(haystack: string, needle: string, pesan: string): void {
-  if (haystack.includes(needle)) {
+  if (normalisasiSpasiHorizontal(haystack).includes(normalisasiSpasiHorizontal(needle))) {
     throw new Error(`ASSERTION GAGAL: ${pesan}\nSeharusnya tidak ditemukan tetapi ada: ${JSON.stringify(needle)}`);
   }
 }
