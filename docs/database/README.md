@@ -20,12 +20,13 @@ ERD dipecah per domain agar mudah dibaca. Semua entitas mengikuti aturan umum (l
 | [06-meja-reservasi.md](./06-meja-reservasi.md) | Area, Meja, Reservasi |
 | [07-pesanan.md](./07-pesanan.md) | Pesanan, Item Pesanan, Riwayat Status |
 | [08-dapur.md](./08-dapur.md) | Tiket Dapur, Antrian Dapur (read-contract dari Pesanan) |
-| [09-pembayaran-kasir.md](./09-pembayaran-kasir.md) | Giliran Kasir, Transaksi, Pembayaran, QRIS Manual, Struk |
+| [09-pembayaran-kasir.md](./09-pembayaran-kasir.md) | Giliran Kasir, Transaksi, Pembayaran, Alokasi Pembayaran, Koreksi, Refund, Struk |
 | [10-promo.md](./10-promo.md) | Promo, Aturan Promo, Kupon, Pemakaian Promo |
 | [11-pelanggan-keanggotaan.md](./11-pelanggan-keanggotaan.md) | Pelanggan, Membership, Tier, Poin |
 | [12-karyawan-absensi.md](./12-karyawan-absensi.md) | Karyawan, Jabatan, Shift, Absensi, Cuti |
 | [13-keuangan.md](./13-keuangan.md) | Rekap Kas, Biaya Operasional, Jurnal Sederhana |
 | [14-analitik-read-model.md](./14-analitik-read-model.md) | Read model harian/agregat untuk dashboard analitik |
 | [15-platform-infra.md](./15-platform-infra.md) | Idempotency Key, Domain Outbox Event, Notification (in-app) |
+| [16-qris.md](./16-qris.md) | Konfigurasi QRIS statis per outlet, riwayat perubahan, konfirmasi manual |
 
 Skema Prisma yang mengimplementasikan ERD ini ada di `prisma/schema/`.
