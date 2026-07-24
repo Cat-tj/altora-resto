@@ -42,6 +42,16 @@ enum StatusPengguna {
   NONAKTIF
 }
 
+enum StatusKeanggotaanTenant {
+  AKTIF
+  NONAKTIF
+}
+
+enum StatusKeanggotaanOutlet {
+  AKTIF
+  NONAKTIF
+}
+
 enum JenisPerangkat {
   KASIR
   KDS
@@ -62,7 +72,7 @@ model Tenant {
   createdAt DateTime     @default(now())
 
   outlet                  Outlet[]
-  pengguna                Pengguna[]
+  keanggotaanTenant       KeanggotaanTenant[]
   peran                   Peran[]
   auditLog                AuditLog[]
   pengaturanTenant        PengaturanTenant[]
@@ -97,6 +107,7 @@ model Tenant {
   rmStokKritis            RmStokKritis[]
   rmKinerjaKaryawanHarian RmKinerjaKaryawanHarian[]
   pembayaran              Pembayaran[]
+  permintaanPersetujuan   PermintaanPersetujuan[]
 
   @@map("tenant")
 }
@@ -112,7 +123,7 @@ model Outlet {
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
-  penggunaOutlet          PenggunaOutlet[]
+  keanggotaanOutlet       KeanggotaanOutlet[]       @relation("KeanggotaanOutletOutlet")
   perangkat               Perangkat[]
   pengaturanOutlet        PengaturanOutlet[]
   kategoriMenu            KategoriMenu[]
@@ -139,79 +150,288 @@ model Outlet {
   rmKinerjaKaryawanHarian RmKinerjaKaryawanHarian[]
 
   @@unique([tenantId, kode])
+  // Diperlukan (bukan sekadar @id) agar KeanggotaanOutlet bisa memakai composite FK
+  // (tenantId, outletId) -> (tenantId, id) sebagai jaminan level-database bahwa
+  // outlet yang direferensikan benar-benar milik tenant yang sama (lihat ALT-DEF-001,
+  // ADR baru "Composite-FK tenant-outlet" di DECISION-LOG.md).
+  @@unique([tenantId, id])
   @@map("outlet")
 }
 
+// ALT-DEF-001: Pengguna adalah IDENTITAS GLOBAL (autentikasi) - sengaja TIDAK
+// membawa tenantId/outletId/peran langsung. Keanggotaan tenant/outlet/peran
+// dimodelkan terpisah di KeanggotaanTenant/KeanggotaanOutlet/KeanggotaanPeran
+// di bawah, sehingga satu Pengguna bisa menjadi anggota banyak Tenant (mis.
+// konsultan yang mengelola beberapa resto) dengan peran berbeda di tiap tenant.
+// Lihat docs/engineering/DECISION-LOG.md ADR-011.
+//
+// Catatan pinHash: field pinHash LAMA (PIN global per pengguna) sengaja
+// DIHAPUS di sini, bukan dipindahkan - PIN-per-outlet (ALT-DEF-013) adalah
+// model terpisah (mis. PinOutlet pada KeanggotaanOutlet) yang akan dibangun di
+// batch auth/session berikutnya (ALT-DEF-003/013), tidak di batch ini.
 model Pengguna {
-  id          String         @id
-  tenantId    String
-  namaLengkap String
-  email       String
-  pinHash     String?
-  status      StatusPengguna @default(AKTIF)
-  createdAt   DateTime       @default(now())
+  id                     String         @id
+  namaLengkap            String
+  // Unik GLOBAL (bukan per tenant lagi) - satu alamat email = satu identitas
+  // pengguna lintas seluruh platform. Lihat ADR-011 untuk alasan kebijakan ini.
+  email                  String         @unique
+  // Nullable untuk sementara karena data seed/existing mungkin belum punya
+  // kredensial password - begitu alur auth email+password dibangun (ALT-DEF-003),
+  // field ini semestinya menjadi wajib (non-null) untuk pengguna yang aktif login.
+  passwordHash           String?
+  status                 StatusPengguna @default(AKTIF)
+  emailTerverifikasiPada DateTime?
+  terakhirLoginPada      DateTime?
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id])
+  keanggotaanTenant               KeanggotaanTenant[]
+  sesi                            Sesi[]
+  auditLog                        AuditLog[]
+  karyawan                        Karyawan?
+  giliranKasir                    GiliranKasir[]
+  purchaseOrderDibuat             PurchaseOrder[]         @relation("PoDibuatOleh")
+  penerimaanBarangDiterima        PenerimaanBarang[]      @relation("PenerimaanDiterimaOleh")
+  stokOpnameDibuat                StokOpname[]            @relation("OpnameDibuatOleh")
+  pesananDibuat                   Pesanan[]               @relation("PesananDibuatOleh")
+  pesananRiwayatStatusDiubah      PesananRiwayatStatus[]  @relation("RiwayatStatusDiubahOleh")
+  pembayaranDikonfirmasi          Pembayaran[]            @relation("PembayaranDikonfirmasiOleh")
+  qrisKonfirmasiDiverifikasi      QrisKonfirmasiManual[]  @relation("QrisDiverifikasiOleh")
+  pembayaranRefundDisetujui       PembayaranRefund[]      @relation("RefundDisetujuiOleh")
+  cutiIzinDisetujui               CutiIzin[]              @relation("CutiDisetujuiOleh")
+  rekapKasHarianDiverifikasi      RekapKasHarian[]        @relation("RekapDiverifikasiOleh")
+  biayaOperasionalDicatat         BiayaOperasional[]      @relation("BiayaDicatatOleh")
+  izinSementaraDiberikan          IzinSementara[]         @relation("IzinSementaraDiberikanOleh")
+  permintaanPersetujuanDiputuskan PermintaanPersetujuan[] @relation("PersetujuanDisetujuiOleh")
 
-  penggunaOutlet             PenggunaOutlet[]
-  peran                      PenggunaPeran[]
-  sesi                       Sesi[]
-  auditLog                   AuditLog[]
-  karyawan                   Karyawan?
-  giliranKasir               GiliranKasir[]
-  purchaseOrderDibuat        PurchaseOrder[]        @relation("PoDibuatOleh")
-  penerimaanBarangDiterima   PenerimaanBarang[]     @relation("PenerimaanDiterimaOleh")
-  stokOpnameDibuat           StokOpname[]           @relation("OpnameDibuatOleh")
-  pesananDibuat              Pesanan[]              @relation("PesananDibuatOleh")
-  pesananRiwayatStatusDiubah PesananRiwayatStatus[] @relation("RiwayatStatusDiubahOleh")
-  pembayaranDikonfirmasi     Pembayaran[]           @relation("PembayaranDikonfirmasiOleh")
-  qrisKonfirmasiDiverifikasi QrisKonfirmasiManual[] @relation("QrisDiverifikasiOleh")
-  pembayaranRefundDisetujui  PembayaranRefund[]     @relation("RefundDisetujuiOleh")
-  cutiIzinDisetujui          CutiIzin[]             @relation("CutiDisetujuiOleh")
-  rekapKasHarianDiverifikasi RekapKasHarian[]       @relation("RekapDiverifikasiOleh")
-  biayaOperasionalDicatat    BiayaOperasional[]     @relation("BiayaDicatatOleh")
-
-  @@unique([tenantId, email])
   @@map("pengguna")
 }
 
-model PenggunaOutlet {
-  id         String   @id
-  penggunaId String
-  outletId   String
-  createdAt  DateTime @default(now())
+// Menghubungkan satu Pengguna (identitas global) ke satu Tenant. Satu Pengguna
+// dapat memiliki banyak baris KeanggotaanTenant aktif (satu per tenant tempat ia
+// bekerja) - lihat ALT-PLT-003. `isOwner` menandai keanggotaan pemilik tenant
+// (dibuat otomatis saat registrasi tenant, ALT-PLT-002).
+model KeanggotaanTenant {
+  id            String                  @id
+  penggunaId    String
+  tenantId      String
+  status        StatusKeanggotaanTenant @default(AKTIF)
+  isOwner       Boolean                 @default(false)
+  bergabungPada DateTime                @default(now())
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
 
   pengguna Pengguna @relation(fields: [penggunaId], references: [id])
-  outlet   Outlet   @relation(fields: [outletId], references: [id])
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
 
-  @@unique([penggunaId, outletId])
-  @@map("pengguna_outlet")
+  keanggotaanOutlet             KeanggotaanOutlet[]
+  keanggotaanOutletTenantScoped KeanggotaanOutlet[]     @relation("KeanggotaanOutletTenantScoped")
+  keanggotaanPeran              KeanggotaanPeran[]
+  izinSementara                 IzinSementara[]
+  permintaanPersetujuanPemohon  PermintaanPersetujuan[] @relation("PersetujuanPemohon")
+
+  @@unique([penggunaId, tenantId])
+  // Diperlukan agar KeanggotaanOutlet bisa memakai composite FK
+  // (tenantId, keanggotaanTenantId) -> (tenantId, id) - lihat catatan di
+  // KeanggotaanOutlet dan ADR-011 di DECISION-LOG.md.
+  @@unique([tenantId, id])
+  @@map("keanggotaan_tenant")
 }
 
-model Peran {
-  id          String @id
-  tenantId    String
-  kode        String
-  nama        String
-  permissions Json
+// Menentukan outlet mana saja yang boleh diakses oleh satu KeanggotaanTenant
+// (ALT-PLT-007). CRITICAL (ALT-DEF-001/ALT-DEF-010): database HARUS menjamin
+// KeanggotaanOutlet.tenantId == Outlet.tenantId DAN
+// KeanggotaanOutlet.tenantId == KeanggotaanTenant.tenantId, agar tidak mungkin
+// (di level constraint, bukan hanya guard aplikasi) sebuah keanggotaan outlet
+// mencampur outlet milik tenant lain dengan keanggotaan tenant yang berbeda.
+//
+// Pola yang dipakai: composite-FK ganda memakai kolom tenantId yang SAMA -
+// (tenantId, outletId) -> Outlet(tenantId, id) dan
+// (tenantId, keanggotaanTenantId) -> KeanggotaanTenant(tenantId, id).
+// Pola ini BERHASIL divalidasi oleh `prisma validate` (lihat RELEASE-EVIDENCE.md) -
+// bukan fallback ke scalar+guard aplikasi.
+model KeanggotaanOutlet {
+  id                  String                  @id
+  keanggotaanTenantId String
+  // Kolom denormalisasi wajib - bukan kolom informational biasa. Nilainya harus
+  // selalu sama dengan Outlet.tenantId dan KeanggotaanTenant.tenantId; kesamaan
+  // itu yang membuat kedua composite FK di bawah valid secara referential
+  // integrity di level database.
+  tenantId            String
+  outletId            String
+  status              StatusKeanggotaanOutlet @default(AKTIF)
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
 
-  tenant   Tenant          @relation(fields: [tenantId], references: [id])
-  pengguna PenggunaPeran[]
+  outlet                        Outlet            @relation("KeanggotaanOutletOutlet", fields: [tenantId, outletId], references: [tenantId, id])
+  keanggotaanTenant             KeanggotaanTenant @relation(fields: [keanggotaanTenantId], references: [id])
+  keanggotaanTenantTenantScoped KeanggotaanTenant @relation("KeanggotaanOutletTenantScoped", fields: [tenantId, keanggotaanTenantId], references: [tenantId, id])
+
+  @@unique([keanggotaanTenantId, outletId])
+  @@map("keanggotaan_outlet")
+}
+
+// ALT-DEF-002: Peran tetap tenant-scoped, tetapi TIDAK lagi menyimpan
+// permissions sebagai Json - lihat PeranIzin/Izin di bawah untuk model
+// ternormalisasi.
+model Peran {
+  id        String              @id
+  tenantId  String
+  kode      String
+  nama      String
+  deskripsi String?
+  // true untuk peran bawaan (OWNER/MANAJER/KASIR/PELAYAN/DAPUR/GUDANG/
+  // PEMBELIAN/HRD) yang di-seed otomatis per tenant baru; false untuk peran
+  // kustom yang dibuat tenant sendiri (ALT-PLT-008). Peran isSystem tidak boleh
+  // dihapus lewat endpoint CRUD peran kustom.
+  isSystem  Boolean             @default(false)
+  status    StatusAktifNonaktif @default(AKTIF)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  tenant           Tenant             @relation(fields: [tenantId], references: [id])
+  peranIzin        PeranIzin[]
+  keanggotaanPeran KeanggotaanPeran[]
+  batasIzin        BatasIzin?
 
   @@unique([tenantId, kode])
   @@map("peran")
 }
 
-model PenggunaPeran {
-  id         String @id
-  penggunaId String
-  peranId    String
+// Katalog izin (permission) atomik, GLOBAL (bukan per-tenant) - kode izin sama
+// artinya di semua tenant (mis. "transaksi.diskon"), hanya kaitan ke Peran yang
+// tenant-scoped lewat PeranIzin. Lihat docs/keamanan/PERMISSION-MATRIX.md untuk
+// daftar kode lengkap dan prisma/seed/izin.seed.ts untuk seed data-nya.
+model Izin {
+  id        String              @id
+  kode      String
+  nama      String
+  // Pengelompokan domain fungsional izin (mis. "kasir", "persediaan", "promo").
+  // Dipilih sebagai String bebas (bukan enum) karena daftar domain produk masih
+  // bisa bertambah tanpa migrasi skema setiap kali domain baru ditambahkan -
+  // lihat ADR-011 untuk alasan pemilihan ini.
+  domain    String
+  deskripsi String?
+  status    StatusAktifNonaktif @default(AKTIF)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
 
-  pengguna Pengguna @relation(fields: [penggunaId], references: [id])
-  peran    Peran    @relation(fields: [peranId], references: [id])
+  peranIzin     PeranIzin[]
+  izinSementara IzinSementara[]
 
-  @@unique([penggunaId, peranId])
-  @@map("pengguna_peran")
+  @@unique([kode])
+  @@map("izin")
+}
+
+// Tabel penghubung many-to-many Peran <-> Izin (ALT-PLT-010) - menggantikan
+// Peran.permissions Json lama. Permission Peran sekarang bisa divalidasi lewat
+// foreign key (kode izin typo akan gagal di level DB), diquery lewat join, dan
+// diaudit per baris.
+model PeranIzin {
+  id        String   @id
+  peranId   String
+  izinId    String
+  createdAt DateTime @default(now())
+
+  peran Peran @relation(fields: [peranId], references: [id])
+  izin  Izin  @relation(fields: [izinId], references: [id])
+
+  @@unique([peranId, izinId])
+  @@map("peran_izin")
+}
+
+// Menggantikan PenggunaPeran lama. Penetapan peran sekarang per KEANGGOTAAN
+// TENANT (bukan per Pengguna global) - ini yang secara benar mengizinkan satu
+// Pengguna memiliki peran BERBEDA di tenant yang berbeda (mis. jadi OWNER di
+// tenant A tapi cuma KASIR di tenant B tempat ia membantu paruh waktu).
+model KeanggotaanPeran {
+  id                  String   @id
+  keanggotaanTenantId String
+  peranId             String
+  createdAt           DateTime @default(now())
+
+  keanggotaanTenant KeanggotaanTenant @relation(fields: [keanggotaanTenantId], references: [id])
+  peran             Peran             @relation(fields: [peranId], references: [id])
+
+  @@unique([keanggotaanTenantId, peranId])
+  @@map("keanggotaan_peran")
+}
+
+// Batas izin bernilai (limit numerik) per Peran (ALT-PLT-011) - mis. maksimum
+// diskon yang boleh diberikan KASIR tanpa perlu approval supervisor. Di-scope
+// ke Peran (bukan per-pengguna) karena limit ini sesuai desain adalah atribut
+// peran, bukan atribut individu.
+model BatasIzin {
+  id                      String   @id
+  peranId                 String   @unique
+  maksimumDiskonPersen    Decimal?
+  maksimumDiskonNominal   Int?
+  maksimumRefund          Int?
+  maksimumPenyesuaianStok Decimal?
+  wajibPinSupervisor      Boolean  @default(false)
+  wajibPersetujuanManajer Boolean  @default(false)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  peran Peran @relation(fields: [peranId], references: [id])
+
+  @@map("batas_izin")
+}
+
+// Pemberian izin sementara/darurat (ALT-PLT-012 mendukung ini secara tidak
+// langsung) - mis. supervisor sedang cuti, seorang kasir senior diberi izin
+// "transaksi.diskon" sementara untuk satu shift.
+model IzinSementara {
+  id                  String              @id
+  keanggotaanTenantId String
+  izinId              String
+  diberikanOlehId     String
+  alasan              String
+  berlakuSejak        DateTime
+  berlakuSampai       DateTime
+  status              StatusAktifNonaktif @default(AKTIF)
+  createdAt           DateTime            @default(now())
+
+  keanggotaanTenant KeanggotaanTenant @relation(fields: [keanggotaanTenantId], references: [id])
+  izin              Izin              @relation(fields: [izinId], references: [id])
+  diberikanOleh     Pengguna          @relation("IzinSementaraDiberikanOleh", fields: [diberikanOlehId], references: [id])
+
+  @@map("izin_sementara")
+}
+
+enum StatusPermintaanPersetujuan {
+  DIAJUKAN
+  DISETUJUI
+  DITOLAK
+  DIBATALKAN
+}
+
+// Rekaman permintaan persetujuan supervisor generik (ALT-PLT-012) - dipakai
+// saat sebuah aksi melebihi BatasIzin (wajibPersetujuanManajer/
+// wajibPinSupervisor), mis. diskon manual, refund, penyesuaian stok.
+model PermintaanPersetujuan {
+  id                         String                      @id
+  tenantId                   String
+  outletId                   String?
+  keanggotaanTenantIdPemohon String
+  // Jenis aksi yang butuh persetujuan - String bebas (bukan enum) agar domain
+  // lain (kasir/persediaan/pesanan) bisa menambah jenis aksi baru tanpa
+  // migrasi skema di package ini (mis. "DISKON_MANUAL", "REFUND",
+  // "PENYESUAIAN_STOK").
+  jenisAksi                  String
+  referensiJenis             String
+  referensiId                String
+  status                     StatusPermintaanPersetujuan @default(DIAJUKAN)
+  disetujuiOlehId            String?
+  catatan                    String?
+  createdAt                  DateTime                    @default(now())
+  updatedAt                  DateTime                    @updatedAt
+
+  tenant                   Tenant            @relation(fields: [tenantId], references: [id])
+  keanggotaanTenantPemohon KeanggotaanTenant @relation("PersetujuanPemohon", fields: [keanggotaanTenantIdPemohon], references: [id])
+  disetujuiOleh            Pengguna?         @relation("PersetujuanDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+
+  @@map("permintaan_persetujuan")
 }
 
 model Perangkat {

@@ -19,16 +19,18 @@ ini sampai pekerjaan sinkronisasi tersebut selesai.
 
 | Requirement ID | Entitas ERD | Endpoint API | Rute UI | Permission | Status | Bukti Uji |
 |---|---|---|---|---|---|---|
-| ALT-PLT-001 | `Tenant`, `Pengguna` | `POST /api/v1/tenant` (belum ada di kontrak v1, TODO tambah) | `/register` (belum ada di ROUTE-MAP, TODO tambah) | OWNER (pembuat) | BELUM DIKERJAKAN | - |
-| ALT-PLT-002 | `Outlet` | `GET/POST /api/v1/outlet` | `/pengaturan/outlet/{outletSlug}` | OWNER/MANAJER | BELUM DIKERJAKAN | - |
-| ALT-PLT-003 | `Pengguna`, `Sesi` | `POST /api/v1/auth/masuk` | `/masuk` | publik (pra-autentikasi) | BELUM DIKERJAKAN | - |
+| ALT-PLT-001 | `Tenant`, `Pengguna`, `KeanggotaanTenant` | `POST /api/v1/tenant` (belum ada di kontrak v1, TODO tambah) | `/register` (belum ada di ROUTE-MAP, TODO tambah) | OWNER (pembuat) | BELUM DIKERJAKAN | - |
+| ALT-PLT-002 | `Pengguna`, `KeanggotaanTenant` (diperbarui ALT-DEF-001: `Pengguna` global, `KeanggotaanTenant.isOwner=true` dibuat saat registrasi, bukan lagi `Pengguna.tenantId`) | `POST /api/v1/tenant/registrasi` | `/daftar` | OWNER (pembuat) | BELUM DIKERJAKAN | - |
+| ALT-PLT-003 | `KeanggotaanTenant` (diperbarui ALT-DEF-001: satu `Pengguna` bisa punya banyak baris `KeanggotaanTenant` aktif) | `GET /api/v1/tenant-saya` | `/pilih-tenant` | platform.keanggotaan.lihat | BELUM DIKERJAKAN | - |
 | ALT-PLT-004 | `Pengguna`, `Sesi`, `Perangkat` | `POST /api/v1/auth/masuk-pin` | `/masuk-pin` | publik (perangkat outlet) | BELUM DIKERJAKAN | - |
 | ALT-PLT-005 | `Perangkat` | `GET /api/v1/perangkat`, `POST /api/v1/auth/perangkat/aktivasi` | `/pengaturan/perangkat` | MANAJER | BELUM DIKERJAKAN | - |
 | ALT-PLT-006 | `AuditLog` | `GET /api/v1/audit-log` | (belum ada rute dedicated, TODO tambah ke ROUTE-MAP) | OWNER (lihat), MANAJER (lihat, L) | BELUM DIKERJAKAN | - |
-| ALT-PLT-007 | `PengaturanTenant`, `PengaturanOutlet` | `PATCH /api/v1/tenant/saya` | `/pengaturan/tenant`, `/pengaturan/outlet/{outletSlug}` | OWNER/MANAJER | BELUM DIKERJAKAN | - |
-| ALT-OTR-001 | `Peran`, `PenggunaPeran` | `GET/POST /api/v1/peran` | `/pengaturan/pengguna` | OWNER | BELUM DIKERJAKAN | - |
-| ALT-OTR-002 | - (lintas domain, middleware) | seluruh endpoint `/api/v1/*` | - | semua | BELUM DIKERJAKAN | - |
-| ALT-OTR-003 | - (lintas domain) | endpoint approval (refund, batal PO, dst) | - | SUPERVISOR/MANAJER | BELUM DIKERJAKAN | - |
+| ALT-PLT-007 | `KeanggotaanOutlet` (diperbarui ALT-DEF-001: menggantikan `PenggunaOutlet`, sekarang scoped ke `KeanggotaanTenant` dengan composite-FK tenant-outlet - lihat ADR-011) | `GET /api/v1/pengguna/{id}/akses-outlet` | `/pengaturan/tim` | platform.akses-outlet.kelola | BELUM DIKERJAKAN | - |
+| ALT-PLT-008 | `Peran` (diperbarui ALT-DEF-002: `permissions Json` dihapus, ditambah `isSystem`/`deskripsi`) | `GET/POST /api/v1/peran` | `/pengaturan/peran` | platform.peran.kelola | BELUM DIKERJAKAN | - |
+| ALT-PLT-009 | `Izin` (baru, ALT-DEF-002: katalog kode izin atomik, unik global) | `GET /api/v1/izin` | `/pengaturan/peran` | platform.izin.lihat | BELUM DIKERJAKAN | - |
+| ALT-PLT-010 | `PeranIzin` (baru, ALT-DEF-002: menggantikan `Peran.permissions` Json) | `PUT /api/v1/peran/{id}/izin` | `/pengaturan/peran` | platform.peran.kelola | BELUM DIKERJAKAN | - |
+| ALT-PLT-011 | `BatasIzin` (baru, ALT-DEF-002) | `PUT /api/v1/peran/{id}/batas-izin` | `/pengaturan/peran` | platform.izin.kelola | BELUM DIKERJAKAN | - |
+| ALT-PLT-012 | `PermintaanPersetujuan` (baru, ALT-DEF-002) | `POST /api/v1/persetujuan/{id}/putuskan` | `/persetujuan` | platform.persetujuan.putuskan | BELUM DIKERJAKAN | - |
 | ALT-MNU-001 | `KategoriMenu`, `ItemMenu` | `GET/POST /api/v1/kategori-menu`, `/item-menu` | `/resto/{outletSlug}/menu` | MANAJER | BELUM DIKERJAKAN | - |
 | ALT-MNU-002 | `VarianMenu` | `POST /api/v1/item-menu/{id}/varian` | `/resto/{outletSlug}/menu` | MANAJER | BELUM DIKERJAKAN | - |
 | ALT-MNU-003 | `ModifierGrup`, `ModifierOpsi`, `ItemModifierGrup` | `GET/POST /api/v1/modifier-grup` | `/resto/{outletSlug}/menu` | MANAJER | BELUM DIKERJAKAN | - |

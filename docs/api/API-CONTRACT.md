@@ -40,12 +40,19 @@ adalah rancangan kontrak, bukan API yang sudah berjalan. Lihat
 
 ## 2. Autentikasi & Sesi (`packages/autentikasi`)
 
+Status: **DIPERBARUI (ALT-DEF-001)** - `Pengguna` sekarang identitas global,
+tidak lagi membawa `tenantId` langsung. Login tidak lagi otomatis "milik satu
+tenant"; setelah autentikasi berhasil, klien harus memilih/mendapatkan
+`KeanggotaanTenant` aktif untuk melanjutkan ke konteks tenant tertentu (lihat
+`ALT-PLT-003`, endpoint `GET /api/v1/tenant-saya` di bawah).
+
 | Metode | Path | Deskripsi |
 |---|---|---|
-| POST | `/api/v1/auth/masuk` | Login email + kata sandi (staf kantor/manajer). |
-| POST | `/api/v1/auth/masuk-pin` | Login PIN cepat di perangkat kasir (kasir/pelayan). |
+| POST | `/api/v1/auth/masuk` | Login email + kata sandi (`Pengguna.passwordHash`) - mengembalikan `Sesi` global, BUKAN sesi ter-scope tenant. Response menyertakan daftar `KeanggotaanTenant` aktif milik pengguna untuk dipilih klien. |
+| GET | `/api/v1/tenant-saya` | Daftar `KeanggotaanTenant` aktif milik pengguna yang sedang login (`ALT-PLT-003`) - dipakai klien untuk memilih tenant konteks setelah login. |
+| POST | `/api/v1/auth/masuk-pin` | Login PIN cepat di perangkat kasir (kasir/pelayan) - PIN scoped ke `KeanggotaanOutlet` (lihat `ALT-DEF-013`, dibangun di batch auth berikutnya). |
 | POST | `/api/v1/auth/keluar` | Mencabut sesi aktif (`Sesi.dicabutPada`). |
-| GET | `/api/v1/auth/sesi-saya` | Info sesi & pengguna yang sedang login. |
+| GET | `/api/v1/auth/sesi-saya` | Info sesi & pengguna yang sedang login, termasuk `keanggotaanTenantAktif` bila klien sudah memilih konteks tenant. |
 | POST | `/api/v1/auth/perangkat/aktivasi` | Aktivasi perangkat KDS/kasir/printer via `kodeAktivasi`. |
 
 Contoh request `POST /api/v1/auth/masuk-pin`:
@@ -54,7 +61,12 @@ Contoh request `POST /api/v1/auth/masuk-pin`:
 { "outletId": "01J9...OUTLET", "perangkatId": "01J9...PRK", "pin": "482913" }
 ```
 
-## 3. Platform (Tenant, Outlet, Pengguna, Peran)
+## 3. Platform (Tenant, Outlet, Pengguna, KeanggotaanTenant/Outlet, Peran, Izin)
+
+Status: **DIPERBARUI (ALT-DEF-001, ALT-DEF-002)** - endpoint pengguna/peran di
+bawah sekarang beroperasi pada `KeanggotaanTenant`/`KeanggotaanOutlet` (bukan
+`Pengguna.tenantId`/`PenggunaOutlet` langsung) dan `Izin`/`PeranIzin` (bukan
+`Peran.permissions` Json).
 
 | Metode | Path | Deskripsi |
 |---|---|---|
@@ -64,12 +76,17 @@ Contoh request `POST /api/v1/auth/masuk-pin`:
 | POST | `/api/v1/outlet` | Buat outlet baru. |
 | GET | `/api/v1/outlet/{outletId}` | Detail outlet. |
 | PATCH | `/api/v1/outlet/{outletId}` | Ubah outlet (nama, status, zona waktu). |
-| GET | `/api/v1/pengguna` | Daftar pengguna (staf). |
-| POST | `/api/v1/pengguna` | Undang/buat pengguna baru. |
-| PATCH | `/api/v1/pengguna/{penggunaId}` | Ubah data pengguna / status aktif-nonaktif. |
-| POST | `/api/v1/pengguna/{penggunaId}/peran` | Tetapkan peran ke pengguna. |
-| GET | `/api/v1/peran` | Daftar peran & permission (lihat PERMISSION-MATRIX). |
-| POST | `/api/v1/peran` | Buat peran kustom. |
+| GET | `/api/v1/pengguna` | Daftar pengguna (staf) - hasil join `KeanggotaanTenant` milik tenant aktif, bukan lagi filter `Pengguna.tenantId`. |
+| POST | `/api/v1/pengguna` | Undang/buat pengguna baru - membuat/menautkan `Pengguna` global lalu membuat baris `KeanggotaanTenant` baru untuk tenant aktif. |
+| PATCH | `/api/v1/pengguna/{penggunaId}` | Ubah data pengguna / status aktif-nonaktif pada `KeanggotaanTenant` (bukan menonaktifkan identitas global `Pengguna`). |
+| POST | `/api/v1/pengguna/{penggunaId}/akses-outlet` | Tetapkan/ubah `KeanggotaanOutlet` (outlet mana yang boleh diakses) untuk `KeanggotaanTenant` pengguna tsb (`ALT-PLT-007`). |
+| POST | `/api/v1/pengguna/{penggunaId}/peran` | Tetapkan `Peran` ke `KeanggotaanTenant` pengguna (menulis baris `KeanggotaanPeran`, menggantikan `PenggunaPeran` lama). |
+| GET | `/api/v1/peran` | Daftar peran tenant beserta izin terkait (join `PeranIzin`/`Izin`, bukan lagi parsing `permissions` Json). |
+| POST | `/api/v1/peran` | Buat peran kustom (`isSystem=false`). |
+| GET | `/api/v1/izin` | Daftar katalog izin global (`Izin`) - lihat `docs/keamanan/PERMISSION-MATRIX.md`. |
+| PUT | `/api/v1/peran/{id}/izin` | Set daftar `Izin` yang dikaitkan ke `Peran` (menulis ulang baris `PeranIzin`). |
+| PUT | `/api/v1/peran/{id}/batas-izin` | Set/ubah `BatasIzin` (limit numerik) untuk `Peran`. |
+| POST | `/api/v1/persetujuan/{id}/putuskan` | Setujui/tolak `PermintaanPersetujuan` yang tertahan menunggu approval supervisor/manajer. |
 | GET | `/api/v1/perangkat` | Daftar perangkat terdaftar per outlet. |
 | GET | `/api/v1/audit-log` | Query jejak audit (filter tenant/outlet/entitas/tanggal). |
 

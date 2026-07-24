@@ -136,6 +136,109 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
   tenant/otorisasi yang benar sebelum bisa diimplementasikan dengan aman — lihat
   urutan rekomendasi di `docs/engineering/DEFECT-LEDGER.md`.
 
+## ADR-011: Pisahkan identitas pengguna global dari keanggotaan tenant/outlet (ALT-DEF-001)
+
+- **Status:** DITERIMA
+- **Konteks:** `Pengguna.tenantId` langsung di model (skema lama) mengunci satu
+  identitas pengguna ke satu tenant, mencampur konsep identitas (autentikasi)
+  dengan keanggotaan/scope (otorisasi). Ini mencegah satu pengguna menjadi
+  anggota lebih dari satu tenant (mis. konsultan yang mengelola beberapa
+  resto), memaksa duplikasi akun per tenant, dan tidak sesuai dengan
+  requirement `ALT-PLT-002`/`ALT-PLT-003`/`ALT-PLT-007` di
+  `MASTER-CHECKLIST.md` yang sudah mengasumsikan `KeanggotaanTenant`. Lihat
+  `ALT-DEF-001` di `DEFECT-LEDGER.md`.
+- **Keputusan:**
+  1. `Pengguna` menjadi identitas GLOBAL: tidak ada `tenantId`/`outletId`/peran
+     langsung di model ini lagi. `email` menjadi unik GLOBAL (bukan
+     `@@unique([tenantId, email])` seperti sebelumnya) - kebijakan produk:
+     satu alamat email selalu memetakan ke satu identitas pengguna di seluruh
+     platform, konsisten dengan pola login email+password lintas tenant.
+  2. `KeanggotaanTenant` menghubungkan `Pengguna` <-> `Tenant`
+     (`@@unique([penggunaId, tenantId])`), membawa `isOwner` dan `status`.
+     Satu `Pengguna` bisa punya banyak baris `KeanggotaanTenant` aktif.
+  3. `KeanggotaanOutlet` menggantikan `PenggunaOutlet` lama, sekarang scoped ke
+     `KeanggotaanTenant` (bukan langsung ke `Pengguna`), menjamin bahwa akses
+     outlet selalu melalui keanggotaan tenant yang valid.
+  4. **Composite-FK ganda untuk integritas tenant-outlet (CRITICAL, ALT-DEF-010
+     terkait):** `Outlet` dan `KeanggotaanTenant` masing-masing diberi
+     `@@unique([tenantId, id])` tambahan (selain `@id` biasa). `KeanggotaanOutlet`
+     membawa kolom `tenantId` yang didenormalisasi dan dua relasi composite:
+     `@relation("KeanggotaanOutletOutlet", fields: [tenantId, outletId], references: [tenantId, id])`
+     ke `Outlet`, dan
+     `@relation("KeanggotaanOutletTenantScoped", fields: [tenantId, keanggotaanTenantId], references: [tenantId, id])`
+     ke `KeanggotaanTenant`. Karena kedua relasi memakai kolom `tenantId` yang
+     SAMA, database secara struktural tidak mengizinkan `KeanggotaanOutlet`
+     mereferensikan `Outlet` dan `KeanggotaanTenant` dari tenant yang berbeda -
+     ini bukan sekadar komentar/guard aplikasi, melainkan constraint level-DB
+     nyata. **Pendekatan ini DICOBA langsung dan BERHASIL** - `prisma format` +
+     `prisma validate` lulus tanpa fallback ke scalar+guard (lihat
+     `RELEASE-EVIDENCE.md` untuk output aktual).
+  5. `Pengguna.pinHash` (PIN global lama) **dihapus**, bukan dipindahkan pada
+     pass ini. PIN-per-outlet (`ALT-DEF-013`) didesain sebagai model terpisah
+     (mis. `PinOutlet`/kolom pada `KeanggotaanOutlet`) yang akan dibangun pada
+     batch auth/session berikutnya (`ALT-DEF-003`/`ALT-DEF-013`) - tidak
+     dibangun setengah jadi di pass ini untuk menghindari model dangling.
+  6. `passwordHash` ditambahkan sebagai `String?` (nullable) pada `Pengguna` -
+     nullable karena data seed/existing mungkin belum punya kredensial
+     password; begitu alur auth email+password (`ALT-DEF-003`) dibangun,
+     field ini semestinya menjadi wajib untuk pengguna yang aktif login.
+  7. Field aktor (`*_by`/`dibuatOlehId`, `disetujuiOlehId`, dst. — mis.
+     `GiliranKasir.penggunaId`, `PurchaseOrder.dibuatOlehId`,
+     `Pesanan.dibuatOlehId`, `AuditLog.penggunaId`, dst.) TETAP menunjuk
+     langsung ke `Pengguna.id` (bukan diubah ke `KeanggotaanTenant.id`) -
+     identitas global tetap valid untuk mencatat "siapa melakukan aksi ini"
+     karena `Pengguna.id` stabil dan unik secara global; mengaitkannya ke
+     `KeanggotaanTenant` tidak menambah informasi yang relevan untuk kolom
+     audit ini.
+- **Konsekuensi:** Model registrasi/login harus resolve `KeanggotaanTenant`
+  aktif pengguna setelah autentikasi (bukan langsung baca `tenantId` dari
+  `Pengguna`) - `docs/api/API-CONTRACT.md` diperbarui untuk mencerminkan ini.
+  Data existing (belum ada karena belum ada implementasi kode/migrasi nyata -
+  lihat `ALT-DEF-029`) akan perlu skrip migrasi data `Pengguna.tenantId` ->
+  baris `KeanggotaanTenant` begitu ada database nyata untuk dimigrasikan.
+
+## ADR-012: Normalisasi Peran/Izin menggantikan `Peran.permissions` Json (ALT-DEF-002)
+
+- **Status:** DITERIMA
+- **Konteks:** `Peran.permissions Json` tidak memiliki referential integrity -
+  kode permission bisa typo tanpa error database, sulit diquery/diaudit, dan
+  tidak mendukung batas izin numerik (`ALT-PLT-011`) maupun alur approval
+  (`ALT-PLT-012`). Lihat `ALT-DEF-002` di `DEFECT-LEDGER.md`.
+- **Keputusan:**
+  1. `Izin` - katalog kode izin atomik, **GLOBAL** (bukan per-tenant) dengan
+     `@@unique([kode])`; `domain` dipilih sebagai `String` bebas (bukan enum)
+     karena daftar domain produk masih bisa bertambah tanpa migrasi skema
+     setiap kali ada domain baru.
+  2. `Peran` tetap tenant-scoped (`@@unique([tenantId, kode])`), field
+     `permissions Json` dihapus, ditambah `isSystem Boolean` untuk membedakan
+     peran bawaan (di-seed otomatis, mis. OWNER/KASIR/DAPUR) dari peran
+     kustom buatan tenant.
+  3. `PeranIzin` - tabel penghubung many-to-many `Peran` <-> `Izin`
+     (`@@unique([peranId, izinId])`) - permission sekarang divalidasi lewat FK
+     dan diquery lewat join, bukan parsing Json.
+  4. `KeanggotaanPeran` menggantikan `PenggunaPeran` lama - penetapan peran
+     sekarang per `KeanggotaanTenant` (bukan per `Pengguna` global), sehingga
+     satu pengguna secara benar bisa memiliki peran berbeda di tenant berbeda.
+  5. `BatasIzin` - limit numerik per `Peran` (1:1, `@@unique` pada `peranId`)
+     untuk `maksimumDiskonPersen`/`maksimumDiskonNominal`/`maksimumRefund`/
+     `maksimumPenyesuaianStok`/`wajibPinSupervisor`/`wajibPersetujuanManajer`.
+  6. `IzinSementara` - pemberian izin darurat/sementara per `KeanggotaanTenant`
+     dengan jangka waktu (`berlakuSejak`/`berlakuSampai`) dan alasan.
+  7. `PermintaanPersetujuan` - rekaman generik permintaan approval supervisor
+     (dipicu saat `BatasIzin.wajibPersetujuanManajer`/`wajibPinSupervisor`
+     terlampaui), dengan `jenisAksi`/`referensiJenis`/`referensiId` sebagai
+     String bebas agar domain lain (kasir/persediaan/pesanan) bisa menambah
+     jenis aksi baru tanpa migrasi skema di package otorisasi.
+  8. Seed starter kode `Izin` (32 kode, mengikuti
+     `docs/keamanan/PERMISSION-MATRIX.md`) ditulis di
+     `prisma/seed/izin.seed.ts` sebagai referensi struktural (tidak dijalankan
+     terhadap database nyata pada pass ini - lihat `ALT-DEF-029`).
+- **Konsekuensi:** `docs/keamanan/PERMISSION-MATRIX.md` diperbarui untuk
+  mencerminkan mapping Peran x Izin ternormalisasi (bukan lagi menyiratkan
+  blob Json). Endpoint role/permission (`/api/v1/peran`,
+  `/api/v1/peran/{id}/izin`, `/api/v1/peran/{id}/batas-izin`,
+  `/api/v1/persetujuan/{id}/putuskan`) diperbarui di `API-CONTRACT.md`.
+
 ## Status ringkas
 
 Semua ADR di atas berstatus **DITERIMA sebagai keputusan desain**, tetapi
