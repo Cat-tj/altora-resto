@@ -638,6 +638,213 @@ nyata, publisher event domain nyata, maupun model `PesananRetur`
 (`ALT-PES-018`, scope batch berikutnya) - karena itu status `ALT-DEF-005` dan
 `ALT-DEF-016` adalah `SIAP_DIVERIFIKASI`, BUKAN `DITUTUP`.
 
+## Pass correction-loop 2026-07-25 (lanjutan): perbaikan ALT-DEF-006
+
+Batch ini menghapus `TiketDapur.pesananId @unique` (yang memaksa kardinalitas
+1:1 `Pesanan`<->`TiketDapur`), menggantinya dengan
+`@@unique([pesananId, stasiunDapurId, nomorGelombang])`, memperluas
+`StatusTiketDapur` dari 4 ke 8 nilai, dan menambah tiga model baru
+(`AturanRoutingDapur`, `RiwayatStatusTiketDapur`, `GelombangDapur`). Lihat
+ADR-018 di `docs/engineering/DECISION-LOG.md` untuk rasional desain lengkap.
+
+### 1. `prisma format` + `prisma validate`
+
+```
+$ npx prisma format --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 69ms 🚀
+
+$ npx prisma validate --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+Error: Prisma schema validation - (get-config wasm)
+Error code: P1012
+error: Environment variable not found: DATABASE_URL.
+  -->  prisma/schema/schema.prisma:22
+   |
+21 |   provider = "postgresql"
+22 |   url      = env("DATABASE_URL")
+   |
+
+Validation Error Count: 1
+[Context: getConfig]
+
+Prisma CLI Version : 5.20.0
+
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/dummy" npx prisma validate --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+```
+
+Kegagalan pertama di atas sengaja dicatat apa adanya: itu **bukan** error
+skema melainkan `DATABASE_URL` yang belum di-set di shell - dicantumkan agar
+jelas bahwa perintah ini benar-benar dijalankan (bukan output yang
+diasumsikan), dan agar pembaca berikutnya tahu bahwa `validate` di repo ini
+memerlukan env var dummy sekalipun tidak ada database nyata.
+
+### 2. `prisma generate`
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/dummy" npx prisma generate --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 672ms
+```
+
+### 3. `tsc --noEmit --strict`
+
+```
+$ cd packages/test-support && npx tsc --noEmit --strict; echo "TSC_EXIT=$?"
+TSC_EXIT=0
+```
+
+Satu iterasi awal GAGAL dengan tiga error `TS2345: Argument of type
+'string | undefined' is not assignable to parameter of type 'string'` pada
+`dapur-kds-multi-stasiun.test.ts` (hasil `matchAll(...).map((m) => m[1])`
+bertipe `string | undefined` di bawah `noUncheckedIndexedAccess`) - diperbaiki
+dengan filter type-guard eksplisit (bukan non-null assertion) sebelum re-run
+di atas. Dicatat sebagai bukti bahwa `--strict` benar-benar dijalankan
+terhadap file baru, bukan diasumsikan lulus.
+
+### 4. Test arsitektur: 10 file -> 12 file, 12/12 lulus, TANPA regresi
+
+Runner: `node --experimental-strip-types` (Node v25.5.0) - vitest masih
+DIBLOKIR di environment ini, sama seperti batch-batch sebelumnya
+(`ALT-DEF-027`).
+
+**Sebelum batch ini:** 10 file test arsitektur.
+**Sesudah batch ini:** 12 file (2 file baru).
+
+```
+$ for f in packages/test-support/src/architecture/*.test.ts; do node --experimental-strip-types "$f"; done
+
+PASS  dapur-kds-multi-stasiun.test.ts                       (BARU)
+PASS  idempotency-outbox-notification-constraints.test.ts
+PASS  keanggotaan-outlet-constraints.test.ts
+PASS  pesanan-state-machine-snapshot-constraints.test.ts
+PASS  prisma-client-shape-auth-pin.test.ts
+PASS  prisma-client-shape-dapur.test.ts                     (BARU)
+PASS  prisma-client-shape-pesanan.test.ts
+PASS  prisma-client-shape-platform-infra.test.ts
+PASS  prisma-client-shape-tenant-outlet.test.ts
+PASS  prisma-client-shape.test.ts
+PASS  sesi-auth-pin-constraints.test.ts
+PASS  tenant-outlet-composite-constraints.test.ts
+---
+TOTAL=12  PASS=12  FAIL=0
+```
+
+### 5. Dua kegagalan regresi NYATA yang ditemukan dan ditangani
+
+Batch ini mengubah kardinalitas `Pesanan`<->`TiketDapur`, jadi baseline
+dijalankan lebih dulu terhadap 10 test lama. **Dua di antaranya GAGAL** - dan
+keduanya punya sebab yang BERBEDA secara mendasar, jadi ditangani berbeda:
+
+**(a) `pesanan-state-machine-snapshot-constraints.test.ts` - kegagalan yang
+BENAR dan diharapkan.**
+
+```
+Error: ASSERTION GAGAL: TiketDapur.pesananId harus TETAP @unique pada batch ini -
+mengubah kardinalitas 1:1 adalah scope ALT-DEF-006 (batch berikutnya), BUKAN
+batch ALT-DEF-005/ALT-DEF-016 ini.
+Tidak ditemukan: "pesananId         String           @unique"
+```
+
+Assertion ini adalah **scope-guard yang sengaja ditulis pada batch
+sebelumnya** untuk memastikan perubahan kardinalitas tidak bocor lebih awal.
+Batch ALT-DEF-006 inilah yang memang ditugaskan mengerjakannya, sehingga
+guard tersebut sudah selesai tugasnya dan DIBALIK menjadi assertion arah-baru
+(`assertNotContains` untuk `@unique` lama + `assertContains` untuk constraint
+komposit + `Pesanan.tiketDapur TiketDapur[]`). Ini bukan "mematikan test yang
+mengganggu" - assertion tetap ada, arahnya saja yang dibalik sesuai desain
+baru yang sudah di-ADR-kan.
+
+**(b) `tenant-outlet-composite-constraints.test.ts` - kegagalan PALSU
+(false positive), dicatat sebagai defect baru `ALT-DEF-033`.**
+
+```
+Error: ASSERTION GAGAL: TiketDapur.outlet harus berupa composite FK (tenantId, outletId) -> Outlet(tenantId, id).
+Tidak ditemukan: "outlet       Outlet            @relation(fields: [tenantId, outletId], references: [tenantId, id])"
+```
+
+Constraint ALT-DEF-010 yang diuji sebenarnya **utuh sepenuhnya**. Yang berubah
+hanya JUMLAH SPASI: menambah field `nomorGelombang` dan relasi baru ke model
+`TiketDapur` membuat `prisma format` menyelaraskan ulang lebar kolom seluruh
+model, menggeser spasi pada baris-baris yang tidak disentuh sama sekali.
+Verifikasi manual atas skema hasil format:
+
+```
+$ awk '/^model TiketDapur \{/,/^\}/' prisma/schema/schema.prisma | grep outlet
+  outletId          String
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet        Outlet                    @relation(fields: [tenantId, outletId], references: [tenantId, id])
+```
+
+Pencocokan needle diperbaiki agar menormalisasi runs spasi/tab horizontal di
+kedua sisi (newline TIDAK dinormalisasi, supaya needle yang memakai `\n`
+sebagai penanda awal deklarasi field tetap bermakna). Normalisasi ini murni
+lebih permisif - seluruh assertion yang sebelumnya lulus tetap lulus. Akar
+masalah (assertion whitespace-exact di SELURUH file test arsitektur, bukan
+hanya yang gagal kali ini) dicatat sebagai `ALT-DEF-033`.
+
+### 6. Bukti bahwa test baru TIDAK vacuous (mutation testing)
+
+Test yang selalu lulus tidak membuktikan apa-apa. Dua mutasi sengaja
+disuntikkan ke skema/test lalu dikembalikan, untuk membuktikan assertion
+benar-benar hidup:
+
+**Mutasi 1 - kembalikan `@unique` lama ke `TiketDapur.pesananId`:**
+
+```
+$ perl -0pi -e 's/(model TiketDapur \{[\s\S]*?)pesananId         String\n/$1pesananId         String           \@unique\n/' prisma/schema/schema.prisma
+$ node --experimental-strip-types packages/test-support/src/architecture/dapur-kds-multi-stasiun.test.ts
+
+Error: ASSERTION GAGAL: TiketDapur.pesananId TIDAK boleh lagi punya @unique tunggal -
+inilah constraint yang memaksa kardinalitas 1:1 dan menjadi inti defect ALT-DEF-006
+(ADR-018 Keputusan 1).
+```
+
+(skema dikembalikan; test lulus lagi)
+
+**Mutasi 2 - beri `TiketDapurBaris.statusMasak` nilai milik enum tiket
+(`DITAHAN`), untuk membuktikan kedua enum sungguh terpisah (ADR-018
+Keputusan 6):**
+
+```
+$ sed -i '' 's/  statusMasak: "DIMASAK",/  statusMasak: "DITAHAN",/' src/architecture/prisma-client-shape-dapur.test.ts
+$ npx tsc --noEmit --strict
+
+src/architecture/prisma-client-shape-dapur.test.ts(155,3): error TS2322:
+Type '"DITAHAN"' is not assignable to type 'StatusMasakBaris'.
+```
+
+(file dikembalikan; `TSC_EXIT=0` lagi)
+
+### 7. Migrasi Postgres nyata
+
+Tidak dijalankan - sama seperti seluruh batch sebelumnya, tidak ada Postgres
+di environment ini (`ALT-DEF-029`). Perlu dicatat bahwa perubahan batch ini
+akan membutuhkan migrasi yang **tidak trivial** saat database nyata ada:
+menghapus unique index pada `tiket_dapur.pesananId`, menambah kolom
+`nomorGelombang` dengan backfill `1`, membuat unique index komposit baru, dan
+memetakan ulang nilai enum lama (`MASUK_ANTRIAN` -> `BARU`, `DIPROSES` ->
+`SEDANG_DISIAPKAN`, `DIAMBIL_PELAYAN` -> `DISAJIKAN`) - ditambah CHECK
+constraint XOR untuk `AturanRoutingDapur` yang sengaja ditunda (ADR-018
+Keputusan 4).
+
+### Kesimpulan status
+
+Schema untuk ALT-DEF-006 sudah benar secara sintaks (`format`+`validate`),
+tipe yang dihasilkan sudah benar secara bentuk (`generate` +
+`tsc --noEmit --strict`), seluruh model/field/enum yang diklaim di ADR-018
+sudah dibuktikan ada lewat test struktur nyata yang terbukti non-vacuous, dan
+tidak ada regresi pada KESELURUHAN 10 test arsitektur sebelumnya (dua
+kegagalan yang muncul sudah dianalisis dan ditangani di bagian 5, bukan
+didiamkan). **Belum ada** migrasi nyata ke Postgres, handler/endpoint
+pembuatan tiket nyata yang membaca `AturanRoutingDapur`, middleware guard
+transisi status `TiketDapur` nyata, maupun CHECK constraint SQL untuk
+invariant XOR - karena itu status `ALT-DEF-006` adalah `SIAP_DIVERIFIKASI`,
+BUKAN `DITUTUP`.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```

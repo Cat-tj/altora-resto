@@ -786,9 +786,133 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
   correction-loop sebelumnya. Status `ALT-DEF-005` dan `ALT-DEF-016` diset
   `SIAP_DIVERIFIKASI` (bukan `DITUTUP`) karena alasan yang sama.
 
+## ADR-018: KDS multi-stasiun - kardinalitas TiketDapur, gelombang, dan routing (ALT-DEF-006)
+
+- **Status:** DITERIMA
+- **Konteks:** `ALT-DEF-006` mencatat `TiketDapur.pesananId @unique` memaksa
+  kardinalitas 1:1 antara `Pesanan` dan `TiketDapur`, sehingga satu pesanan
+  tidak bisa dibagi ke lebih dari satu stasiun dapur (Bar/Dapur/Grill/
+  Dessert) sekaligus - routing item dapur (`ALT-DPR-002`) dan banyak tiket
+  per pesanan (`ALT-DPR-003`/`ALT-DPR-004`) tidak mungkin diimplementasikan.
+  ADR-017 (batch sebelumnya) secara eksplisit menunda perubahan ini sebagai
+  scope batch berikutnya - batch inilah yang mengerjakannya. **Cakupan yang
+  SENGAJA TIDAK disentuh:** payment/promo/inventory/resep/membership/HR;
+  handler/endpoint pembuatan tiket nyata (yang MEMBACA `AturanRoutingDapur`
+  untuk memutuskan stasiun tujuan tiap baris saat pesanan dikonfirmasi) -
+  itu feature work terpisah, batch ini hanya memodelkan tabel aturan.
+- **Keputusan 1 - Ganti `TiketDapur.pesananId @unique` (1:1) dengan
+  `@@unique([pesananId, stasiunDapurId, nomorGelombang])` (komposit).**
+  Alternatif yang dipertimbangkan: (a) tetap 1:1 tapi tambahkan
+  `TiketDapurBaris.stasiunDapurId` per baris (routing di level baris, tiket
+  tetap satu per pesanan); (b) hapus `@unique` sepenuhnya tanpa constraint
+  pengganti (bebas berapa pun tiket per pesanan per stasiun). **Dipilih**
+  constraint komposit `[pesananId, stasiunDapurId, nomorGelombang]` sesuai
+  spesifikasi koreksi eksplisit, karena ini adalah titik tengah yang benar:
+  tetap menjamin "SATU tiket per stasiun per gelombang" (mencegah duplikasi
+  tiket yang tidak sengaja untuk kombinasi yang sama), sambil mengizinkan
+  banyak tiket lintas stasiun DAN lintas gelombang untuk satu pesanan.
+  Opsi (a) ditolak karena kehilangan properti "satu tiket = satu antrian
+  kerja di satu layar KDS stasiun" yang menjadi dasar seluruh `ALT-DPR-*`
+  (timer/prioritas/hold per tiket, `ALT-DPR-005`-`ALT-DPR-007`, akan jadi
+  ambigu jika satu tiket berisi baris dari lebih dari satu stasiun).
+  Relasi `Pesanan.tiketDapur` berubah dari `TiketDapur?` menjadi
+  `TiketDapur[]`; `@@unique([tenantId, pesananId])` lama di `TiketDapur`
+  DIHAPUS (itu hanya ada untuk memenuhi syarat relasi one-to-one yang tidak
+  lagi berlaku - composite-FK `(tenantId, pesananId) -> Pesanan(tenantId,
+  id)` tetap valid sebagai relasi many-to-one biasa tanpa constraint unik
+  tambahan di sisi `TiketDapur`).
+- **Keputusan 2 - `TiketDapurBaris.itemPesananId` TETAP `@unique`.**
+  Dipertimbangkan apakah `GelombangDapur` (banyak gelombang per pesanan,
+  mis. re-fire course kedua) berarti satu `ItemPesanan` yang sama perlu
+  muncul di lebih dari satu baris tiket. **Diputuskan TIDAK** - granularitas
+  "banyak gelombang" dimodelkan sebagai banyak `TiketDapur` (satu per
+  gelombang, dibedakan oleh `nomorGelombang` dalam constraint komposit di
+  Keputusan 1), masing-masing dengan barisnya sendiri. Jika kelak
+  re-fire/repeat-course membutuhkan `ItemPesanan` yang sama dikirim ulang,
+  itu akan menjadi baris BARU di `TiketDapurBaris` milik `TiketDapur`
+  gelombang-berikutnya yang BERBEDA - bukan baris kedua di tiket gelombang
+  yang sama. Selama satu `ItemPesanan` tidak pernah dikirim dua kali ke
+  TIKET YANG SAMA, `@unique` tetap benar dan berguna sebagai jaring pengaman
+  terhadap bug pengiriman-dobel-ke-tiket-sama. Didokumentasikan sebagai
+  keputusan eksplisit, bukan default yang tidak diperiksa.
+- **Keputusan 3 - `GelombangDapur` diimplementasikan sebagai model NYATA
+  (bukan hanya field `TiketDapur.nomorGelombang`).** Spesifikasi koreksi
+  section 12 menyebut `GelombangDapur` sebagai model bernama eksplisit di
+  samping `AturanRoutingDapur`/`RiwayatStatusTiketDapur`. Dipertimbangkan
+  untuk MELEWATI model ini (field `nomorGelombang` polos di `TiketDapur`
+  sudah cukup untuk sekadar membedakan gelombang dalam constraint komposit)
+  - tapi ada metadata level-gelombang NYATA yang tidak dimiliki satu
+  `TiketDapur` individual: kapan gelombang secara eksplisit "dipicu" oleh
+  staf (`dipicuPada`/`dipicuOlehId` - mis. pelayan menekan "kirim course
+  kedua sekarang" setelah tamu selesai course pertama), dan status AGREGAT
+  gelombang (`MENUNGGU`/`DIPICU`/`SELESAI`) yang mencakup SEMUA `TiketDapur`
+  lintas stasiun dalam gelombang tsb sekaligus - satu gelombang bisa berisi
+  tiket di Dapur DAN Bar secara bersamaan, dan "gelombang ini sudah selesai"
+  adalah pertanyaan agregat lintas-tiket yang tidak punya rumah natural di
+  `TiketDapur` per-baris. **Dipilih mengimplementasikan model nyata** dengan
+  `@@unique([pesananId, nomorGelombang])` (satu baris gelombang per nomor
+  gelombang per pesanan), composite-FK `(tenantId, pesananId) ->
+  Pesanan(tenantId, id)` mengikuti pola ADR-013. Relasi
+  `TiketDapur.nomorGelombang` TIDAK dibuat sebagai FK relasional ke
+  `GelombangDapur` (tetap `Int` polos) karena `GelombangDapur` bersifat
+  opsional secara bisnis (gelombang tunggal/default tidak wajib punya baris
+  eksplisit di sini - hanya dibuat saat ada pemicuan bertahap sungguhan);
+  memaksa FK wajib akan mengharuskan setiap tiket gelombang-1 default juga
+  menulis baris `GelombangDapur` yang sebagian besar waktu tidak membawa
+  informasi tambahan apa pun.
+- **Keputusan 4 - `AturanRoutingDapur.itemMenuId`/`kategoriMenuId` sebagai
+  invariant XOR level-APLIKASI, bukan constraint database.** Prisma/SQL
+  murni tidak punya cara deklaratif untuk memaksa "tepat satu dari dua kolom
+  nullable harus diisi" tanpa CHECK constraint raw SQL (di luar kemampuan
+  schema.prisma pada versi Prisma yang dipakai project ini) - opsi yang
+  dipertimbangkan adalah menambahkan migrasi SQL manual dengan `CHECK
+  ((itemMenuId IS NOT NULL)::int + (kategoriMenuId IS NOT NULL)::int = 1)`,
+  tetapi ini ditunda karena batch ini adalah batch schema-Prisma-murni
+  (tidak ada migrasi Postgres nyata yang dijalankan sama sekali pada
+  environment ini, lihat `ALT-DEF-029`) - menulis SQL migrasi manual untuk
+  satu constraint sebelum ada migrasi lain yang benar-benar berjalan akan
+  mendahului keputusan migrasi lain yang lebih besar. **Didokumentasikan
+  eksplisit sebagai invariant WAJIB di komentar model** dan wajib
+  divalidasi di service-layer sebelum insert/update; TODO eksplisit untuk
+  menambahkan CHECK constraint SQL begitu migrasi Postgres nyata mulai
+  dijalankan.
+- **Keputusan 5 - `StatusTiketDapur` diperluas dari 4 menjadi 8 nilai
+  (`BARU`/`DITERIMA`/`DITAHAN`/`SEDANG_DISIAPKAN`/`SELESAI_SEBAGIAN`/`SIAP`/
+  `DISAJIKAN`/`DIBATALKAN`), menggantikan `MASUK_ANTRIAN`/`DIPROSES`/`SIAP`/
+  `DIAMBIL_PELAYAN` lama.** Nilai lama tidak cukup granular untuk
+  membedakan "tiket sudah diterima staf dapur tapi belum mulai dimasak"
+  (`DITERIMA`) dari "sedang dimasak" (`SEDANG_DISIAPKAN`), tidak punya jalur
+  untuk menahan tiket sementara (`DITAHAN`, `ALT-DPR-007`) atau
+  membatalkan tiket individual (`DIBATALKAN`, mis. item habis setelah
+  tiket dibuat), dan tidak membedakan "sebagian baris selesai, sisanya
+  masih diproses" (`SELESAI_SEBAGIAN`, `ALT-DPR-008`) dari "seluruh baris
+  selesai" (`SIAP`). Nama `DIAMBIL_PELAYAN` lama diganti `DISAJIKAN` agar
+  konsisten dengan istilah yang sama persis dipakai `StatusPesanan`
+  (ADR-017) dan `StatusItemPesanan`. Tabel transisi lengkap ada di
+  `docs/arsitektur/STATE-MACHINES.md` bagian "Dapur (Tiket Dapur)".
+- **Keputusan 6 - `StatusMasakBaris` (`MENUNGGU`/`DIMASAK`/`SIAP`) TETAP
+  terpisah dari `StatusTiketDapur`, TIDAK digabung.** `StatusMasakBaris`
+  adalah status PER BARIS ITEM (granularitas lebih halus), sedangkan
+  `StatusTiketDapur` adalah status AGREGAT tiket (mencakup nilai seperti
+  `DITAHAN`/`DIBATALKAN`/`DISAJIKAN` yang tidak relevan pada level satu
+  baris item tunggal - baris item tidak "disajikan" atau "ditahan" sendiri,
+  hanya tiketnya). Menggabungkan keduanya akan memaksa nilai enum yang
+  tidak masuk akal di salah satu level. Guard `SEDANG_DISIAPKAN -> SIAP`
+  (tiket) secara eksplisit bergantung pada "SELURUH `TiketDapurBaris`
+  berstatus `SIAP`" - dua enum yang berbeda namun berelasi, bukan satu enum
+  yang sama.
+- **Cakupan yang SENGAJA TIDAK dikerjakan di batch ini:** handler/endpoint
+  pembuatan `TiketDapur` nyata yang membaca `AturanRoutingDapur` saat
+  `Pesanan` dikonfirmasi, middleware guard transisi status `TiketDapur`
+  nyata, CHECK constraint SQL untuk invariant XOR (Keputusan 4), migrasi
+  Postgres nyata (`ALT-DEF-029`), izin baru selain `dapur.routing.kelola`
+  (lihat catatan cakupan di `PERMISSION-MATRIX.md`/`izin.seed.ts`). Status
+  `ALT-DEF-006` diset `SIAP_DIVERIFIKASI` (bukan `DITUTUP`) karena alasan
+  yang sama seperti batch-batch sebelumnya.
+
 ## Status ringkas
 
 Semua ADR di atas berstatus **DITERIMA sebagai keputusan desain**, tetapi
 implementasinya di kode berstatus **BELUM DIKERJAKAN** kecuali skema Prisma awal
 (ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015, ADR-016,
-ADR-017 sudah tercermin di `prisma/schema/schema.prisma`).
+ADR-017, ADR-018 sudah tercermin di `prisma/schema/schema.prisma`).
