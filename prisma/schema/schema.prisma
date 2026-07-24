@@ -127,7 +127,7 @@ model Outlet {
   perangkat               Perangkat[]
   pengaturanOutlet        PengaturanOutlet[]
   kategoriMenu            KategoriMenu[]
-  hargaItemOutlet         HargaItemOutlet[]
+  hargaItemOutlet         HargaItemOutlet[]         @relation("HargaItemOutletOutlet")
   gudang                  Gudang[]
   purchaseOrder           PurchaseOrder[]
   areaMeja                AreaMeja[]
@@ -434,6 +434,9 @@ model PermintaanPersetujuan {
   @@map("permintaan_persetujuan")
 }
 
+// ALT-DEF-010: outlet di-relasi lewat composite-FK (tenantId, outletId) ->
+// Outlet(tenantId, id) - menjamin tenantId Perangkat selalu sama dengan
+// tenantId Outlet-nya di level database (lihat DECISION-LOG.md ADR-013).
 model Perangkat {
   id           String          @id
   tenantId     String
@@ -443,7 +446,7 @@ model Perangkat {
   status       StatusPerangkat @default(AKTIF)
   lastSeenAt   DateTime?
 
-  outlet Outlet @relation(fields: [outletId], references: [id])
+  outlet Outlet @relation(fields: [tenantId, outletId], references: [tenantId, id])
   sesi   Sesi[]
 
   @@map("perangkat")
@@ -493,6 +496,15 @@ model PengaturanTenant {
   @@map("pengaturan_tenant")
 }
 
+// ALT-DEF-010: DIJUDGE AMAN TANPA composite-FK. PengaturanOutlet tidak
+// membawa tenantId dan sengaja TIDAK ditambahkan satu di sini - model ini
+// hanya punya SATU relasi (outletId -> Outlet) tanpa referensi tenant-owned
+// lain yang bisa saling menyimpang (tidak seperti KeanggotaanOutlet yang
+// punya DUA jalur independen yang harus dijamin konsisten). FK tunggal ke
+// Outlet.id sudah sepenuhnya men-scope baris ini ke satu outlet; menambah
+// kolom tenantId di sini hanya akan menduplikasi Outlet.tenantId tanpa
+// menambah jaminan keamanan nyata. Lihat DECISION-LOG.md ADR-013.
+
 model PengaturanOutlet {
   id       String @id
   outletId String
@@ -520,6 +532,10 @@ enum StatusItemMenu {
   HABIS
 }
 
+// ALT-DEF-010: outletId nullable (kategori berlaku lintas-outlet bila null),
+// tetapi ketika diisi HARUS memakai composite-FK (tenantId, outletId) ->
+// Outlet(tenantId, id). @@unique([tenantId, id]) ditambahkan agar ItemMenu
+// bisa memakai composite FK menuju KategoriMenu (lihat ItemMenu di bawah).
 model KategoriMenu {
   id       String              @id
   tenantId String
@@ -528,9 +544,10 @@ model KategoriMenu {
   urutan   Int                 @default(0)
   status   StatusAktifNonaktif @default(AKTIF)
 
-  outlet   Outlet?    @relation(fields: [outletId], references: [id])
+  outlet   Outlet?    @relation(fields: [tenantId, outletId], references: [tenantId, id])
   itemMenu ItemMenu[]
 
+  @@unique([tenantId, id])
   @@map("kategori_menu")
 }
 
@@ -546,14 +563,17 @@ model ItemMenu {
   createdAt       DateTime       @default(now())
 
   tenant                Tenant                  @relation(fields: [tenantId], references: [id])
-  kategori              KategoriMenu            @relation(fields: [kategoriId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, kategoriId) -> KategoriMenu(tenantId, id)
+  // agar kategori yang dirujuk dijamin milik tenant yang sama dengan ItemMenu.
+  kategori              KategoriMenu            @relation(fields: [tenantId, kategoriId], references: [tenantId, id])
   varian                VarianMenu[]
   modifierGrup          ItemModifierGrup[]
-  hargaOutlet           HargaItemOutlet[]
+  hargaOutlet           HargaItemOutlet[]       @relation("HargaItemOutletItemMenu")
   resep                 Resep?
   itemPesanan           ItemPesanan[]
   rmPenjualanItemHarian RmPenjualanItemHarian[]
 
+  @@unique([tenantId, id])
   @@map("item_menu")
 }
 
@@ -611,15 +631,20 @@ model ModifierOpsi {
   @@map("modifier_opsi")
 }
 
+// ALT-DEF-010: sebelumnya tidak punya tenantId sama sekali (gap ditemukan
+// saat audit) - ditambahkan di sini beserta DUA composite-FK (pola sama
+// seperti KeanggotaanOutlet/ADR-011) agar itemMenuId DAN outletId yang
+// dirujuk dijamin sama-sama milik tenant yang sama dengan baris ini.
 model HargaItemOutlet {
   id           String   @id
+  tenantId     String
   itemMenuId   String
   outletId     String
   harga        Int
   berlakuSejak DateTime @default(now())
 
-  itemMenu ItemMenu @relation(fields: [itemMenuId], references: [id])
-  outlet   Outlet   @relation(fields: [outletId], references: [id])
+  itemMenu ItemMenu @relation("HargaItemOutletItemMenu", fields: [tenantId, itemMenuId], references: [tenantId, id])
+  outlet   Outlet   @relation("HargaItemOutletOutlet", fields: [tenantId, outletId], references: [tenantId, id])
 
   @@map("harga_item_outlet")
 }
@@ -640,7 +665,7 @@ model Bahan {
   tenant          Tenant                  @relation(fields: [tenantId], references: [id])
   satuanDasar     Satuan                  @relation(fields: [satuanDasarId], references: [id])
   resepBahan      ResepBahan[]
-  stokBahan       StokBahan[]
+  stokBahan       StokBahan[]             @relation("StokBahanBahan")
   poBaris         PurchaseOrderBaris[]
   penerimaanBaris PenerimaanBarangBaris[]
   mutasiStok      MutasiStok[]
@@ -648,6 +673,9 @@ model Bahan {
   rmStokKritis    RmStokKritis[]
 
   @@unique([tenantId, kodeSku])
+  // ALT-DEF-010: agar StokBahan/MutasiStok/RmStokKritis bisa memakai
+  // composite-FK (tenantId, bahanId) -> Bahan(tenantId, id).
+  @@unique([tenantId, id])
   @@map("bahan")
 }
 
@@ -725,6 +753,10 @@ enum StatusStokOpname {
   DIBATALKAN
 }
 
+// ALT-DEF-010: outlet direlasi lewat composite-FK (tenantId, outletId) ->
+// Outlet(tenantId, id). @@unique([tenantId, id]) ditambahkan agar
+// StokBahan/MutasiStok/StokOpname/PenerimaanBarang bisa memakai composite FK
+// menuju Gudang.
 model Gudang {
   id       String              @id
   tenantId String
@@ -732,23 +764,30 @@ model Gudang {
   nama     String
   status   StatusAktifNonaktif @default(AKTIF)
 
-  outlet           Outlet             @relation(fields: [outletId], references: [id])
-  stokBahan        StokBahan[]
+  outlet           Outlet             @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  stokBahan        StokBahan[]        @relation("StokBahanGudang")
   stokOpname       StokOpname[]
-  penerimaanBarang PenerimaanBarang[]
+  penerimaanBarang PenerimaanBarang[] @relation("PenerimaanBarangGudang")
+  MutasiStok       MutasiStok[]
 
+  @@unique([tenantId, id])
   @@map("gudang")
 }
 
+// ALT-DEF-010: sebelumnya tidak punya tenantId sama sekali (gap ditemukan
+// saat audit) - Gudang dan Bahan bisa secara teori dimiliki tenant berbeda
+// tanpa jaminan apa pun. Ditambahkan tenantId denormalisasi + DUA
+// composite-FK (pola sama seperti KeanggotaanOutlet/ADR-011).
 model StokBahan {
   id        String   @id
+  tenantId  String
   gudangId  String
   bahanId   String
   kuantitas Decimal  @default(0)
   updatedAt DateTime @updatedAt
 
-  gudang Gudang @relation(fields: [gudangId], references: [id])
-  bahan  Bahan  @relation(fields: [bahanId], references: [id])
+  gudang Gudang @relation("StokBahanGudang", fields: [tenantId, gudangId], references: [tenantId, id])
+  bahan  Bahan  @relation("StokBahanBahan", fields: [tenantId, bahanId], references: [tenantId, id])
 
   @@unique([gudangId, bahanId])
   @@map("stok_bahan")
@@ -769,8 +808,14 @@ model MutasiStok {
   createdAt      DateTime             @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
-  outlet Outlet @relation(fields: [outletId], references: [id])
-  bahan  Bahan  @relation(fields: [bahanId], references: [id])
+  // ALT-DEF-010: outlet lewat composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet Outlet @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: sebelumnya gudangId ada sebagai kolom scalar TANPA relasi FK
+  // sama sekali (gap ditemukan saat audit) - ditambahkan di sini sebagai
+  // composite-FK (tenantId, gudangId) -> Gudang(tenantId, id).
+  gudang Gudang @relation(fields: [tenantId, gudangId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, bahanId) -> Bahan(tenantId, id).
+  bahan  Bahan  @relation(fields: [tenantId, bahanId], references: [tenantId, id])
 
   dibalikOleh  MutasiStok? @relation("MutasiPembalik", fields: [dibalikOlehId], references: [id])
   pembalikDari MutasiStok? @relation("MutasiPembalik")
@@ -778,6 +823,9 @@ model MutasiStok {
   @@map("mutasi_stok")
 }
 
+// ALT-DEF-010: gudang direlasi lewat composite-FK (tenantId, gudangId) ->
+// Gudang(tenantId, id) - StokOpname tidak punya outletId langsung, jadi
+// tenantId adalah kolom bersama yang tersedia untuk komposit ini.
 model StokOpname {
   id               String           @id
   tenantId         String
@@ -788,7 +836,7 @@ model StokOpname {
   dibuatOlehId     String
 
   tenant     Tenant            @relation(fields: [tenantId], references: [id])
-  gudang     Gudang            @relation(fields: [gudangId], references: [id])
+  gudang     Gudang            @relation(fields: [tenantId, gudangId], references: [tenantId, id])
   dibuatOleh Pengguna          @relation("OpnameDibuatOleh", fields: [dibuatOlehId], references: [id])
   baris      StokOpnameBaris[]
 
@@ -840,6 +888,9 @@ model Supplier {
   tenant        Tenant          @relation(fields: [tenantId], references: [id])
   purchaseOrder PurchaseOrder[]
 
+  // ALT-DEF-010: agar PurchaseOrder bisa memakai composite-FK
+  // (tenantId, supplierId) -> Supplier(tenantId, id).
+  @@unique([tenantId, id])
   @@map("supplier")
 }
 
@@ -855,12 +906,18 @@ model PurchaseOrder {
   createdAt     DateTime            @default(now())
 
   tenant     Tenant               @relation(fields: [tenantId], references: [id])
-  outlet     Outlet               @relation(fields: [outletId], references: [id])
-  supplier   Supplier             @relation(fields: [supplierId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet     Outlet               @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, supplierId) -> Supplier(tenantId, id) -
+  // menjamin PurchaseOrder↔Supplier tidak bisa lintas tenant.
+  supplier   Supplier             @relation(fields: [tenantId, supplierId], references: [tenantId, id])
   dibuatOleh Pengguna             @relation("PoDibuatOleh", fields: [dibuatOlehId], references: [id])
   baris      PurchaseOrderBaris[]
-  penerimaan PenerimaanBarang[]
+  penerimaan PenerimaanBarang[]   @relation("PenerimaanBarangPo")
 
+  // ALT-DEF-010: agar PenerimaanBarang bisa memakai composite-FK
+  // (tenantId, purchaseOrderId) -> PurchaseOrder(tenantId, id).
+  @@unique([tenantId, id])
   @@map("purchase_order")
 }
 
@@ -877,16 +934,21 @@ model PurchaseOrderBaris {
   @@map("purchase_order_baris")
 }
 
+// ALT-DEF-010: sebelumnya tidak punya tenantId sama sekali (gap ditemukan
+// saat audit) - purchaseOrderId dan gudangId bisa secara teori merujuk
+// tenant yang berbeda tanpa jaminan apa pun. Ditambahkan tenantId
+// denormalisasi + DUA composite-FK (pola sama seperti KeanggotaanOutlet/ADR-011).
 model PenerimaanBarang {
   id              String   @id
+  tenantId        String
   purchaseOrderId String
   gudangId        String
   nomorPenerimaan String   @unique
   diterimaPada    DateTime @default(now())
   diterimaOlehId  String
 
-  purchaseOrder  PurchaseOrder           @relation(fields: [purchaseOrderId], references: [id])
-  gudang         Gudang                  @relation(fields: [gudangId], references: [id])
+  purchaseOrder  PurchaseOrder           @relation("PenerimaanBarangPo", fields: [tenantId, purchaseOrderId], references: [tenantId, id])
+  gudang         Gudang                  @relation("PenerimaanBarangGudang", fields: [tenantId, gudangId], references: [tenantId, id])
   diterimaOleh   Pengguna                @relation("PenerimaanDiterimaOleh", fields: [diterimaOlehId], references: [id])
   baris          PenerimaanBarangBaris[]
   returPembelian ReturPembelian[]
@@ -942,18 +1004,28 @@ enum StatusReservasi {
   DIBATALKAN
 }
 
+// ALT-DEF-010: outlet lewat composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+// @@unique([outletId, id]) ditambahkan agar Meja bisa memakai composite FK
+// (outletId, areaMejaId) menuju AreaMeja - dipilih memakai outletId (bukan
+// tenantId) karena risiko nyata di sini adalah pencampuran AREA/MEJA lintas
+// OUTLET dalam tenant yang sama, bukan cuma lintas tenant.
 model AreaMeja {
   id       String @id
   tenantId String
   outletId String
   nama     String
 
-  outlet Outlet @relation(fields: [outletId], references: [id])
+  outlet Outlet @relation(fields: [tenantId, outletId], references: [tenantId, id])
   meja   Meja[]
 
+  @@unique([outletId, id])
   @@map("area_meja")
 }
 
+// ALT-DEF-010: outlet lewat composite-FK (tenantId, outletId) -> Outlet(tenantId, id);
+// areaMeja lewat composite-FK (outletId, areaMejaId) -> AreaMeja(outletId, id).
+// @@unique([outletId, id]) ditambahkan agar Pesanan/Reservasi/SesiMejaQr bisa
+// memakai composite FK (outletId, mejaId) menuju Meja.
 model Meja {
   id         String     @id
   tenantId   String
@@ -963,16 +1035,23 @@ model Meja {
   kapasitas  Int
   status     StatusMeja @default(TERSEDIA)
 
-  outlet    Outlet       @relation(fields: [outletId], references: [id])
-  areaMeja  AreaMeja     @relation(fields: [areaMejaId], references: [id])
+  outlet    Outlet       @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  areaMeja  AreaMeja     @relation(fields: [outletId, areaMejaId], references: [outletId, id])
   reservasi Reservasi[]
   pesanan   Pesanan[]
   sesiQr    SesiMejaQr[]
 
   @@unique([outletId, nomor])
+  @@unique([outletId, id])
   @@map("meja")
 }
 
+// ALT-DEF-010: DIJUDGE AMAN TANPA composite-FK/tenantId tambahan. SesiMejaQr
+// tidak membawa tenantId/outletId sendiri dan hanya punya SATU relasi
+// (mejaId -> Meja, yang sekarang sudah tenant/outlet-safe lewat composite FK
+// di atas). Tidak ada referensi tenant-owned kedua yang bisa menyimpang dari
+// Meja, jadi FK tunggal ke Meja.id sudah cukup - menambah tenantId di sini
+// hanya menduplikasi data tanpa jaminan tambahan. Lihat DECISION-LOG.md ADR-013.
 model SesiMejaQr {
   id             String    @id
   mejaId         String
@@ -986,6 +1065,11 @@ model SesiMejaQr {
   @@map("sesi_meja_qr")
 }
 
+// ALT-DEF-010: outlet lewat composite-FK (tenantId, outletId) -> Outlet(tenantId, id);
+// meja (opsional) lewat composite-FK (outletId, mejaId) -> Meja(outletId, id)
+// - memakai outletId agar meja yang dirujuk dijamin di outlet yang sama
+// dengan reservasi; pelanggan lewat composite-FK (tenantId, pelangganId) ->
+// Pelanggan(tenantId, id).
 model Reservasi {
   id             String          @id
   tenantId       String
@@ -997,9 +1081,9 @@ model Reservasi {
   status         StatusReservasi @default(DIAJUKAN)
   createdAt      DateTime        @default(now())
 
-  outlet    Outlet    @relation(fields: [outletId], references: [id])
-  meja      Meja?     @relation(fields: [mejaId], references: [id])
-  pelanggan Pelanggan @relation(fields: [pelangganId], references: [id])
+  outlet    Outlet    @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  meja      Meja?     @relation(fields: [outletId, mejaId], references: [outletId, id])
+  pelanggan Pelanggan @relation(fields: [tenantId, pelangganId], references: [tenantId, id])
 
   @@map("reservasi")
 }
@@ -1051,9 +1135,13 @@ model Pesanan {
   dibatalkanPada     DateTime?
 
   tenant     Tenant     @relation(fields: [tenantId], references: [id])
-  outlet     Outlet     @relation(fields: [outletId], references: [id])
-  meja       Meja?      @relation(fields: [mejaId], references: [id])
-  pelanggan  Pelanggan? @relation(fields: [pelangganId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet     Outlet     @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (outletId, mejaId) -> Meja(outletId, id) - meja
+  // yang dirujuk dijamin berada di outlet yang sama dengan pesanan.
+  meja       Meja?      @relation(fields: [outletId, mejaId], references: [outletId, id])
+  // ALT-DEF-010: composite-FK (tenantId, pelangganId) -> Pelanggan(tenantId, id).
+  pelanggan  Pelanggan? @relation(fields: [tenantId, pelangganId], references: [tenantId, id])
   dibuatOleh Pengguna   @relation("PesananDibuatOleh", fields: [dibuatOlehId], references: [id])
 
   itemPesanan    ItemPesanan[]
@@ -1065,6 +1153,9 @@ model Pesanan {
   poinRiwayat    PoinRiwayat[]
 
   @@unique([outletId, nomorPesanan])
+  // ALT-DEF-010: agar TiketDapur/Pembayaran bisa memakai composite-FK
+  // (tenantId, pesananId) -> Pesanan(tenantId, id).
+  @@unique([tenantId, id])
   @@map("pesanan")
 }
 
@@ -1131,6 +1222,9 @@ enum StatusMasakBaris {
   SIAP
 }
 
+// ALT-DEF-010: outlet lewat composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+// @@unique([outletId, id]) ditambahkan agar TiketDapur bisa memakai
+// composite FK (outletId, stasiunDapurId) menuju StasiunDapur.
 model StasiunDapur {
   id       String @id
   tenantId String
@@ -1138,9 +1232,10 @@ model StasiunDapur {
   nama     String
 
   tenant     Tenant       @relation(fields: [tenantId], references: [id])
-  outlet     Outlet       @relation(fields: [outletId], references: [id])
+  outlet     Outlet       @relation(fields: [tenantId, outletId], references: [tenantId, id])
   tiketDapur TiketDapur[]
 
+  @@unique([outletId, id])
   @@map("stasiun_dapur")
 }
 
@@ -1156,11 +1251,21 @@ model TiketDapur {
   siapPada          DateTime?
 
   tenant       Tenant            @relation(fields: [tenantId], references: [id])
-  outlet       Outlet            @relation(fields: [outletId], references: [id])
-  pesanan      Pesanan           @relation(fields: [pesananId], references: [id])
-  stasiunDapur StasiunDapur?     @relation(fields: [stasiunDapurId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet       Outlet            @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id) -
+  // menjamin tiket dapur tidak bisa merujuk pesanan tenant lain meskipun
+  // tenantId TiketDapur sendiri dicatat terpisah dari Pesanan.
+  pesanan      Pesanan           @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (outletId, stasiunDapurId) -> StasiunDapur(outletId, id) -
+  // memakai outletId agar stasiun dapur yang dirujuk dijamin di outlet yang
+  // sama dengan tiket (lihat juga test isolasi TiketDapur↔StasiunDapur/Outlet).
+  stasiunDapur StasiunDapur?     @relation(fields: [outletId, stasiunDapurId], references: [outletId, id])
   baris        TiketDapurBaris[]
 
+  // Diperlukan agar composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id)
+  // valid sebagai relasi one-to-one (pesananId sudah @unique tunggal di atas).
+  @@unique([tenantId, pesananId])
   @@map("tiket_dapur")
 }
 
@@ -1220,11 +1325,18 @@ model GiliranKasir {
   dibukaPada         DateTime           @default(now())
   ditutupPada        DateTime?
 
-  outlet         Outlet           @relation(fields: [outletId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet         Outlet           @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // pengguna: Pengguna adalah identitas GLOBAL (ALT-DEF-001) - sengaja TIDAK
+  // di-composite-kan ke tenant, sama seperti relasi Pengguna lain di seluruh
+  // skema ini.
   pengguna       Pengguna         @relation(fields: [penggunaId], references: [id])
   transaksiKasir TransaksiKasir[]
   rekapKasHarian RekapKasHarian?
 
+  // ALT-DEF-010: agar RekapKasHarian bisa memakai composite-FK
+  // (tenantId, giliranKasirId) -> GiliranKasir(tenantId, id).
+  @@unique([tenantId, id])
   @@map("giliran_kasir")
 }
 
@@ -1269,8 +1381,10 @@ model Pembayaran {
   dikonfirmasiPada   DateTime?
 
   tenant           Tenant    @relation(fields: [tenantId], references: [id])
-  outlet           Outlet    @relation(fields: [outletId], references: [id])
-  pesanan          Pesanan   @relation(fields: [pesananId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet           Outlet    @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
+  pesanan          Pesanan   @relation(fields: [tenantId, pesananId], references: [tenantId, id])
   dikonfirmasiOleh Pengguna? @relation("PembayaranDikonfirmasiOleh", fields: [dikonfirmasiOlehId], references: [id])
 
   metodeBaris    PembayaranMetodeBaris[]
@@ -1363,6 +1477,16 @@ enum StatusKupon {
   HABIS
 }
 
+// ALT-DEF-010: Promo hanya punya relasi langsung ke Tenant (fields: [tenantId])
+// - itu SUDAH aman tanpa composite-FK karena Tenant.id ADALAH identitas tenant
+// itu sendiri, tidak ada perantara yang bisa menyimpang. CATATAN GAP (di luar
+// scope batch ini): Promo TIDAK punya relasi outlet sama sekali saat ini -
+// enum JenisSyaratPromo punya nilai OUTLET_TERTENTU yang menyiratkan promo
+// semestinya bisa dibatasi per outlet, tetapi tidak ada model
+// PromoOutlet/kolom outletId yang mendukungnya. Ini BUKAN defect composite-FK
+// (tidak ada relasi outlet untuk dibuat composite-safe), melainkan gap desain
+// domain promo yang harus ditangani di batch domain promo berikutnya - lihat
+// DECISION-LOG.md ADR-013 dan DEFECT-LEDGER.md.
 model Promo {
   id            String      @id
   tenantId      String
@@ -1459,6 +1583,9 @@ model Pelanggan {
   kupon       Kupon[]
 
   @@unique([tenantId, nomorTelepon])
+  // ALT-DEF-010: agar Pesanan/Reservasi bisa memakai composite-FK
+  // (tenantId, pelangganId) -> Pelanggan(tenantId, id).
+  @@unique([tenantId, id])
   @@map("pelanggan")
 }
 
@@ -1554,6 +1681,9 @@ model Jabatan {
   tenant   Tenant     @relation(fields: [tenantId], references: [id])
   karyawan Karyawan[]
 
+  // ALT-DEF-010: agar Karyawan bisa memakai composite-FK
+  // (tenantId, jabatanId) -> Jabatan(tenantId, id).
+  @@unique([tenantId, id])
   @@map("jabatan")
 }
 
@@ -1569,13 +1699,18 @@ model Karyawan {
 
   tenant                  Tenant                    @relation(fields: [tenantId], references: [id])
   pengguna                Pengguna?                 @relation(fields: [penggunaId], references: [id])
-  jabatan                 Jabatan                   @relation(fields: [jabatanId], references: [id])
-  outletUtama             Outlet                    @relation("KaryawanOutletUtama", fields: [outletUtamaId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, jabatanId) -> Jabatan(tenantId, id).
+  jabatan                 Jabatan                   @relation(fields: [tenantId, jabatanId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, outletUtamaId) -> Outlet(tenantId, id).
+  outletUtama             Outlet                    @relation("KaryawanOutletUtama", fields: [tenantId, outletUtamaId], references: [tenantId, id])
   penugasanShift          PenugasanShift[]
   absensi                 Absensi[]
   cutiIzin                CutiIzin[]
   rmKinerjaKaryawanHarian RmKinerjaKaryawanHarian[]
 
+  // ALT-DEF-010: agar Absensi/RmKinerjaKaryawanHarian bisa memakai
+  // composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
+  @@unique([tenantId, id])
   @@map("karyawan")
 }
 
@@ -1618,8 +1753,10 @@ model Absensi {
   status     StatusAbsensi
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id])
-  outlet   Outlet   @relation(fields: [outletId], references: [id])
-  karyawan Karyawan @relation(fields: [karyawanId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet   Outlet   @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
+  karyawan Karyawan @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
 
   @@map("absensi")
 }
@@ -1663,6 +1800,9 @@ model KategoriBiaya {
   tenant           Tenant             @relation(fields: [tenantId], references: [id])
   biayaOperasional BiayaOperasional[]
 
+  // ALT-DEF-010: agar BiayaOperasional bisa memakai composite-FK
+  // (tenantId, kategoriBiayaId) -> KategoriBiaya(tenantId, id).
+  @@unique([tenantId, id])
   @@map("kategori_biaya")
 }
 
@@ -1680,10 +1820,15 @@ model RekapKasHarian {
   diverifikasiOlehId String?
 
   tenant           Tenant        @relation(fields: [tenantId], references: [id])
-  outlet           Outlet        @relation(fields: [outletId], references: [id])
-  giliranKasir     GiliranKasir? @relation(fields: [giliranKasirId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet           Outlet        @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, giliranKasirId) -> GiliranKasir(tenantId, id).
+  giliranKasir     GiliranKasir? @relation(fields: [tenantId, giliranKasirId], references: [tenantId, id])
   diverifikasiOleh Pengguna?     @relation("RekapDiverifikasiOleh", fields: [diverifikasiOlehId], references: [id])
 
+  // Diperlukan agar composite-FK (tenantId, giliranKasirId) -> GiliranKasir(tenantId, id)
+  // valid sebagai relasi one-to-one (giliranKasirId sudah @unique tunggal di atas).
+  @@unique([tenantId, giliranKasirId])
   @@map("rekap_kas_harian")
 }
 
@@ -1699,8 +1844,10 @@ model BiayaOperasional {
   createdAt       DateTime               @default(now())
 
   tenant        Tenant        @relation(fields: [tenantId], references: [id])
-  outlet        Outlet        @relation(fields: [outletId], references: [id])
-  kategoriBiaya KategoriBiaya @relation(fields: [kategoriBiayaId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet        Outlet        @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, kategoriBiayaId) -> KategoriBiaya(tenantId, id).
+  kategoriBiaya KategoriBiaya @relation(fields: [tenantId, kategoriBiayaId], references: [tenantId, id])
   dicatatOleh   Pengguna      @relation("BiayaDicatatOleh", fields: [dicatatOlehId], references: [id])
 
   @@map("biaya_operasional")
@@ -1722,7 +1869,8 @@ model RmPenjualanHarian {
   dihitungPada   DateTime @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
-  outlet Outlet @relation(fields: [outletId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet Outlet @relation(fields: [tenantId, outletId], references: [tenantId, id])
 
   @@unique([outletId, tanggal])
   @@map("rm_penjualan_harian")
@@ -1738,8 +1886,10 @@ model RmPenjualanItemHarian {
   totalPenjualan   Int      @default(0)
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id])
-  outlet   Outlet   @relation(fields: [outletId], references: [id])
-  itemMenu ItemMenu @relation(fields: [itemMenuId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet   Outlet   @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, itemMenuId) -> ItemMenu(tenantId, id).
+  itemMenu ItemMenu @relation(fields: [tenantId, itemMenuId], references: [tenantId, id])
 
   @@unique([outletId, itemMenuId, tanggal])
   @@map("rm_penjualan_item_harian")
@@ -1755,8 +1905,10 @@ model RmStokKritis {
   dihitungPada     DateTime @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
-  outlet Outlet @relation(fields: [outletId], references: [id])
-  bahan  Bahan  @relation(fields: [bahanId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet Outlet @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, bahanId) -> Bahan(tenantId, id).
+  bahan  Bahan  @relation(fields: [tenantId, bahanId], references: [tenantId, id])
 
   @@unique([outletId, bahanId])
   @@map("rm_stok_kritis")
@@ -1773,8 +1925,10 @@ model RmKinerjaKaryawanHarian {
   menitTerlambat          Int      @default(0)
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id])
-  outlet   Outlet   @relation(fields: [outletId], references: [id])
-  karyawan Karyawan @relation(fields: [karyawanId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet   Outlet   @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
+  karyawan Karyawan @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
 
   @@unique([outletId, karyawanId, tanggal])
   @@map("rm_kinerja_karyawan_harian")
