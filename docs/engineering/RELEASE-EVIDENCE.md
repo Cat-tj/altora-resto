@@ -845,6 +845,201 @@ transisi status `TiketDapur` nyata, maupun CHECK constraint SQL untuk
 invariant XOR - karena itu status `ALT-DEF-006` adalah `SIAP_DIVERIFIKASI`,
 BUKAN `DITUTUP`.
 
+## Pass correction-loop 2026-07-25 (lanjutan): perbaikan ALT-DEF-004, ALT-DEF-014, ALT-DEF-015
+
+Cakupan batch: scope metode bayar (`ALT-DEF-004`), restrukturisasi alokasi
+pembayaran/split bill/pembayaran sebagian (`ALT-DEF-014`), dan konfigurasi QRIS
+statis per outlet (`ALT-DEF-015`). ADR terkait: **ADR-019**, **ADR-020**,
+**ADR-021** di `docs/engineering/DECISION-LOG.md`.
+
+Commit: `dbd05c6` (fix(payment)), `fe31fae` (fix(qris)), `e37c898`
+(test(architecture)), `<commit ledger>` (docs(engineering)).
+
+### 1. `prisma format`
+
+```
+$ npx prisma format --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 71ms 🚀
+```
+
+Dijalankan ulang setelah seluruh perubahan selesai dan **idempoten** -
+`git status` setelahnya tidak menunjukkan perubahan pada `schema.prisma`.
+
+### 2. `prisma validate` (DATABASE_URL dummy)
+
+```
+$ DATABASE_URL="postgresql://altora:altora@localhost:5432/altora_dummy" \
+    npx prisma validate --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+```
+
+Catatan: `PembayaranMetodeBaris` memakai pola composite-FK **ganda** (satu
+kolom `tenantId` dipakai dua kali, menuju `Pembayaran(tenantId, id)` DAN
+`MetodeBayar(tenantId, id)`) - sama seperti `KeanggotaanOutlet` (ADR-011).
+Pola ini BERHASIL divalidasi Prisma, bukan fallback ke scalar+guard.
+
+### 3. `prisma generate`
+
+```
+$ DATABASE_URL="postgresql://altora:altora@localhost:5432/altora_dummy" \
+    npx prisma generate --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 888ms
+```
+
+### 4. `tsc --noEmit --strict`
+
+```
+$ cd packages/test-support && npx tsc --noEmit -p tsconfig.json
+$ echo $?
+0
+```
+
+Bersih (tanpa output). `tsconfig.base.json` yang diwarisi mengaktifkan
+`strict`, `noUncheckedIndexedAccess`, dan `exactOptionalPropertyTypes` -
+jadi ini `--strict` sungguhan, bukan mode longgar.
+
+### 5. Test arsitektur: 12 file -> 15 file, 15/15 lulus
+
+Hitungan **sebelum** batch ini: **12** file di
+`packages/test-support/src/architecture/`. **Sesudah**: **15** file.
+
+```
+dapur-kds-multi-stasiun.test.ts                                PASS
+idempotency-outbox-notification-constraints.test.ts            PASS
+keanggotaan-outlet-constraints.test.ts                         PASS
+pembayaran-alokasi-metode-constraints.test.ts                  PASS   <- BARU
+pesanan-state-machine-snapshot-constraints.test.ts             PASS
+prisma-client-shape-auth-pin.test.ts                           PASS
+prisma-client-shape-dapur.test.ts                              PASS
+prisma-client-shape-pembayaran-qris.test.ts                    PASS   <- BARU
+prisma-client-shape-pesanan.test.ts                            PASS
+prisma-client-shape-platform-infra.test.ts                     PASS
+prisma-client-shape-tenant-outlet.test.ts                      PASS
+prisma-client-shape.test.ts                                    PASS
+qris-konfigurasi-constraints.test.ts                           PASS   <- BARU
+sesi-auth-pin-constraints.test.ts                              PASS
+tenant-outlet-composite-constraints.test.ts                    PASS
+---
+PASS=15 FAIL=0 TOTAL=15
+```
+
+Dijalankan lewat `node --experimental-strip-types <file>` (runner vitest masih
+DIBLOKIR, lihat `ALT-DEF-027`).
+
+### 6. Satu kegagalan yang muncul - dianalisis, terbukti FALSE-POSITIVE FORMATTING
+
+Setelah perubahan schema + `prisma format`, **satu** test lama gagal:
+
+```
+pesanan-state-machine-snapshot-constraints.test.ts             FAIL
+Error: ASSERTION GAGAL: Pesanan harus punya relasi list ke PesananPerubahan.
+Tidak ditemukan: "perubahan      PesananPerubahan[]"
+```
+
+**Analisis (BUKAN langsung menyesuaikan needle):** dibandingkan langsung dengan
+isi `model Pesanan` setelah format:
+
+```
+  perubahan         PesananPerubahan[]     <- 9 spasi (setelah batch ini)
+  perubahan      PesananPerubahan[]        <- 6 spasi (needle di test)
+```
+
+Field `alokasiPembayaran` yang BARU ditambahkan ke model `Pesanan` lebih
+panjang daripada nama field mana pun sebelumnya, sehingga `prisma format`
+melebarkan kolom perataan untuk SELURUH baris di blok relasi tersebut -
+termasuk `perubahan PesananPerubahan[]` yang **tidak disentuh sama sekali**.
+Relasi `Pesanan.perubahan` sendiri masih ada, masih bertipe list, dan tidak
+berubah secara semantik.
+
+**Ini persis kelas kegagalan yang dicatat `ALT-DEF-033`** (architecture test
+whitespace-brittle), bukan regresi nyata. Penanganan: file tersebut diberi
+helper `normalisasiSpasiHorizontal()` yang sudah dipakai
+`dapur-kds-multi-stasiun.test.ts` sejak batch sebelumnya - **tidak ada satu pun
+needle atau semantik assertion yang diubah/dilonggarkan**. Ketiga file test baru
+pada batch ini memakai helper yang sama sejak awal, plus parsing nilai enum/nama
+field (bukan substring atas teks blok mentah) agar penyebutan nama kolom di
+dalam komentar dokumentasi tidak menghasilkan false positive.
+
+Tidak ada kegagalan lain. Sebelas test lama sisanya lulus tanpa perubahan
+apa pun.
+
+### 7. Bukti bahwa test baru TIDAK vacuous (mutation testing)
+
+Setiap mutasi di bawah dilakukan pada `schema.prisma`/filesystem, test
+dijalankan, lalu perubahan DIPULIHKAN sepenuhnya (`git diff --stat` bersih
+setelahnya).
+
+| # | Mutasi | Hasil |
+|---|---|---|
+| 1 | Kembalikan `EWALLET` ke `enum KodeMetodeBayar` | **GAGAL** - `KodeMetodeBayar harus punya PERSIS 4 nilai ... Diharapkan: 4, aktual: 5` |
+| 2 | Kembalikan kolom `pesananId` ke `model Pembayaran` | **GAGAL** (dua lapis) - assertion teks: `Pembayaran TIDAK boleh lagi punya kolom pesananId ... Field aktual: [id, tenantId, outletId, pesananId, ...]`; DAN `tsc`: `TS2578: Unused '@ts-expect-error' directive` + `TS1360: Property 'pesananId' is missing ...` |
+| 3 | Ganti `@@unique([tenantId, outletId, fingerprint])` menjadi `@@unique([tenantId, outletId, status])` (constraint palsu) | **GAGAL** - assertion `assertNotContains` atas constraint palsu tsb menyala |
+| 4 | Tambahkan kolom `payload String` (plaintext) ke `KonfigurasiQris` | **GAGAL** - `KonfigurasiQris TIDAK boleh punya kolom "payload" - payload QRIS mentah TIDAK PERNAH boleh ditulis ke kolom mana pun` |
+| 5 | Hapus `prisma/migrations/manual/001_konfigurasi_qris_partial_unique.sql` | **GAGAL** - `file SQL partial unique index tidak ditemukan ... Tanpa file ini, aturan "satu KonfigurasiQris AKTIF per outlet" tidak punya penegak apa pun` |
+
+Catatan proses: mutasi #2 pada percobaan PERTAMA tidak menghasilkan kegagalan -
+tetapi setelah diperiksa, ternyata string replacement-nya sendiri yang tidak
+cocok (perataan spasi hasil `prisma format`), sehingga schema **tidak
+termutasi sama sekali**. Diulang dengan string yang benar dan test langsung
+gagal seperti seharusnya. Dicatat di sini karena "mutasi tidak menghasilkan
+kegagalan" wajib diselidiki, bukan dilaporkan sebagai bukti non-vacuous palsu.
+
+### 8. Verifikasi purge metode bayar di luar scope (ALT-DEF-004)
+
+```
+$ grep -rn "KARTU_DEBIT\|KARTU_KREDIT\|EWALLET\|kartu kredit\|kartu debit\|dompet digital\|e-wallet\|CAMPURAN" \
+    --include="*.md" --include="*.ts" --include="*.prisma" --include="*.sql" . | grep -v node_modules
+```
+
+Seluruh hasil yang tersisa adalah **pernyataan larangan/dokumentasi
+penghapusan** (komentar schema, `09-pembayaran-kasir.md`, `16-qris.md`,
+`API-CONTRACT.md` bagian 11.3, `MASTER-CHECKLIST.md` `ALT-QRS-010`,
+`DEFECT-LEDGER.md`, `DECISION-LOG.md`, dan assertion negatif di file test).
+**Tidak ada satu pun** nilai enum aktif, opsi yang ditawarkan, atau kolom yang
+tersisa. Nilai `CAMPURAN` diverifikasi tidak pernah ada di schema sejak awal
+dan tidak ditambahkan.
+
+### 9. Katalog izin
+
+`prisma/seed/izin.seed.ts`: **54 -> 69 kode**, nol duplikat (diverifikasi
+`grep -o 'kode: "[^"]*"' | sort | uniq -d` -> kosong, dan oleh assertion di
+kedua file test baru). Rincian: +8 `pembayaran.*`, +4 `kasir.*`, +3 `qris.*`,
+dan `qris.kelola` -> `qris.konfigurasi.kelola` (ganti nama, bukan tambah -
+lihat `ALT-DEF-034`).
+
+### 10. Migrasi Postgres nyata - MASIH DIBLOKIR
+
+`prisma migrate dev` tetap tidak dijalankan (tidak ada Postgres di environment
+ini, `ALT-DEF-029`). **Konsekuensi yang HARUS disebut eksplisit untuk batch
+ini:** partial unique index di
+`prisma/migrations/manual/001_konfigurasi_qris_partial_unique.sql` **belum
+pernah dieksekusi**, sehingga aturan "satu `KonfigurasiQris` AKTIF per outlet"
+(`ALT-QRS-001`) saat ini HANYA dijaga guard level-aplikasi dan **tidak aman
+terhadap race condition** dua request bersamaan. Jangan menganggap aturan itu
+terjamin sebelum index-nya benar-benar ada di database.
+
+### Kesimpulan status
+
+Schema untuk ALT-DEF-004/ALT-DEF-014/ALT-DEF-015 sudah benar secara sintaks
+(`format` + `validate`), tipe yang dihasilkan sudah benar secara bentuk
+(`generate` + `tsc --noEmit --strict`), seluruh model/field/enum/constraint yang
+diklaim di ADR-019/ADR-020/ADR-021 sudah dibuktikan ada lewat test struktur DAN
+test tipe yang keduanya terbukti non-vacuous, dan tidak ada regresi nyata pada
+12 test arsitektur sebelumnya (satu kegagalan yang muncul terbukti
+false-positive formatting dan ditangani dengan memperbaiki matcher-nya, bukan
+melonggarkan assertion).
+
+**Belum ada:** migrasi Postgres nyata, eksekusi partial unique index,
+implementasi enkripsi/dekripsi AES-GCM nyata, parser EMV/validator CRC16,
+handler/service pembayaran nyata, penegakan runtime invariant jumlah, dan
+integration test `pembayaran_invariant_*`. `PesananSplit` (split bill per item,
+`ALT-PES-014`) juga tetap terbuka. Karena itu status ALT-DEF-004, ALT-DEF-014,
+ALT-DEF-015, dan ALT-DEF-034 adalah `SIAP_DIVERIFIKASI`, BUKAN `DITUTUP`.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```

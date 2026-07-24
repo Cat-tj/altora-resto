@@ -17,6 +17,15 @@ sebagai `ALT-DEF-020`, status `DIKONFIRMASI`, belum `DITUTUP`) — jangan mengan
 baris manapun di bawah ini sebagai representasi lengkap/akurat dari scope saat
 ini sampai pekerjaan sinkronisasi tersebut selesai.
 
+**Diperbaiki pada batch ALT-DEF-004/ALT-DEF-014/ALT-DEF-015:** lima baris yang
+memakai prefix phantom `ALT-PBY-001` s.d. `ALT-PBY-005` (tidak ada di
+`MASTER-CHECKLIST.md` sama sekali - lihat tabel rekonsiliasi ID di
+`DEFECT-LEDGER.md`) DIHAPUS, dan baris `ALT-KSR-002` yang **salah petakan** ke
+verifikasi selisih kas (itu `ALT-KSR-012`) DIKOREKSI. Domain Kasir
+(`ALT-KSR-001` s.d. `ALT-KSR-013`) dan QRIS (`ALT-QRS-001` s.d. `ALT-QRS-010`)
+kini lengkap dan terverifikasi baris-per-baris terhadap `MASTER-CHECKLIST.md`.
+Domain lain masih belum disinkronkan (`ALT-DEF-020`).
+
 | Requirement ID | Entitas ERD | Endpoint API | Rute UI | Permission | Status | Bukti Uji |
 |---|---|---|---|---|---|---|
 | ALT-PLT-001 | `Tenant`, `Pengguna`, `KeanggotaanTenant` | `POST /api/v1/tenant` (belum ada di kontrak v1, TODO tambah) | `/register` (belum ada di ROUTE-MAP, TODO tambah) | OWNER (pembuat) | BELUM DIKERJAKAN | - |
@@ -68,13 +77,33 @@ ini sampai pekerjaan sinkronisasi tersebut selesai.
 | ALT-DPR-012 | `TiketDapur` (penghitung cetak ulang belum ada di skema - TODO batch berikutnya) | `POST /api/v1/dapur/tiket/{id}/cetak-ulang` | `/resto/{outletSlug}/dapur` | `dapur.cetak-ulang` | BELUM DIKERJAKAN | - |
 | ALT-DPR-014 | `TiketDapur` (papan KDS per stasiun difilter `?stasiunDapurId=`; N tiket per pesanan) | `GET /api/v1/dapur/tiket` (SSE/polling) | `/resto/{outletSlug}/dapur` | `dapur.tiket.lihat` | BELUM DIKERJAKAN | - |
 | ALT-DEF-006 (defect) | `RiwayatStatusTiketDapur` (BARU, enum-typed history mengikuti pola `PesananRiwayatStatus`), `GelombangDapur` (BARU, ADR-018 Keputusan 3) | `GET /api/v1/dapur/tiket/{id}/riwayat` | `/resto/{outletSlug}/dapur` | `dapur.tiket.lihat` | SIAP_DIVERIFIKASI (skema + kontrak; handler di luar scope) | `RELEASE-EVIDENCE.md` - pass ALT-DEF-006 (`dapur-kds-multi-stasiun.test.ts`) |
-| ALT-KSR-001 | `GiliranKasir` | `POST /api/v1/giliran-kasir/buka`, `/{id}/tutup` | `/resto/{outletSlug}/kasir/giliran` | KASIR | BELUM DIKERJAKAN | - |
-| ALT-KSR-002 | `GiliranKasir.status`, `RekapKasHarian` | `POST /api/v1/giliran-kasir/{id}/verifikasi` | `/resto/{outletSlug}/kasir/giliran` | SUPERVISOR | BELUM DIKERJAKAN | - |
-| ALT-PBY-001 | `Pembayaran`, `MetodeBayar` | `POST /api/v1/pembayaran` | `/resto/{outletSlug}/kasir/{pesananId}/bayar` | KASIR | BELUM DIKERJAKAN | - |
-| ALT-PBY-002 | `PembayaranMetodeBaris` | `POST /api/v1/pembayaran` (multi baris) | `/resto/{outletSlug}/kasir/{pesananId}/bayar` | KASIR | BELUM DIKERJAKAN | - |
-| ALT-PBY-003 | `QrisKonfirmasiManual` | `POST /api/v1/pembayaran/{id}/konfirmasi-qris-manual` | `/resto/{outletSlug}/kasir/{pesananId}/bayar` | KASIR | BELUM DIKERJAKAN | - |
-| ALT-PBY-004 | `PembayaranRefund` | `POST /api/v1/pembayaran/{id}/refund` | `/resto/{outletSlug}/kasir` | SUPERVISOR | BELUM DIKERJAKAN | - |
-| ALT-PBY-005 | `Struk` | `POST /api/v1/pembayaran/{id}/struk/cetak-ulang` | `/resto/{outletSlug}/kasir/{pesananId}/bayar` | KASIR | BELUM DIKERJAKAN | - |
+| ALT-KSR-001 | `GiliranKasir` | `POST /api/v1/giliran-kasir/buka` | `/resto/{outletSlug}/kasir/giliran` | `kasir.giliran.kelola` | BELUM DIKERJAKAN | - |
+| ALT-KSR-002 | `Pembayaran` (BARU: tanpa `pesananId`), `MetodeBayar`, `AlokasiPembayaran` | `POST /api/v1/pembayaran`, `/{id}/ajukan`, `/{id}/konfirmasi` | `/resto/{outletSlug}/kasir/pembayaran` | `pembayaran.buat` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 (`pembayaran-alokasi-metode-constraints.test.ts`) |
+| ALT-KSR-003 | `Pembayaran.status = DRAF` (transaksi ditahan/diparkir) | `POST /api/v1/pembayaran/{id}/tahan` | `/resto/{outletSlug}/kasir/pembayaran` | `pembayaran.tahan` | BELUM DIKERJAKAN | - |
+| ALT-KSR-004 | `AlokasiPembayaran` (BARU, `@@unique([pembayaranId, pesananId])` - ADR-019) | `PUT /api/v1/pembayaran/{id}/alokasi` | `/resto/{outletSlug}/kasir/pembayaran` | `pembayaran.alokasi.kelola` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 (`pembayaran-alokasi-metode-constraints.test.ts`) |
+| ALT-KSR-005 | `AlokasiPembayaran` (satu pesanan -> banyak `Pembayaran`; pelunasan = agregat alokasi berstatus `DIBAYAR`) | `POST /api/v1/pembayaran` | `/resto/{outletSlug}/kasir/pembayaran` | `pembayaran.buat` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 (`pembayaran-alokasi-metode-constraints.test.ts`) |
+| ALT-KSR-006 | `PesananRetur` (BELUM ADA di skema - scope `ALT-PES-018`, batch berikutnya) | `POST /api/v1/pesanan/{id}/retur` | `/resto/{outletSlug}/kasir/retur` | `pesanan.retur.kelola` | BELUM DIKERJAKAN | - |
+| ALT-KSR-007 | `PembayaranRefund` (kini `tenantId` + composite-FK ke `Pembayaran`) | `POST /api/v1/pembayaran/{id}/refund` | `/resto/{outletSlug}/kasir/pembayaran` | `pembayaran.refund` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 |
+| ALT-KSR-008 | `Struk` (per PERISTIWA PEMBAYARAN, bukan per pesanan - ADR-019 Keputusan 5) | `POST /api/v1/pembayaran/{id}/struk/cetak` | `/resto/{outletSlug}/kasir/pembayaran` | `pembayaran.struk.cetak` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 |
+| ALT-KSR-009 | `Struk.jumlahCetakUlang` | `POST /api/v1/pembayaran/{id}/struk/cetak-ulang` | `/resto/{outletSlug}/kasir/riwayat` | `pembayaran.struk.cetak-ulang` | BELUM DIKERJAKAN | - |
+| ALT-KSR-010 | `GiliranKasir.status = DITUTUP_MENUNGGU_VERIFIKASI` | `POST /api/v1/giliran-kasir/{id}/tutup` | `/resto/{outletSlug}/kasir/giliran` | `kasir.giliran.kelola` | BELUM DIKERJAKAN | - |
+| ALT-KSR-011 | `GiliranKasir.modalAkhirDihitung`/`modalAkhirSistem`, `RekapKasHarian` | `GET /api/v1/giliran-kasir/{id}/rekonsiliasi` | `/resto/{outletSlug}/kasir/giliran` | `kasir.rekonsiliasi.lihat` | BELUM DIKERJAKAN | - |
+| ALT-KSR-012 | `GiliranKasir.status = DITUTUP_SELESAI`, `RekapKasHarian.diverifikasiOlehId` | `POST /api/v1/giliran-kasir/{id}/verifikasi` | `/resto/{outletSlug}/kasir/giliran` | `kasir.giliran.verifikasi` | BELUM DIKERJAKAN | - |
+| ALT-KSR-013 | `GiliranKasir` (reopen, wajib approval) | `POST /api/v1/giliran-kasir/{id}/buka-kembali` | `/resto/{outletSlug}/kasir/giliran` | `kasir.giliran.buka-kembali` | BELUM DIKERJAKAN | - |
+| ALT-QRS-001 | `KonfigurasiQris` (BARU, ADR-021). Aturan "satu AKTIF per outlet" = partial unique index Postgres di `prisma/migrations/manual/001_...sql`, BUKAN constraint Prisma | `GET/PUT /api/v1/outlet/{id}/qris`, `POST /{konfigurasiId}/aktifkan` | `/pengaturan/qris` | `qris.konfigurasi.kelola` | SKEMA SELESAI, INDEX & HANDLER BELUM DIJALANKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 (`qris-konfigurasi-constraints.test.ts`) |
+| ALT-QRS-002 | `KonfigurasiQris.payloadTerenkripsi` (gambar QR di-decode jadi payload, tidak disimpan sebagai blob - ADR-021) | `POST /api/v1/outlet/{id}/qris/unggah` | `/pengaturan/qris` | `qris.konfigurasi.kelola` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 |
+| ALT-QRS-003 | `KonfigurasiQris` (parser EMV adalah KODE, bukan skema - belum dikerjakan) | internal (parser saat unggah) | - | `qris.validasi` | BELUM DIKERJAKAN | - |
+| ALT-QRS-004 | `KonfigurasiQris` (validator CRC16 adalah KODE, bukan skema - belum dikerjakan) | internal (validator CRC) | - | `qris.validasi` | BELUM DIKERJAKAN | - |
+| ALT-QRS-005 | `KonfigurasiQris.payloadTerenkripsi` + `fingerprint` (AES-256-GCM level-aplikasi, kunci dari env/KMS - ADR-021 Keputusan 2) | internal (enkripsi at rest) | - | `qris.konfigurasi.kelola` | SKEMA SELESAI, ENKRIPSI NYATA BELUM DIIMPLEMENTASIKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 (`qris-konfigurasi-constraints.test.ts`) |
+| ALT-QRS-006 | `KonfigurasiQris` (nominal disisipkan runtime, SELALU dihitung server-side; klien tidak pernah mengirimkannya) | `GET /api/v1/pembayaran/{id}/qris-nominal` | `/resto/{outletSlug}/kasir/pembayaran` | `qris.generate` | BELUM DIKERJAKAN | - |
+| ALT-QRS-007 | `QrisKonfirmasiManual` (kini `tenantId` + composite-FK ke `Pembayaran`); `StatusPembayaran.MENUNGGU_KONFIRMASI -> DIBAYAR` | `POST /api/v1/pembayaran/{id}/konfirmasi-qris-manual` | `/resto/{outletSlug}/kasir/pembayaran` | `pembayaran.qris.konfirmasi-manual` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 |
+| ALT-QRS-008 | `RiwayatKonfigurasiQris` (BARU, append-only; `sebelum`/`sesudah` METADATA saja - tidak pernah payload) | `GET /api/v1/outlet/{id}/qris/riwayat` | `/pengaturan/qris` | `qris.audit.lihat` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 (`qris-konfigurasi-constraints.test.ts`) |
+| ALT-QRS-009 | `KoreksiPembayaran` (BARU, append-only - tidak menghapus `QrisKonfirmasiManual` asal) | `POST /api/v1/pembayaran/{id}/koreksi` | `/resto/{outletSlug}/kasir/pembayaran` | `pembayaran.qris.koreksi`, `transaksi.koreksi-pembayaran` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 |
+| ALT-QRS-010 | - (larangan integrasi: TIDAK ADA webhook/gateway/bank API/e-wallet di skema maupun kontrak) | - (tidak ada endpoint, dan itu justru kriteria terimanya) | - | - | SKEMA & KONTRAK SELESAI | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 (`pembayaran-alokasi-metode-constraints.test.ts` - assertion NEGATIF bahwa `KARTU_DEBIT`/`KARTU_KREDIT`/`EWALLET`/`CAMPURAN` hilang) |
+| ALT-SEC-007 | `KonfigurasiQris.payloadTerenkripsi` | - | - | - (bukan izin - lihat catatan ALT-DEF-034 di `PERMISSION-MATRIX.md`) | SKEMA SELESAI, ENKRIPSI NYATA BELUM DIIMPLEMENTASIKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 |
+| ALT-DEF-004 (defect) | enum `KodeMetodeBayar` = PERSIS `TUNAI`/`TRANSFER_MANUAL`/`QRIS_MANUAL`/`SALDO_TOKO` | - | - | - | SIAP_DIVERIFIKASI (skema + dokumen + test) | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 |
+| ALT-DEF-014 (defect) | `AlokasiPembayaran` + `KoreksiPembayaran` (BARU); `Pembayaran.pesananId` DIHAPUS | `POST /api/v1/pembayaran`, `PUT /{id}/alokasi`, `POST /{id}/koreksi` | `/resto/{outletSlug}/kasir/pembayaran` | `pembayaran.buat`, `pembayaran.alokasi.kelola` | SIAP_DIVERIFIKASI (komponen alokasi; `PesananSplit` masih terbuka) | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 |
+| ALT-DEF-015 (defect) | `KonfigurasiQris` + `RiwayatKonfigurasiQris` (BARU) | `GET/PUT /api/v1/outlet/{id}/qris` | `/pengaturan/qris` | `qris.konfigurasi.kelola` | SIAP_DIVERIFIKASI (skema + dokumen + test; partial index belum dijalankan) | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 |
 | ALT-PRM-001 | `Promo`, `PromoAturan` | `GET/POST /api/v1/promo` | `/resto/{outletSlug}/promo` | MANAJER | BELUM DIKERJAKAN | - |
 | ALT-PRM-002 | `Kupon` | `POST /api/v1/promo/{id}/kupon` | `/resto/{outletSlug}/promo` | MANAJER | BELUM DIKERJAKAN | - |
 | ALT-PRM-003 | `PromoPemakaian` | `POST /api/v1/promo/validasi`, `/pesanan/{id}/promo` | `/resto/{outletSlug}/pesanan/{id}` | PELAYAN/KASIR | BELUM DIKERJAKAN | - |
