@@ -1,7 +1,55 @@
 # Matriks Permission - Altora Resto
 
-Status dokumen: **DRAF AWAL** (belum diimplementasikan di `packages/otorisasi`).
-Peran dasar mengacu ke `docs/database/01-platform.md` (`PERAN.kode`).
+Status dokumen: **DRAF AWAL, DIPERBARUI (ALT-DEF-002)** (belum diimplementasikan
+di `packages/otorisasi`). Peran dasar mengacu ke `docs/database/01-platform.md`
+(`PERAN.kode`).
+
+**Perubahan model (ALT-DEF-002):** `Peran.permissions` yang sebelumnya
+disimpan sebagai `Json` (daftar string bebas `domain:aksi`) sekarang
+digantikan model relasional ternormalisasi:
+
+- `Izin` - katalog kode izin atomik, **unik global** (`@@unique([kode])`,
+  bukan Json bebas). Kode memakai format `domain.aksi` (titik, bukan titik
+  dua) - lihat daftar starter di bagian 1a di bawah dan seed literalnya di
+  `prisma/seed/izin.seed.ts`.
+- `PeranIzin` - tabel penghubung many-to-many `Peran` <-> `Izin`
+  (`@@unique([peranId, izinId])`) - mapping Peran x Izin sekarang bisa
+  divalidasi via foreign key (kode izin typo gagal di level DB) dan diquery
+  lewat join, bukan parsing Json.
+- `KeanggotaanPeran` - menetapkan `Peran` ke `KeanggotaanTenant` (bukan ke
+  `Pengguna` global secara langsung - lihat ALT-DEF-001), sehingga satu
+  pengguna bisa memiliki peran berbeda di tenant berbeda.
+- `BatasIzin` - limit numerik per `Peran` (mis. maksimum diskon tanpa
+  approval).
+- `IzinSementara` - delegasi izin darurat/sementara per `KeanggotaanTenant`.
+- `PermintaanPersetujuan` - rekaman generik permintaan approval supervisor
+  saat `BatasIzin.wajibPersetujuanManajer`/`wajibPinSupervisor` terlampaui.
+
+Tabel naratif di bagian 2 di bawah tetap menjadi sumber kebenaran *desain*
+(siapa boleh apa), tetapi implementasinya sekarang adalah baris `PeranIzin`
+konkret per tenant, bukan payload Json.
+
+## 1a. Katalog kode Izin starter (seed)
+
+Daftar kode `Izin.kode` berikut adalah starter set yang di-seed lewat
+`prisma/seed/izin.seed.ts` (32 kode), dikelompokkan per `domain`:
+
+| Domain | Kode Izin |
+|---|---|
+| transaksi | `transaksi.buat`, `transaksi.ubah-harga`, `transaksi.diskon`, `transaksi.batalkan-item`, `transaksi.batalkan`, `transaksi.retur`, `transaksi.koreksi-pembayaran` |
+| giliran | `giliran.buka`, `giliran.tutup`, `giliran.tutup-paksa` |
+| persediaan | `persediaan.lihat`, `persediaan.sesuaikan`, `persediaan.opname`, `persediaan.transfer` |
+| pembelian | `pembelian.buat`, `pembelian.setujui`, `pembelian.terima` |
+| promo | `promo.lihat`, `promo.kelola` |
+| anggota | `anggota.lihat`, `anggota.kelola`, `anggota.tukar-poin` |
+| karyawan | `karyawan.lihat`, `karyawan.kelola` |
+| absensi | `absensi.koreksi`, `absensi.setujui` |
+| laporan | `laporan.operasional`, `laporan.keuangan` |
+| qris | `qris.kelola` |
+| pengaturan | `pengaturan.kelola` |
+| izin | `izin.kelola` |
+| audit | `audit.lihat` |
+| data | `data.ekspor` |
 
 ## 1. Peran dasar
 
@@ -18,9 +66,11 @@ Peran dasar mengacu ke `docs/database/01-platform.md` (`PERAN.kode`).
 | `HRD` | Staf Kepegawaian | Karyawan, shift, absensi, cuti/izin. |
 | `PELANGGAN` | Pelanggan (portal publik) | Hanya endpoint publik `/pesan/{token}` & profil membership sendiri. |
 
-Permission disimpan sebagai `Json` di `Peran.permissions`, berbentuk daftar string
-`domain:aksi` (mis. `"pesanan:buat"`, `"pembayaran:refund"`). Tabel di bawah adalah
-sumber kebenaran naratif; implementasi JSON mengikuti bentuk yang sama.
+Permission sekarang disimpan sebagai baris `PeranIzin` (join `Peran` <-> `Izin`),
+BUKAN lagi `Json` di `Peran.permissions` (lihat perubahan model ALT-DEF-002 di
+atas). Tabel di bawah adalah sumber kebenaran naratif; implementasi konkret
+adalah baris `PeranIzin` per tenant yang mengaitkan `Peran.id` ke `Izin.kode`
+pada bagian 1a.
 
 Legenda: `M` = boleh (Miliki akses penuh), `B` = boleh dengan approval Bertingkat
 (butuh supervisor/manajer ke atas), `L` = hanya Lihat (read-only), `-` = tidak boleh.
@@ -112,3 +162,11 @@ Legenda: `M` = boleh (Miliki akses penuh), `B` = boleh dengan approval Bertingka
 Matriks ini adalah rancangan; enforcement teknis (middleware permission check di
 `packages/otorisasi`, guard di setiap endpoint API) berstatus **BELUM DIKERJAKAN** -
 lihat `docs/engineering/MASTER-CHECKLIST.md` dan `docs/engineering/TRACEABILITY-MATRIX.md`.
+
+Model data ternormalisasi (`Izin`/`Peran`/`PeranIzin`/`KeanggotaanPeran`/
+`BatasIzin`/`IzinSementara`/`PermintaanPersetujuan`) sudah ada di
+`prisma/schema/schema.prisma` sejak ALT-DEF-002 (lihat
+`docs/engineering/DECISION-LOG.md` ADR-012), berstatus `SIAP_DIVERIFIKASI` di
+`docs/engineering/DEFECT-LEDGER.md` - skema dan seed literal sudah ada, tetapi
+belum ada migrasi nyata ke database (`ALT-DEF-029`) dan belum ada middleware
+enforcement (`packages/otorisasi` masih scaffold kosong).
