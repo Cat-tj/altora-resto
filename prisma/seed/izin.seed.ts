@@ -71,8 +71,43 @@ export const IZIN_SEED: readonly IzinSeedEntry[] = [
   { kode: "laporan.operasional", nama: "Lihat laporan operasional", domain: "laporan", deskripsi: "Mengakses laporan penjualan/operasional harian." },
   { kode: "laporan.keuangan", nama: "Lihat laporan keuangan", domain: "laporan", deskripsi: "Mengakses laporan keuangan internal (kas, biaya operasional)." },
 
-  // qris
-  { kode: "qris.kelola", nama: "Kelola konfigurasi QRIS", domain: "qris", deskripsi: "Mengelola konfigurasi QRIS statis outlet." },
+  // qris (ALT-DEF-015 - lihat catatan penggantian nama di bawah)
+  //
+  // CATATAN: kode lama `qris.kelola` DIGANTI NAMA menjadi `qris.konfigurasi.kelola`.
+  // MASTER-CHECKLIST.md (ALT-QRS-001/002/005) konsisten mereferensikan
+  // `qris.konfigurasi.kelola`, sedangkan seed ini dan PERMISSION-MATRIX.md
+  // memakai `qris.kelola` - dua nama untuk satu izin yang sama. Nama checklist
+  // yang dipertahankan (ia yang dirujuk requirement); tidak ada data produksi
+  // yang terdampak karena seed ini belum pernah dijalankan.
+  { kode: "qris.konfigurasi.kelola", nama: "Kelola konfigurasi QRIS", domain: "qris", deskripsi: "Membuat/mengubah/mengaktifkan/memverifikasi KonfigurasiQris statis per outlet (ALT-QRS-001/002/005). Payload disimpan terenkripsi AES-256-GCM, tidak pernah plaintext (ADR-021 Keputusan 2)." },
+  { kode: "qris.validasi", nama: "Validasi payload QRIS", domain: "qris", deskripsi: "Menjalankan parser EMV dan validator CRC16 atas payload QRIS sebelum disimpan (ALT-QRS-003/ALT-QRS-004). Umumnya dipakai internal saat unggah, bukan aksi manusia terpisah." },
+  { kode: "qris.generate", nama: "Hasilkan QRIS bernominal", domain: "qris", deskripsi: "Menyisipkan nominal tagihan ke payload QRIS statis outlet saat runtime (ALT-QRS-006). Nominal SELALU dihitung server-side dari alokasi pesanan - klien tidak pernah mengirimkannya (ADR-021 Keputusan 4)." },
+  { kode: "qris.audit.lihat", nama: "Lihat riwayat konfigurasi QRIS", domain: "qris", deskripsi: "Membaca RiwayatKonfigurasiQris (append-only) untuk menelusuri siapa mengubah konfigurasi QRIS outlet, kapan, dari nilai apa ke apa (ALT-QRS-008)." },
+
+  // pembayaran (baru, ALT-DEF-004/ALT-DEF-014 - lihat docs/keamanan/PERMISSION-MATRIX.md
+  // bagian 1a dan tabel transisi lengkap di docs/arsitektur/STATE-MACHINES.md
+  // bagian "Pembayaran". MASTER-CHECKLIST.md sudah mereferensikan kode-kode ini
+  // sejak sebelumnya (ALT-KSR-002 s.d. ALT-KSR-009, ALT-QRS-007/ALT-QRS-009)
+  // tetapi belum pernah ditambahkan ke seed literal ini - genuinely hilang.
+  // Kode koreksi/pembatalan pembayaran SENGAJA memakai `transaksi.koreksi-pembayaran`
+  // dan `transaksi.batalkan` yang SUDAH ADA di atas, bukan kode `pembayaran.*` baru.
+  { kode: "pembayaran.buat", nama: "Buat pembayaran", domain: "pembayaran", deskripsi: "Membuat Pembayaran (DRAF) beserta baris AlokasiPembayaran/PembayaranMetodeBaris, mengajukannya (DRAF -> MENUNGGU), dan mengonfirmasi pembayaran TUNAI/SALDO_TOKO (ALT-KSR-002/ALT-KSR-005)." },
+  { kode: "pembayaran.tahan", nama: "Tahan transaksi pembayaran", domain: "pembayaran", deskripsi: "Menahan/memarkir transaksi kasir yang sedang berjalan untuk dilanjutkan nanti (ALT-KSR-003)." },
+  { kode: "pembayaran.alokasi.kelola", nama: "Kelola alokasi pembayaran", domain: "pembayaran", deskripsi: "Mengatur baris AlokasiPembayaran - berapa dari satu pembayaran diterapkan ke pesanan mana (split bill/group bill, ALT-KSR-004). Hanya berlaku saat Pembayaran masih DRAF; setelah DIBAYAR perubahan alokasi wajib lewat jalur koreksi berapproval (ADR-019)." },
+  { kode: "pembayaran.qris.konfirmasi-manual", nama: "Konfirmasi manual pembayaran QRIS", domain: "pembayaran", deskripsi: "MENUNGGU_KONFIRMASI -> DIBAYAR setelah kasir memverifikasi dana masuk di aplikasi merchant (ALT-QRS-007). Izin ini adalah GUARD FINANSIAL UTAMA: tombol 'Sudah Membayar' milik pelanggan TIDAK memilikinya dan karena itu tidak pernah bisa menghasilkan DIBAYAR (ADR-020 Keputusan 2)." },
+  { kode: "pembayaran.qris.koreksi", nama: "Koreksi konfirmasi QRIS", domain: "pembayaran", deskripsi: "Mengoreksi konfirmasi manual QRIS yang keliru (ALT-QRS-009) - tercatat sebagai baris KoreksiPembayaran baru, tidak menghapus QrisKonfirmasiManual asal. Butuh approval supervisor." },
+  { kode: "pembayaran.refund", nama: "Refund pembayaran", domain: "pembayaran", deskripsi: "Mengembalikan dana ke pelanggan (ALT-KSR-007), wajib approval SUPERVISOR ke atas. Menulis PembayaranRefund; status menjadi DIKEMBALIKAN_SEBAGIAN/DIKEMBALIKAN sesuai agregat (ADR-020 Keputusan 4)." },
+  { kode: "pembayaran.struk.cetak", nama: "Cetak struk pembayaran", domain: "pembayaran", deskripsi: "Mencetak struk setelah pembayaran DIBAYAR (ALT-KSR-008). Struk adalah bukti per PERISTIWA PEMBAYARAN, bukan per pesanan (ADR-019 Keputusan 5)." },
+  { kode: "pembayaran.struk.cetak-ulang", nama: "Cetak ulang struk pembayaran", domain: "pembayaran", deskripsi: "Mencetak ulang struk transaksi lampau (ALT-KSR-009) - jumlahCetakUlang bertambah dan tercatat di audit log." },
+
+  // kasir / giliran (baru, ALT-DEF-004/ALT-DEF-014). Kode `giliran.*` lama di
+  // atas TETAP DIPERTAHANKAN (dipakai PERMISSION-MATRIX untuk buka/tutup/tutup
+  // paksa); kode `kasir.*` di bawah adalah yang direferensikan MASTER-CHECKLIST
+  // ALT-KSR-001/010/011/012/013 untuk alur rekonsiliasi & verifikasi kas.
+  { kode: "kasir.giliran.kelola", nama: "Kelola giliran kasir", domain: "kasir", deskripsi: "Membuka giliran kasir dengan modal awal dan menutupnya dengan perhitungan kas fisik (ALT-KSR-001/ALT-KSR-010)." },
+  { kode: "kasir.rekonsiliasi.lihat", nama: "Lihat rekonsiliasi kas giliran", domain: "kasir", deskripsi: "Membandingkan kas sistem vs kas fisik yang dihitung kasir saat tutup giliran (ALT-KSR-011); selisih wajib diberi catatan alasan." },
+  { kode: "kasir.giliran.verifikasi", nama: "Verifikasi selisih kas giliran", domain: "kasir", deskripsi: "Supervisor memverifikasi/menandatangani selisih kas sebelum giliran final (ALT-KSR-012)." },
+  { kode: "kasir.giliran.buka-kembali", nama: "Buka ulang giliran kasir", domain: "kasir", deskripsi: "Membuka kembali giliran yang sudah ditutup untuk koreksi (ALT-KSR-013) - wajib approval SUPERVISOR ke atas dan tercatat di audit log." },
 
   // pengaturan
   { kode: "pengaturan.kelola", nama: "Kelola pengaturan", domain: "pengaturan", deskripsi: "Mengubah pengaturan tenant/outlet." },

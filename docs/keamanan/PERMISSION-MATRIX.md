@@ -34,8 +34,10 @@ konkret per tenant, bukan payload Json.
 Daftar kode `Izin.kode` berikut adalah starter set yang di-seed lewat
 `prisma/seed/izin.seed.ts` (33 kode dasar + `akun.reset-pin` pada batch
 ALT-DEF-003/ALT-DEF-013 + 9 kode `pesanan.*` baru pada batch ALT-DEF-005/
-ALT-DEF-016 + 11 kode `dapur.*` baru pada batch ALT-DEF-006 = **54 kode** -
-lihat catatan di bawah tabel), dikelompokkan per `domain`:
+ALT-DEF-016 + 11 kode `dapur.*` baru pada batch ALT-DEF-006 + 8 kode
+`pembayaran.*` dan 4 kode `kasir.*` baru serta 3 kode `qris.*` tambahan pada
+batch ALT-DEF-004/ALT-DEF-014/ALT-DEF-015 = **69 kode** - lihat catatan di bawah
+tabel), dikelompokkan per `domain`:
 
 | Domain | Kode Izin |
 |---|---|
@@ -48,7 +50,7 @@ lihat catatan di bawah tabel), dikelompokkan per `domain`:
 | karyawan | `karyawan.lihat`, `karyawan.kelola` |
 | absensi | `absensi.koreksi`, `absensi.setujui` |
 | laporan | `laporan.operasional`, `laporan.keuangan` |
-| qris | `qris.kelola` |
+| qris | `qris.konfigurasi.kelola`, `qris.validasi`, `qris.generate`, `qris.audit.lihat` |
 | pengaturan | `pengaturan.kelola` |
 | izin | `izin.kelola` |
 | audit | `audit.lihat` |
@@ -56,6 +58,41 @@ lihat catatan di bawah tabel), dikelompokkan per `domain`:
 | akun | `akun.reset-pin` |
 | pesanan | `pesanan.buat`, `pesanan.item.tambah`, `pesanan.ubah`, `pesanan.terima`, `pesanan.tolak`, `pesanan.status.ubah`, `pesanan.batalkan`, `pesanan.retur.kelola`, `pesanan.riwayat.lihat` |
 | dapur | `dapur.stasiun.kelola`, `dapur.routing.kelola`, `dapur.tiket.buat-otomatis`, `dapur.tiket.lihat`, `dapur.tiket.prioritas`, `dapur.tiket.tahan`, `dapur.baris.siap`, `dapur.tiket.siap`, `dapur.tiket.ambil`, `dapur.cetak`, `dapur.cetak-ulang` |
+| pembayaran | `pembayaran.buat`, `pembayaran.tahan`, `pembayaran.alokasi.kelola`, `pembayaran.qris.konfirmasi-manual`, `pembayaran.qris.koreksi`, `pembayaran.refund`, `pembayaran.struk.cetak`, `pembayaran.struk.cetak-ulang` |
+| kasir | `kasir.giliran.kelola`, `kasir.rekonsiliasi.lihat`, `kasir.giliran.verifikasi`, `kasir.giliran.buka-kembali` |
+
+**Kode baru batch ALT-DEF-004/ALT-DEF-014/ALT-DEF-015 (`domain pembayaran`,
+`kasir`, `qris`):** diperiksa dulu terhadap katalog yang sudah ada sebelum
+ditambahkan, mengikuti disiplin batch-batch sebelumnya.
+
+- **8 kode `pembayaran.*`** dan **4 kode `kasir.*`** genuinely hilang -
+  `MASTER-CHECKLIST.md` sudah mereferensikan seluruhnya sejak sebelumnya
+  (`ALT-KSR-001` s.d. `ALT-KSR-013`, `ALT-QRS-007`, `ALT-QRS-009`) tetapi tidak
+  satu pun pernah ada di seed literal.
+- **`qris.kelola` DIGANTI NAMA menjadi `qris.konfigurasi.kelola`** - bukan kode
+  baru. Ditemukan bahwa seed/matriks memakai `qris.kelola` sementara
+  `MASTER-CHECKLIST.md` (`ALT-QRS-001`/`002`/`005`) konsisten memakai
+  `qris.konfigurasi.kelola`: dua nama untuk satu izin yang sama. Nama versi
+  checklist yang dipertahankan karena ia yang dirujuk requirement. Tidak ada
+  data produksi terdampak (seed belum pernah dijalankan). Dicatat sebagai
+  defect baru **ALT-DEF-034**.
+- **3 kode `qris.*` tambahan** (`qris.validasi`, `qris.generate`,
+  `qris.audit.lihat`) direferensikan langsung oleh `ALT-QRS-003`/`004`,
+  `ALT-QRS-006`, dan `ALT-QRS-008`.
+- **Koreksi/pembatalan pembayaran SENGAJA TIDAK mendapat kode baru** - dipakai
+  `transaksi.koreksi-pembayaran` dan `transaksi.batalkan` yang **sudah ada**.
+  Menambahkan `pembayaran.koreksi`/`pembayaran.batalkan` akan menduplikasi
+  makna izin yang sama persis dengan nama berbeda - persis kesalahan yang baru
+  saja ditemukan pada `qris.kelola` di atas.
+- **`keamanan.qris.enkripsi` SENGAJA TIDAK ditambahkan** meskipun
+  `MASTER-CHECKLIST.md` `ALT-SEC-007` mencantumkannya di kolom Permission.
+  Enkripsi payload at rest bukan keputusan otorisasi yang dipegang seorang
+  aktor - ia properti penyimpanan yang selalu berlaku untuk semua penulisan,
+  tanpa pengecualian dan tanpa "aktor yang boleh melewatinya". Menjadikannya
+  kode izin justru menyiratkan ada peran yang boleh menyimpan payload tanpa
+  enkripsi. Diusulkan agar kolom Permission `ALT-SEC-007` di
+  `MASTER-CHECKLIST.md` diubah menjadi `-`; dicatat sebagai bagian dari
+  **ALT-DEF-034**.
 
 **Kode baru batch ALT-DEF-006 (`domain dapur`):** diperiksa dulu terhadap
 katalog yang sudah ada - **tidak satu pun** kode `dapur.*` pernah ada di seed
@@ -175,11 +212,22 @@ Legenda: `M` = boleh (Miliki akses penuh), `B` = boleh dengan approval Bertingka
 | Kelola stasiun dapur (`dapur.stasiun.kelola`) | M | M | L | - | - | L | - | - | - |
 | Kelola aturan routing item -> stasiun (`dapur.routing.kelola`) | M | M | L | - | - | L | - | - | - |
 | **Kasir & Pembayaran** |
-| Buka/tutup giliran kasir | M | B | B | M | - | - | - | - | - |
-| Verifikasi selisih kas | M | M | M | - | - | - | - | - | - |
-| Proses pembayaran (tunai/QRIS manual/kartu) | M | M | M | M | - | - | - | - | - |
-| Refund pembayaran | M | B | B | - | - | - | - | - | - |
-| Cetak ulang struk | M | M | M | M | - | - | - | - | - |
+| Buka/tutup giliran kasir (`kasir.giliran.kelola`) | M | B | B | M | - | - | - | - | - |
+| Lihat rekonsiliasi kas giliran (`kasir.rekonsiliasi.lihat`) | M | M | M | M | - | - | - | - | - |
+| Verifikasi selisih kas (`kasir.giliran.verifikasi`) | M | M | M | - | - | - | - | - | - |
+| Buka ulang giliran kasir (`kasir.giliran.buka-kembali`) | M | M | B | - | - | - | - | - | - |
+| Proses pembayaran tunai/saldo toko (`pembayaran.buat`) | M | M | M | M | - | - | - | - | - |
+| Tahan/parkir transaksi (`pembayaran.tahan`) | M | M | M | M | - | - | - | - | - |
+| Kelola alokasi pembayaran / split bill (`pembayaran.alokasi.kelola`) | M | M | M | M | - | - | - | - | - |
+| **Konfirmasi manual pembayaran QRIS** (`pembayaran.qris.konfirmasi-manual`) | M | M | M | M | - | - | - | - | - |
+| Koreksi konfirmasi QRIS (`pembayaran.qris.koreksi`) | M | B | B | - | - | - | - | - | - |
+| Koreksi nominal pembayaran (`transaksi.koreksi-pembayaran`) | M | B | B | - | - | - | - | - | - |
+| Refund pembayaran (`pembayaran.refund`) | M | B | B | - | - | - | - | - | - |
+| Cetak struk / cetak ulang (`pembayaran.struk.cetak`, `pembayaran.struk.cetak-ulang`) | M | M | M | M | - | - | - | - | - |
+| **QRIS (konfigurasi outlet)** |
+| Kelola konfigurasi QRIS outlet (`qris.konfigurasi.kelola`) | M | B | - | - | - | - | - | - | - |
+| Hasilkan QR bernominal saat pembayaran (`qris.generate`) | M | M | M | M | - | - | - | - | - |
+| Lihat riwayat perubahan konfigurasi QRIS (`qris.audit.lihat`) | M | M | L | - | - | - | - | - | - |
 | **Promo** |
 | Kelola promo & kupon | M | B | - | - | - | - | - | - | - |
 | Terapkan promo ke pesanan | M | M | M | M | M | - | - | - | - |
@@ -201,6 +249,19 @@ Legenda: `M` = boleh (Miliki akses penuh), `B` = boleh dengan approval Bertingka
 | Lihat dashboard analitik outlet sendiri | M | M | M | L | - | - | L | L | L |
 | Lihat dashboard analitik semua outlet | M | - | - | - | - | - | - | - | - |
 
+## 2b. Guard finansial: tombol pelanggan tidak pernah melunasi (ALT-DEF-014)
+
+Transisi `Pembayaran.MENUNGGU_KONFIRMASI -> DIBAYAR` **hanya** boleh dilakukan
+aktor yang memegang `pembayaran.qris.konfirmasi-manual`
+(`OWNER`/`MANAJER`/`SUPERVISOR`/`KASIR`). Pelanggan yang mengakses sistem lewat
+token QR meja **tidak memegang izin apa pun** (`izin.kode` kosong) dan hanya
+dapat memicu `MENUNGGU -> MENUNGGU_KONFIRMASI` lewat tombol "Sudah Membayar".
+
+Tidak boleh ada jalur kode apa pun dari endpoint yang dapat diakses pelanggan
+menuju status `DIBAYAR`. Tanpa guard ini, siapa pun yang memegang link QR meja
+dapat menandai tagihannya sendiri lunas. Lihat ADR-020 Keputusan 2 dan tabel
+transisi di `docs/arsitektur/STATE-MACHINES.md` bagian 2.
+
 ## 3. Aturan approval bertingkat (kolom `B`)
 
 - **Buka ulang giliran kasir** setelah `DITUTUP_MENUNGGU_VERIFIKASI`: wajib approval
@@ -212,7 +273,22 @@ Legenda: `M` = boleh (Miliki akses penuh), `B` = boleh dengan approval Bertingka
   sama sekali (butuh `DIRETUR` sebagai gantinya) begitu status mencapai
   `SIAP`/`DISAJIKAN`/`SELESAI`.
 - **Refund pembayaran**: wajib approval `SUPERVISOR` ke atas, dicatat di
-  `PembayaranRefund.disetujuiOlehId`.
+  `PembayaranRefund.disetujuiOlehId`. Status pembayaran menjadi
+  `DIKEMBALIKAN_SEBAGIAN`/`DIKEMBALIKAN` sesuai agregat `SUM(refund.jumlah)`
+  (ALT-DEF-014/ADR-020 Keputusan 4).
+- **Koreksi pembayaran** (`transaksi.koreksi-pembayaran`) dan **koreksi
+  konfirmasi QRIS** (`pembayaran.qris.koreksi`): wajib approval `SUPERVISOR` ke
+  atas; append-only lewat `KoreksiPembayaran` (`jumlahSebelum`/`jumlahSesudah`),
+  tidak pernah menimpa baris `Pembayaran` asal (ALT-DEF-014/ADR-019 Keputusan 6).
+- **Perubahan alokasi pembayaran setelah `DIBAYAR`**: TIDAK boleh lewat
+  `pembayaran.alokasi.kelola` biasa - wajib melalui jalur koreksi berapproval di
+  atas. `pembayaran.alokasi.kelola` hanya berlaku selama `Pembayaran` masih
+  `DRAF`. Tanpa aturan ini, uang dapat dipindahkan antar pesanan diam-diam.
+- **Konfigurasi QRIS outlet** (`qris.konfigurasi.kelola`): `MANAJER` ditandai `B`
+  karena ini konfigurasi yang menentukan ke rekening siapa uang pelanggan
+  mengalir - perubahannya wajib diverifikasi pihak kedua
+  (`KonfigurasiQris.diverifikasiOlehId`) sebelum diaktifkan, dan setiap
+  perubahan tercatat append-only di `RiwayatKonfigurasiQris` (`ALT-QRS-008`).
 - **Batalkan sisa PO** setelah `DITERIMA_SEBAGIAN`: wajib approval `MANAJER` ke atas.
 - **Verifikasi rekap kas harian**: wajib `SUPERVISOR` ke atas, dicatat di
   `RekapKasHarian.diverifikasiOlehId`.

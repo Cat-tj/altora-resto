@@ -64,16 +64,16 @@ di bawah untuk detail per baris):
 | MENUNGGU_PERSETUJUAN | DITERIMA | KASIR/PELAYAN/MANAJER (izin `pesanan.terima`) | Pesanan belum kadaluarsa (mis. sesi QR meja masih aktif) | Tidak ada efek samping tambahan | `order.accepted` | `pesanan_qr_disetujui_staf` |
 | MENUNGGU_PERSETUJUAN | DITOLAK | KASIR/PELAYAN/MANAJER (izin `pesanan.tolak`) | `alasan` wajib diisi (non-empty) | Tulis 1 baris `PesananPenolakan` (`alasan`, `ditolakOlehId`) | `order.rejected` | `pesanan_qr_ditolak_staf_dengan_alasan` |
 | DITOLAK | DIKIRIM | Pemesan asli (pelanggan via token QR, atau pelayan yang mengoreksi) | Sesi/token QR meja masih aktif (kanal `QR_PELANGGAN`); pesanan diedit dulu (lihat `PesananPerubahan`) sebelum dikirim ulang | Tidak menghapus baris `Pesanan`/`PesananPenolakan` lama (lihat ADR-017 Keputusan 3, TODO batch berikutnya) | `order.submitted` | `pesanan_ditolak_dikirim_ulang_retry` |
-| DITERIMA | MENUNGGU_PEMBAYARAN | sistem (otomatis) | Kebijakan tenant `wajibBayarDimuka = true` (mis. QR self-order tanpa staf pengawas) | Buat baris `Pembayaran` berstatus `MENUNGGU` | `payment.awaiting_confirmation` | `pesanan_prepaid_menunggu_pembayaran` |
+| DITERIMA | MENUNGGU_PEMBAYARAN | sistem (otomatis) | Kebijakan tenant `wajibBayarDimuka = true` (mis. QR self-order tanpa staf pengawas) | Buat baris `Pembayaran` berstatus `DRAF` beserta baris `AlokasiPembayaran` ke pesanan ini (ALT-DEF-014/ADR-019) | `payment.awaiting_confirmation` | `pesanan_prepaid_menunggu_pembayaran` |
 | DITERIMA | DIKONFIRMASI | sistem (otomatis) | Kebijakan tenant `wajibBayarDimuka = false`, ATAU `kanal IN (KASIR, PELAYAN)` (bayar di akhir) | Tidak ada efek samping tambahan | `order.updated` | `pesanan_tanpa_prepaid_langsung_konfirmasi` |
-| MENUNGGU_PEMBAYARAN | DIKONFIRMASI | KASIR (verifikasi pembayaran, izin `pembayaran.buat`) | `Pembayaran` terkait berstatus `DIKONFIRMASI` dan `totalDibayar >= totalAkhir` (atau sesuai kebijakan DP tenant) | Update baris `Pembayaran` menjadi `DIKONFIRMASI` | `payment.confirmed` | `pesanan_prepaid_lunas_dikonfirmasi` |
+| MENUNGGU_PEMBAYARAN | DIKONFIRMASI | KASIR (verifikasi pembayaran, izin `pembayaran.buat`) | Total `AlokasiPembayaran.jumlah` untuk pesanan ini atas `Pembayaran` berstatus `DIBAYAR` sudah `>= totalAkhir` (atau sesuai kebijakan DP tenant) - ALT-DEF-014/ADR-019 | Update baris `Pembayaran` terkait menjadi `DIBAYAR` (lihat state machine Pembayaran, bagian 2) | `payment.confirmed` | `pesanan_prepaid_lunas_dikonfirmasi` |
 | MENUNGGU_PEMBAYARAN | DIBATALKAN | sistem (batas waktu bayar terlampaui) atau pelanggan (batalkan sendiri) | Batas waktu pembayaran (kebijakan tenant) terlampaui TANPA pembayaran masuk | Tulis 1 baris `PesananPembatalan` (`alasan = "Batas waktu pembayaran dimuka terlampaui"` atau alasan pelanggan) | `order.cancelled` | `pesanan_prepaid_timeout_dibatalkan` |
 | DIKONFIRMASI | DIKIRIM_KE_DAPUR | sistem/KASIR/PELAYAN (izin `pesanan.status.ubah`) | Seluruh `ItemPesanan` berstatus valid untuk dikirim (bukan `DIBATALKAN`/`DIRETUR`) | Buat **satu atau lebih** `TiketDapur` - satu per stasiun tujuan per gelombang, sesuai `AturanRoutingDapur` (kardinalitas 1:N sejak ALT-DEF-006/ADR-018, lihat bagian 5); reservasi/pengurangan stok bahan sesuai resep bila berlaku | `order.sent_to_kitchen` | `pesanan_dikonfirmasi_kirim_ke_dapur` |
 | DIKIRIM_KE_DAPUR | SEDANG_DISIAPKAN | DAPUR (event internal `TiketDapur.status = SEDANG_DISIAPKAN`, lihat bagian 5) | Minimal 1 `TiketDapur` milik pesanan ini masuk `SEDANG_DISIAPKAN` (minimal 1 baris `TiketDapurBaris` mulai dimasak) | Tidak ada efek samping tambahan di level Pesanan (state dapur granular ada di `TiketDapur`) | `kitchen.started` | `pesanan_dapur_mulai_diproses` |
 | SEDANG_DISIAPKAN | SIAP | DAPUR (event internal `TiketDapur.status = SIAP`) | **SELURUH** `TiketDapur` milik pesanan ini berstatus `SIAP`/`DISAJIKAN` (masing-masing tiket sendiri baru `SIAP` bila seluruh `TiketDapurBaris`-nya `SIAP`) - agregat lintas-stasiun sejak ALT-DEF-006/ADR-018 | Notifikasi in-app ke pelayan (`Notification.tipe = PESANAN_SIAP`) | `kitchen.ready` | `pesanan_seluruh_tiket_dapur_siap` |
 | SIAP | DISAJIKAN | PELAYAN (izin `pesanan.status.ubah`) | - | Update `Meja.status` terkait jika relevan (di luar scope perubahan skema batch ini) | `order.served` | `pesanan_disajikan_ke_meja` |
-| DISAJIKAN | SELESAI | KASIR (verifikasi pelunasan, izin `pembayaran.buat`/`pesanan.status.ubah`) | Total `Pembayaran` yang `DIKONFIRMASI` untuk pesanan ini `>= totalAkhir` | Tidak ada efek samping tambahan (pelunasan sudah tercatat di `Pembayaran`) | `order.completed` | `pesanan_lunas_selesai` |
-| SELESAI | DIRETUR | KASIR/MANAJER (izin `pesanan.retur.kelola`), butuh approval supervisor | Dalam batas waktu kebijakan retur tenant; model detail `PesananRetur` adalah scope `ALT-PES-018`/`ALT-DEF-014` (batch berikutnya) | Di luar scope batch ini (lihat `ALT-DEF-014`) | `order.returned` | `pesanan_retur_setelah_selesai` (batch berikutnya) |
+| DISAJIKAN | SELESAI | KASIR (verifikasi pelunasan, izin `pembayaran.buat`/`pesanan.status.ubah`) | Total `AlokasiPembayaran.jumlah` untuk pesanan ini atas `Pembayaran` berstatus `DIBAYAR` `>= totalAkhir` (agregat lintas-pembayaran sejak ALT-DEF-014/ADR-019 - mendukung pembayaran bertahap) | Tidak ada efek samping tambahan (pelunasan sudah tercatat di `Pembayaran`) | `order.completed` | `pesanan_lunas_selesai` |
+| SELESAI | DIRETUR | KASIR/MANAJER (izin `pesanan.retur.kelola`), butuh approval supervisor | Dalam batas waktu kebijakan retur tenant; model detail `PesananRetur` adalah scope `ALT-PES-018` (batch berikutnya); refund dananya lewat `PembayaranRefund` (bagian 2) | Refund tercatat sebagai baris `PembayaranRefund`; model `PesananRetur` di luar scope batch ini (`ALT-PES-018`) | `order.returned` | `pesanan_retur_setelah_selesai` (batch berikutnya) |
 | DRAF | DIBATALKAN | Pemesan asli / KASIR/PELAYAN (izin `pesanan.batalkan`) | - | Tulis 1 baris `PesananPembatalan` | `order.cancelled` | `pesanan_draf_dibatalkan` |
 | DIKIRIM | DIBATALKAN | KASIR/PELAYAN (izin `pesanan.batalkan`) | - | Tulis 1 baris `PesananPembatalan` | `order.cancelled` | `pesanan_dikirim_dibatalkan` |
 | MENUNGGU_PERSETUJUAN | DIBATALKAN | KASIR/PELAYAN (izin `pesanan.batalkan`) | Dibatalkan sebelum sempat diputuskan terima/tolak | Tulis 1 baris `PesananPembatalan` | `order.cancelled` | `pesanan_menunggu_persetujuan_dibatalkan` |
@@ -94,18 +94,99 @@ Catatan tambahan (bukan transisi status, tetapi bagian dari alur `ALT-PES-010`):
 
 ## 2. Pembayaran
 
+**ALT-DEF-004/ALT-DEF-014 (correction-loop lanjutan):** diagram dan tabel di bawah
+menggantikan diagram lama 5-status (`MENUNGGU`/`DIKONFIRMASI`/`GAGAL`/
+`DIBATALKAN`/`DIREFUND`), yang bahkan menyebut jalur "kartu approved" - metode
+yang tidak ada dalam produk ini (`ALT-QRS-010`). Lihat ADR-019 (restrukturisasi
+alokasi pembayaran), ADR-020 (state machine ini), dan ADR-021 (konfigurasi QRIS)
+di `docs/engineering/DECISION-LOG.md`.
+
+**Perubahan kardinalitas penting:** satu `Pembayaran` **tidak lagi** terikat 1:1
+ke satu `Pesanan`. Ia adalah satu PERISTIWA penerimaan uang; keterkaitannya ke
+pesanan selalu lewat baris `AlokasiPembayaran`. State machine di bawah berlaku
+**per-Pembayaran**, bukan per-pesanan - status pelunasan sebuah `Pesanan` adalah
+turunan AGREGAT dari alokasi seluruh pembayaran yang berstatus `DIBAYAR`.
+
 ```mermaid
 stateDiagram-v2
-    [*] --> MENUNGGU: pembayaran diinisiasi
-    MENUNGGU --> DIKONFIRMASI: tunai diterima / QRIS diverifikasi manual / kartu approved
-    MENUNGGU --> GAGAL: metode ditolak/timeout
+    [*] --> DRAF: kasir menyusun pembayaran (baris metode + alokasi)
+    DRAF --> MENUNGGU: pembayaran diajukan, menunggu uang masuk
+    DRAF --> DIBATALKAN: dibatalkan sebelum diajukan
+    MENUNGGU --> DIBAYAR: tunai diterima / saldo toko didebit (kasir)
+    MENUNGGU --> MENUNGGU_KONFIRMASI: pelanggan menekan "Sudah Membayar" (QRIS/transfer)
+    MENUNGGU --> GAGAL: timeout / saldo tidak cukup
     MENUNGGU --> DIBATALKAN: dibatalkan sebelum selesai
-    DIKONFIRMASI --> DIREFUND: refund disetujui supervisor
+    MENUNGGU_KONFIRMASI --> DIBAYAR: KASIR memverifikasi notifikasi merchant (guard)
+    MENUNGGU_KONFIRMASI --> GAGAL: kasir tidak menemukan dana masuk
+    MENUNGGU_KONFIRMASI --> DIBATALKAN: dibatalkan sebelum diverifikasi
     GAGAL --> MENUNGGU: dicoba ulang dgn metode lain
-    DIKONFIRMASI --> [*]
-    DIREFUND --> [*]
+    DIBAYAR --> DIKOREKSI: koreksi salah input nominal (approval)
+    DIKOREKSI --> DIBAYAR: koreksi selesai, nilai baru berlaku
+    DIBAYAR --> DIKEMBALIKAN_SEBAGIAN: refund sebagian disetujui supervisor
+    DIBAYAR --> DIKEMBALIKAN: refund penuh disetujui supervisor
+    DIKEMBALIKAN_SEBAGIAN --> DIKEMBALIKAN: sisa terakhir direfund
+    DIBAYAR --> [*]
+    DIKEMBALIKAN --> [*]
     DIBATALKAN --> [*]
 ```
+
+Catatan penting yang TIDAK terlihat langsung di diagram:
+
+- **`MENUNGGU_KONFIRMASI -> DIBAYAR` HANYA boleh dilakukan KASIR.** Tombol
+  "Sudah Membayar" milik pelanggan **tidak pernah** menghasilkan `DIBAYAR` -
+  paling jauh `MENUNGGU_KONFIRMASI`. Ini guard keamanan finansial paling penting
+  di domain ini (ADR-020 Keputusan 2, ADR-021 Keputusan 4): tanpa guard ini,
+  siapa pun yang memegang link QR meja dapat menandai tagihannya sendiri lunas.
+  Tidak boleh ada jalur kode apa pun dari endpoint yang dapat diakses pelanggan
+  menuju `DIBAYAR`.
+- **`DIBATALKAN` TIDAK dapat dicapai dari `DIBAYAR`.** Uang yang sudah diterima
+  tidak "dibatalkan" - jalurnya adalah `DIKOREKSI` (salah input) atau
+  `DIKEMBALIKAN_SEBAGIAN`/`DIKEMBALIKAN` (refund), keduanya append-only.
+- **Kedua invariant jumlah (ADR-019 Keputusan 4) wajib terpenuhi pada SETIAP
+  transisi keluar dari `DRAF`** dan diverifikasi ulang setiap kali baris metode/
+  alokasi berubah:
+  `SUM(PembayaranMetodeBaris.jumlah) == Pembayaran.jumlah` DAN
+  `SUM(AlokasiPembayaran.jumlah) == Pembayaran.jumlah`. Validasi dilakukan
+  server-side di dalam satu transaksi DB - Prisma/Postgres tidak menegakkannya.
+  Ini tidak diulang di kolom `guard` tiap baris.
+- **`DIKEMBALIKAN_SEBAGIAN` vs `DIKEMBALIKAN`** ditentukan agregat
+  `SUM(PembayaranRefund.jumlah)` terhadap `Pembayaran.jumlah` (`<` vs `==`);
+  `>` wajib ditolak (ADR-020 Keputusan 4).
+
+### Tabel transisi lengkap
+
+| statusAsal | statusTujuan | aktorDiizinkan | guard | sideEffect | auditEvent | testRequired |
+|---|---|---|---|---|---|---|
+| (baru) | DRAF | KASIR (izin `pembayaran.buat`) atau sistem (pesanan prepaid, `DITERIMA -> MENUNGGU_PEMBAYARAN`) | Giliran kasir sedang `DIBUKA` (`ALT-KSR-001`) untuk pembayaran yang diinisiasi kasir | Buat 1 baris `Pembayaran` (`status = DRAF`, `jumlah` dihitung server-side) beserta baris `PembayaranMetodeBaris` dan `AlokasiPembayaran` awal | `payment.created` | `pembayaran_dibuat_sebagai_draf` |
+| DRAF | MENUNGGU | KASIR (izin `pembayaran.buat`) | **Kedua invariant jumlah terpenuhi**; minimal 1 baris `AlokasiPembayaran` dan 1 baris `PembayaranMetodeBaris`; setiap `Pesanan` yang dialokasikan milik outlet yang sama | Untuk metode `QRIS_MANUAL`: hasilkan payload QRIS bernominal dari `KonfigurasiQris` outlet yang berstatus `AKTIF` (`ALT-QRS-006`, nominal SELALU server-side) | `payment.awaiting_confirmation` | `pembayaran_draf_diajukan_invariant_terpenuhi` |
+| DRAF | DIBATALKAN | KASIR (izin `transaksi.batalkan`) | Belum ada uang diterima | Tidak ada mutasi kas; baris `Pembayaran` tetap ada (no hard-delete, ADR-006) | `payment.cancelled` | `pembayaran_draf_dibatalkan` |
+| MENUNGGU | DIBAYAR | KASIR (izin `pembayaran.buat`) | Metode `TUNAI` (`totalDiterima >= jumlah`, `kembalian = totalDiterima - jumlah`) ATAU `SALDO_TOKO` (saldo pelanggan mencukupi). **Metode `QRIS_MANUAL`/`TRANSFER_MANUAL` TIDAK boleh lewat jalur ini** - wajib melalui `MENUNGGU_KONFIRMASI` | Set `dikonfirmasiOlehId`/`dikonfirmasiPada`; tulis `TransaksiKasir` (`jenis = PENJUALAN`); buat `Struk`; untuk tiap `AlokasiPembayaran`, evaluasi ulang pelunasan `Pesanan` terkait (`Pesanan` menjadi `SELESAI`/`DIKONFIRMASI` bila total alokasi `DIBAYAR` `>= totalAkhir`); buka laci kas bila `TUNAI` (`ALT-UX-011`) | `payment.confirmed` | `pembayaran_tunai_langsung_dibayar_dgn_kembalian` |
+| MENUNGGU | MENUNGGU_KONFIRMASI | **Pelanggan** via token QR meja aktif (tanpa `izin.kode`) ATAU KASIR/PELAYAN atas nama pelanggan | Metode `QRIS_MANUAL` atau `TRANSFER_MANUAL`; pelanggan menekan "Sudah Membayar". **Tidak ada guard yang dapat membuat aksi ini menghasilkan `DIBAYAR`** (ADR-020 Keputusan 2) | Notifikasi in-app ke kasir outlet (`Notification.tipe = PEMBAYARAN_PERLU_KONFIRMASI`) - kasir diminta memeriksa notifikasi merchant | `payment.awaiting_confirmation` | `pembayaran_tombol_pelanggan_tidak_pernah_menghasilkan_dibayar` |
+| MENUNGGU | GAGAL | sistem (timeout) atau KASIR | Batas waktu pembayaran terlampaui, ATAU saldo toko tidak mencukupi (`SALDO_TOKO`) | Tidak ada mutasi kas; alokasi tidak dihitung sebagai pelunasan | `payment.failed` | `pembayaran_menunggu_timeout_gagal` |
+| MENUNGGU | DIBATALKAN | KASIR (izin `transaksi.batalkan`) atau pelanggan (self-cancel) | Belum ada uang diterima | Tidak ada mutasi kas | `payment.cancelled` | `pembayaran_menunggu_dibatalkan` |
+| MENUNGGU_KONFIRMASI | DIBAYAR | **HANYA KASIR/SUPERVISOR** (izin `pembayaran.qris.konfirmasi-manual`) | Kasir telah memverifikasi dana masuk di aplikasi merchant/mutasi rekening. **Aktor pelanggan DILARANG mutlak pada transisi ini** - endpoint yang dapat diakses lewat token QR meja tidak boleh punya jalur menuju status ini | Tulis 1 baris `QrisKonfirmasiManual` (`diverifikasiOlehId`, `catatanKasir` opsional) **dalam transaksi yang sama**; set `dikonfirmasiOlehId`/`dikonfirmasiPada`; tulis `TransaksiKasir`; buat `Struk`; evaluasi ulang pelunasan tiap `Pesanan` teralokasi | `payment.confirmed` | `pembayaran_qris_hanya_kasir_yang_boleh_mengonfirmasi` |
+| MENUNGGU_KONFIRMASI | GAGAL | KASIR/SUPERVISOR (izin `pembayaran.qris.konfirmasi-manual`) | Kasir TIDAK menemukan dana masuk setelah memeriksa notifikasi merchant | Tidak ada baris `QrisKonfirmasiManual` yang ditulis (tidak ada yang diverifikasi) | `payment.failed` | `pembayaran_qris_dana_tidak_ditemukan_gagal` |
+| MENUNGGU_KONFIRMASI | DIBATALKAN | KASIR (izin `transaksi.batalkan`) | Dibatalkan sebelum sempat diverifikasi (mis. pelanggan membatalkan klaimnya) | Tidak ada mutasi kas | `payment.cancelled` | `pembayaran_menunggu_konfirmasi_dibatalkan` |
+| GAGAL | MENUNGGU | KASIR (izin `pembayaran.buat`) | Pelanggan mencoba ulang dengan metode lain - baris `PembayaranMetodeBaris` diganti, kedua invariant jumlah diverifikasi ulang | Baris metode lama TIDAK dihapus diam-diam bila sudah ada uang tercatat; pada kasus `GAGAL` belum ada uang masuk sehingga penggantian baris aman | `payment.retried` | `pembayaran_gagal_dicoba_ulang_metode_lain` |
+| DIBAYAR | DIKOREKSI | SUPERVISOR ke atas (izin `transaksi.koreksi-pembayaran`, `BatasIzin.wajibPersetujuanManajer`) | Approval supervisor wajib; `alasan` wajib diisi | Tulis 1 baris `KoreksiPembayaran` (`jumlahSebelum`, `jumlahSesudah`, `dikoreksiOlehId`) - baris `Pembayaran` asli TIDAK ditimpa diam-diam; tulis `TransaksiKasir` (`jenis = KOREKSI`) | `payment.corrected` | `pembayaran_dikoreksi_tercatat_sebagai_baris_baru` |
+| DIKOREKSI | DIBAYAR | SUPERVISOR (izin `transaksi.koreksi-pembayaran`) | Nilai baru berlaku; **kedua invariant jumlah wajib diverifikasi ulang** terhadap `jumlah` yang sudah dikoreksi | Perbarui baris `AlokasiPembayaran`/`PembayaranMetodeBaris` terkait dalam transaksi yang sama; evaluasi ulang pelunasan tiap `Pesanan` teralokasi | `payment.confirmed` (payload koreksi) | `pembayaran_koreksi_selesai_invariant_diverifikasi_ulang` |
+| DIBAYAR | DIKEMBALIKAN_SEBAGIAN | SUPERVISOR ke atas (izin `pembayaran.refund`, wajib approval) | `SUM(PembayaranRefund.jumlah)` setelah refund ini `< Pembayaran.jumlah`; `alasan` wajib | Tulis 1 baris `PembayaranRefund`; tulis `TransaksiKasir` (`jenis = REFUND`); mutasi stok pembalik bila retur item menyertai (`ALT-PES-018`) | `payment.refunded_partial` | `pembayaran_refund_sebagian_status_dikembalikan_sebagian` |
+| DIBAYAR | DIKEMBALIKAN | SUPERVISOR ke atas (izin `pembayaran.refund`, wajib approval) | `SUM(PembayaranRefund.jumlah)` setelah refund ini `== Pembayaran.jumlah` (refund penuh sekaligus); `>` wajib DITOLAK | Tulis 1 baris `PembayaranRefund`; tulis `TransaksiKasir` (`jenis = REFUND`); alokasi pembayaran ini tidak lagi dihitung sebagai pelunasan pesanan teralokasi | `payment.refunded` | `pembayaran_refund_penuh_status_dikembalikan` |
+| DIKEMBALIKAN_SEBAGIAN | DIKEMBALIKAN | SUPERVISOR ke atas (izin `pembayaran.refund`, wajib approval) | Refund terakhir membuat `SUM(PembayaranRefund.jumlah) == Pembayaran.jumlah` | Tulis 1 baris `PembayaranRefund` tambahan (baris refund sebelumnya TIDAK diubah) | `payment.refunded` | `pembayaran_sisa_terakhir_direfund_jadi_dikembalikan` |
+
+Catatan tambahan (bukan transisi status `Pembayaran`):
+
+- **Alokasi ke pesanan** (`AlokasiPembayaran`) dapat ditambah/diubah selama
+  `Pembayaran` masih `DRAF`. Setelah `DIBAYAR`, perubahan alokasi HANYA lewat
+  jalur `DIBAYAR -> DIKOREKSI -> DIBAYAR` (approval supervisor) - tidak boleh ada
+  jalur diam-diam yang memindahkan uang antar pesanan.
+  `auditEvent`: `payment.allocation_changed`. `testRequired`:
+  `alokasi_pembayaran_tidak_bisa_diubah_diam_diam_setelah_dibayar`.
+- **Konfigurasi QRIS** (`KonfigurasiQris`) punya siklus hidupnya sendiri
+  (`DRAF -> MENUNGGU_VERIFIKASI -> AKTIF -> NONAKTIF`, enum
+  `StatusKonfigurasiQris`) yang TERPISAH dari state machine pembayaran ini.
+  Setiap transisinya wajib menulis 1 baris `RiwayatKonfigurasiQris`
+  (append-only, `ALT-QRS-008`). Lihat `docs/database/16-qris.md` dan ADR-021.
 
 ## 3. Giliran Kasir (Shift)
 

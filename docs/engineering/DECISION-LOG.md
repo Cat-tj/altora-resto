@@ -910,9 +910,261 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
   `ALT-DEF-006` diset `SIAP_DIVERIFIKASI` (bukan `DITUTUP`) karena alasan
   yang sama seperti batch-batch sebelumnya.
 
+## ADR-019: Pembayaran sebagai peristiwa + `AlokasiPembayaran`, dan penyempitan scope metode bayar (ALT-DEF-004, ALT-DEF-014)
+
+- **Status:** DITERIMA
+- **Konteks:** `ALT-DEF-014` mencatat `Pembayaran` terikat 1:1 ke satu `Pesanan`
+  lewat kolom `pesananId` (bahkan sudah composite-FK sejak ADR-013), sehingga
+  dua kebutuhan bisnis nyata tidak dapat dimodelkan sama sekali: (a) satu
+  pesanan dilunasi bertahap oleh beberapa pembayaran (`ALT-KSR-005`), dan (b)
+  satu pembayaran melunasi beberapa pesanan sekaligus (group/patungan bill,
+  `ALT-KSR-004`). `ALT-DEF-004` mencatat enum `KodeMetodeBayar` masih memuat
+  `KARTU_DEBIT`/`KARTU_KREDIT`/`EWALLET` - sisa scope lama yang bertentangan
+  langsung dengan `ALT-QRS-010` (larangan integrasi payment gateway/bank/
+  e-wallet) dan ADR-003. Batch ADR-013 sebelumnya secara eksplisit MENUNDA
+  business-logic split bill dan hanya mengerjakan tenant-safety-nya; batch
+  inilah yang mengerjakannya.
+- **Keputusan 1 - Hapus `Pembayaran.pesananId` (beserta composite-FK-nya),
+  ganti dengan model baru `AlokasiPembayaran`.** `Pembayaran` kini murni
+  merepresentasikan PERISTIWA "sejumlah uang diterima dalam satu tindakan
+  kasir": `jumlah` (total peristiwa), `totalDiterima`/`kembalian` (khusus alur
+  tunai), `status`, `dikonfirmasiOlehId`. `AlokasiPembayaran(id, tenantId,
+  pembayaranId, pesananId, jumlah, createdAt)` yang menjawab "uang ini melunasi
+  tagihan yang mana, berapa". Kardinalitas menjadi N:M lewat tabel alokasi,
+  yang memenuhi (a) dan (b) sekaligus dengan satu model, bukan dua.
+  Alternatif yang dipertimbangkan: (i) mempertahankan `pesananId` sebagai
+  kolom nullable "pesanan utama" di samping tabel alokasi - DITOLAK karena
+  menciptakan dua sumber kebenaran untuk pertanyaan yang sama dan pasti akan
+  menyimpang (kode lama akan terus membaca `pesananId`); (ii) menambah
+  `PesananPembayaran` join-table tanpa kolom `jumlah` - DITOLAK karena tanpa
+  nominal per pasangan, "berapa yang sudah dibayar untuk pesanan X" tidak
+  terjawab pada group bill.
+  Kolom `totalDibayar` lama DIGANTI NAMA menjadi `jumlah` - nama lama
+  menyiratkan "total tagihan pesanan", padahal satu `Pembayaran` kini bisa
+  bernilai lebih kecil dari total pesanan (bayar sebagian) maupun lebih besar
+  (group bill).
+- **Keputusan 2 - `@@unique([pembayaranId, pesananId])` pada
+  `AlokasiPembayaran`.** Paling banyak satu baris alokasi per pasangan
+  (pembayaran, pesanan). Bila nilai alokasi untuk pasangan yang sama perlu
+  berubah, baris yang ada DIPERBARUI dan perubahannya dicatat lewat
+  `KoreksiPembayaran` - bukan ditambah baris kedua. Alternatif "tanpa
+  constraint, boleh banyak baris per pasangan" DITOLAK karena membuat
+  pertanyaan sesederhana "berapa yang pembayaran Y bayarkan untuk pesanan X"
+  menjadi agregasi, tanpa manfaat ekspresif apa pun.
+- **Keputusan 3 - `PembayaranMetodeBaris` DIPERTAHANKAN sebagai mekanisme
+  pembayaran campuran, dan enum `CAMPURAN` TIDAK PERNAH ditambahkan.**
+  Pembayaran campuran (tunai 50.000 + QRIS manual 30.000) = SATU `Pembayaran`
+  dengan DUA baris `PembayaranMetodeBaris`. "Campuran" adalah properti
+  kardinalitas tabel baris metode, bukan sebuah nilai metode bayar. Menambahkan
+  `CAMPURAN` ke `KodeMetodeBayar` akan membuat nilai enum yang tidak pernah
+  bisa dijawab pertanyaan "berapa rupiah masuk lewat metode ini" - persis
+  kerusakan yang dihindari desain ini. Perlu dicatat bahwa
+  `AlokasiPembayaran` dan `PembayaranMetodeBaris` menjawab pertanyaan yang
+  BERBEDA dan keduanya diperlukan: alokasi = "uang keluar ke tagihan mana",
+  baris metode = "uang masuk lewat instrumen apa". Rencana koreksi lama di
+  `DEFECT-LEDGER.md` ALT-DEF-004 yang menyebut campuran dimodelkan sebagai
+  "beberapa baris `AlokasiPembayaran`" adalah KELIRU dan dikoreksi di sini.
+- **Keputusan 4 - Invariant jumlah adalah invariant LEVEL-APLIKASI, bukan
+  constraint database.** Dua invariant wajib, untuk setiap `Pembayaran`:
+  1. `SUM(PembayaranMetodeBaris.jumlah) == Pembayaran.jumlah`
+  2. `SUM(AlokasiPembayaran.jumlah) == Pembayaran.jumlah`
+  Prisma maupun Postgres tidak dapat menegakkan agregat lintas-baris secara
+  deklaratif (butuh trigger atau materialized constraint - keduanya di luar
+  DSL Prisma dan menambah kompleksitas operasional besar). **Keputusan:**
+  validasi WAJIB dilakukan server-side di dalam SATU transaksi database yang
+  sama dengan penulisan `Pembayaran` + seluruh barisnya - bukan sebagai
+  pemeriksaan terpisah setelah commit. Tidak ada jalur penulisan `Pembayaran`
+  yang boleh melewati validator ini. Integration test yang WAJIB ada (batch
+  berikutnya, belum ditulis pada batch ini):
+  `pembayaran_invariant_sum_metode_sama_dengan_jumlah`,
+  `pembayaran_invariant_sum_alokasi_sama_dengan_jumlah`,
+  `pembayaran_invariant_gagal_membatalkan_seluruh_transaksi`.
+  Yang DIKERJAKAN pada batch ini hanyalah pemodelannya + architecture test
+  bahwa model/constraint-nya ada - BUKAN penegakan runtime-nya.
+- **Keputusan 5 - `Struk` tetap 1:1 dengan `Pembayaran` (bukan dengan
+  `Pesanan`).** Setelah `Pembayaran` tidak lagi 1:1 dengan `Pesanan`,
+  konsekuensinya: pada pembayaran bertahap satu pesanan dapat menghasilkan
+  BEBERAPA struk (satu per pembayaran - ini benar secara akuntansi, tiap
+  penerimaan uang punya buktinya sendiri), dan pada group bill satu struk
+  mencakup BEBERAPA pesanan (isinya dirender dari `AlokasiPembayaran`
+  pembayaran tsb). Alternatif "struk per pesanan" DITOLAK: struk adalah bukti
+  penerimaan uang, dan uang diterima per peristiwa pembayaran.
+- **Keputusan 6 - `KoreksiPembayaran` sebagai model baru, append-only.**
+  `id, tenantId, pembayaranId, alasan, jumlahSebelum, jumlahSesudah,
+  dikoreksiOlehId, createdAt`. Mengikuti ADR-006 (no hard-delete finansial):
+  kesalahan input nominal tidak menimpa baris `Pembayaran` secara diam-diam -
+  status pembayaran menjadi `DIKOREKSI` dan nilai sebelum/sesudah tercatat.
+- **Keputusan 7 - Metode bayar dipersempit menjadi PERSIS empat nilai:**
+  `TUNAI`, `TRANSFER_MANUAL`, `QRIS_MANUAL`, `SALDO_TOKO`.
+  `KARTU_DEBIT`/`KARTU_KREDIT`/`EWALLET` DIHAPUS seluruhnya (schema + seluruh
+  dokumen). `TRANSFER_MANUAL` (transfer bank yang diverifikasi kasir dari
+  mutasi rekening) dan `SALDO_TOKO` (store credit, lihat `ALT-DEF-018`) BARU
+  ditambahkan - keduanya ada di scope produk tetapi belum pernah masuk enum.
+  Catatan cakupan: `SALDO_TOKO` di sini hanya berupa nilai enum metode bayar;
+  model ledger saldo toko (`LedgerSaldoToko`) adalah scope `ALT-DEF-018` dan
+  SENGAJA tidak dikerjakan di batch ini.
+- **Keputusan 8 - Tenant-safety menyusul ADR-013 untuk seluruh anak
+  `Pembayaran`.** `Pembayaran` mendapat `@@unique([tenantId, id])`;
+  `AlokasiPembayaran`, `PembayaranMetodeBaris`, `KoreksiPembayaran`,
+  `QrisKonfirmasiManual`, `Struk`, dan `PembayaranRefund` semuanya mendapat
+  kolom `tenantId` sendiri + composite-FK `(tenantId, pembayaranId) ->
+  Pembayaran(tenantId, id)`. `PembayaranMetodeBaris` memakai pola composite-FK
+  GANDA (seperti `KeanggotaanOutlet`, ADR-011): satu kolom `tenantId` dipakai
+  dua kali, menuju `Pembayaran(tenantId, id)` DAN `MetodeBayar(tenantId, id)` -
+  sehingga baris metode tidak mungkin merujuk pembayaran tenant A sekaligus
+  katalog metode tenant B. `MetodeBayar` juga mendapat `@@unique([tenantId,
+  kode])` (satu baris katalog per kode per tenant).
+- **Cakupan yang SENGAJA TIDAK dikerjakan:** `PesananSplit` (split bill PER
+  ITEM, `ALT-PES-014`) - itu memecah TAGIHAN sebelum ada pembayaran, masalah
+  yang berbeda dari mengalokasikan UANG yang sudah diterima; `PesananRetur`
+  (`ALT-PES-018`); `LedgerSaldoToko` (`ALT-DEF-018`); `TransaksiKasir.tenantId`
+  (`ALT-DEF-031`); handler/service nyata; migrasi Postgres nyata
+  (`ALT-DEF-029`). `ALT-DEF-014` karena itu diset `SIAP_DIVERIFIKASI`, bukan
+  `DITUTUP`, dan komponen `PesananSplit`-nya tetap terbuka.
+
+## ADR-020: State machine `Pembayaran` 9-status dan alur konfirmasi QRIS manual (ALT-DEF-004, ALT-DEF-014)
+
+- **Status:** DITERIMA
+- **Konteks:** `StatusPembayaran` lama hanya punya 5 nilai (`MENUNGGU`,
+  `DIKONFIRMASI`, `GAGAL`, `DIBATALKAN`, `DIREFUND`) dan diagramnya di
+  `STATE-MACHINES.md` bahkan menyebut "kartu approved" - jalur yang tidak ada
+  dalam produk ini. Tidak ada status untuk: pembayaran yang masih disusun
+  kasir (`DRAF`), pelanggan sudah mengklaim membayar tapi kasir belum
+  memverifikasi (`MENUNGGU_KONFIRMASI` - inti alur QRIS manual), koreksi salah
+  input (`DIKOREKSI`), dan refund sebagian (`DIKEMBALIKAN_SEBAGIAN`, yang
+  wajib ada karena `PembayaranRefund` adalah 1:N).
+- **Keputusan 1 - Sembilan nilai:** `DRAF`, `MENUNGGU`, `MENUNGGU_KONFIRMASI`,
+  `DIBAYAR`, `GAGAL`, `DIBATALKAN`, `DIKOREKSI`, `DIKEMBALIKAN_SEBAGIAN`,
+  `DIKEMBALIKAN`. `DIKONFIRMASI` lama diganti `DIBAYAR` (menghindari tabrakan
+  istilah dengan `StatusPesanan.DIKONFIRMASI` yang artinya berbeda total);
+  `DIREFUND` lama diganti `DIKEMBALIKAN` (konsisten bahasa Indonesia dengan
+  nilai enum lain). Default `Pembayaran.status` berubah dari `MENUNGGU` ke
+  `DRAF`: kasir menyusun baris metode dan alokasi dulu, dan invariant jumlah
+  ADR-019 Keputusan 4 baru wajib terpenuhi saat KELUAR dari `DRAF` - bukan
+  saat baris pertama dibuat.
+- **Keputusan 2 - Tombol pelanggan TIDAK PERNAH menghasilkan `DIBAYAR`.**
+  Ini guard keamanan finansial paling penting di domain ini dan ditulis
+  eksplisit sebagai keputusan, bukan sebagai detail implementasi. Alur QRIS
+  manual: total dihitung SERVER-SIDE dari pesanan -> server menghasilkan
+  payload QRIS bernominal -> pelanggan membayar lewat aplikasi banknya ->
+  pelanggan menekan "Sudah Membayar" -> status HANYA boleh menjadi
+  `MENUNGGU_KONFIRMASI` -> kasir memeriksa notifikasi masuk di aplikasi
+  merchant -> kasir mengonfirmasi -> `DIBAYAR`. Transisi
+  `MENUNGGU_KONFIRMASI -> DIBAYAR` mensyaratkan aktor dengan izin
+  `pembayaran.qris.konfirmasi-manual` DAN penulisan baris
+  `QrisKonfirmasiManual` dalam transaksi yang sama; endpoint yang dapat
+  diakses pelanggan (token QR meja, tanpa `izin.kode`) tidak boleh punya jalur
+  kode apa pun menuju `DIBAYAR`. Tanpa guard ini, siapa pun yang memegang link
+  meja dapat menandai tagihannya sendiri lunas.
+- **Keputusan 3 - `GAGAL -> MENUNGGU` (retry) dipertahankan, tetapi
+  `DIBATALKAN`/`DIKEMBALIKAN` bersifat terminal.** Pembayaran yang gagal
+  (mis. pelanggan salah transfer, saldo toko tidak cukup) boleh dicoba ulang
+  pada baris `Pembayaran` yang sama; pembayaran yang sudah dibatalkan atau
+  dikembalikan penuh tidak pernah "hidup kembali" - pembayaran baru adalah
+  baris baru.
+- **Keputusan 4 - `DIKEMBALIKAN_SEBAGIAN` vs `DIKEMBALIKAN` ditentukan oleh
+  agregat `SUM(PembayaranRefund.jumlah)`,** dievaluasi server-side setelah
+  setiap refund disetujui: `< Pembayaran.jumlah` -> `DIKEMBALIKAN_SEBAGIAN`
+  (dan masih boleh menerima refund berikutnya), `== Pembayaran.jumlah` ->
+  `DIKEMBALIKAN` (terminal). `> Pembayaran.jumlah` harus DITOLAK. Sama seperti
+  ADR-019 Keputusan 4, ini invariant level-aplikasi - database tidak
+  menegakkannya.
+- Tabel transisi lengkap (statusAsal/statusTujuan/aktorDiizinkan/guard/
+  sideEffect/auditEvent/testRequired) ada di `docs/arsitektur/STATE-MACHINES.md`
+  bagian 2 "Pembayaran", dalam format yang sama persis dengan tabel Pesanan
+  (ADR-017) dan Dapur (ADR-018).
+
+## ADR-021: Konfigurasi QRIS statis per outlet - enkripsi, partial unique index, dan larangan integrasi (ALT-DEF-015)
+
+- **Status:** DITERIMA
+- **Konteks:** `ALT-DEF-015` mencatat tidak ada model `KonfigurasiQris` sama
+  sekali - hanya `QrisKonfirmasiManual` (sisi konfirmasi transaksi). Akibatnya
+  `ALT-QRS-001` s.d. `ALT-QRS-005` dan `ALT-SEC-007` (enkripsi payload at
+  rest) tidak punya kolom untuk diterapkan sama sekali.
+- **Keputusan 1 - Model `KonfigurasiQris` + `RiwayatKonfigurasiQris`.**
+  `KonfigurasiQris(id, tenantId, outletId, payloadTerenkripsi, fingerprint,
+  namaMerchant, kotaMerchant, status, dibuatOlehId, diverifikasiOlehId?,
+  diverifikasiPada?, createdAt, updatedAt)`, composite-FK ke `Outlet` per
+  ADR-013, enum `StatusKonfigurasiQris` (`DRAF`/`MENUNGGU_VERIFIKASI`/`AKTIF`/
+  `NONAKTIF`). `RiwayatKonfigurasiQris(id, tenantId, outletId,
+  konfigurasiQrisId, aksi, sebelum Json?, sesudah Json?, dilakukanOlehId,
+  createdAt)` dengan enum `AksiKonfigurasiQris` (`DIBUAT`/`DIUBAH`/
+  `DIAKTIFKAN`/`DINONAKTIFKAN`/`DIVERIFIKASI`) - append-only, memenuhi
+  `ALT-QRS-008`. Audit terpisah (bukan sekadar `AuditLog` generik) dipilih
+  karena ini konfigurasi yang menentukan KE REKENING SIAPA uang pelanggan
+  mengalir; ia butuh riwayat bertipe kuat yang bisa diquery per outlet, bukan
+  baris audit generik bertipe `String`.
+  `sebelum`/`sesudah` SENGAJA hanya memuat metadata (nama/kota merchant,
+  status, fingerprint) dan TIDAK PERNAH memuat payload (terenkripsi maupun
+  plaintext) - kalau tidak, tabel audit menjadi jalur kebocoran yang melewati
+  ALT-SEC-007.
+- **Keputusan 2 - Enkripsi payload: AES-256-GCM level-aplikasi, kunci dari
+  env/KMS.** Kolom `payloadTerenkripsi` menyimpan `nonce || tag || ciphertext`
+  (base64). Payload EMV mentah TIDAK PERNAH ditulis ke kolom mana pun.
+  Alternatif yang dipertimbangkan: (a) `pgcrypto` di sisi Postgres - DITOLAK
+  karena kuncinya akhirnya ikut berada di/dekat database, sehingga dump
+  database bersama kunci tetap membocorkan payload dan kriteria terima
+  ALT-SEC-007 ("dump database tidak menampilkan payload terbaca") tidak
+  benar-benar terpenuhi; (b) enkripsi disk/at-rest bawaan cloud provider -
+  DITOLAK karena transparan terhadap query, jadi siapa pun dengan akses baca
+  database tetap melihat plaintext. AES-GCM dipilih di atas AES-CBC karena
+  authenticated encryption (payload yang diubah/rusak terdeteksi saat dekripsi,
+  bukan menghasilkan QR sampah yang dipajang ke pelanggan).
+  `fingerprint` = SHA-256 atas payload PLAINTEXT, bukan atas ciphertext -
+  ciphertext berubah tiap enkripsi karena nonce acak sehingga tidak berguna
+  untuk deteksi perubahan/dedup. Konsekuensi yang diterima secara sadar:
+  fingerprint memungkinkan konfirmasi "apakah payload X sudah pernah
+  didaftarkan" bagi penyerang yang sudah menebak X - risiko yang dinilai
+  dapat diabaikan karena payload QRIS statis outlet memang dicetak dan
+  dipajang di meja/kasir untuk umum; nilai rahasianya rendah, yang dilindungi
+  adalah integritas dan kemudahan penyalahgunaan massal lewat dump database.
+  Rotasi kunci: `updatedAt` + re-enkripsi seluruh baris; belum dirancang
+  detailnya di batch ini (TODO batch keamanan).
+- **Keputusan 3 - "Satu konfigurasi AKTIF per outlet" diwujudkan sebagai
+  PARTIAL UNIQUE INDEX Postgres di file SQL manual, BUKAN constraint Prisma
+  palsu.** DSL Prisma tidak dapat mengekspresikan filtered index. Alternatif
+  `@@unique([tenantId, outletId, status])` DITOLAK TEGAS: constraint itu tidak
+  menegakkan aturan yang dimaksud dan justru salah - ia akan melarang satu
+  outlet memiliki lebih dari satu konfigurasi `NONAKTIF`, padahal riwayat
+  konfigurasi lama HARUS boleh menumpuk sebagai `NONAKTIF` (ADR-006, no
+  hard-delete). Constraint yang tampak menegakkan aturan padahal tidak lebih
+  berbahaya daripada tidak ada constraint sama sekali, karena ia mematikan
+  kewaspadaan reviewer berikutnya. **Dipilih:** SQL nyata di
+  `prisma/migrations/manual/001_konfigurasi_qris_partial_unique.sql`
+  (`CREATE UNIQUE INDEX ... ON konfigurasi_qris ("tenantId", "outletId") WHERE
+  status = 'AKTIF'`) yang WAJIB disertakan pada migrasi pertama, PLUS guard
+  level-aplikasi (nonaktifkan konfigurasi lama dan aktifkan yang baru dalam
+  satu transaksi). **Sampai index tersebut benar-benar dijalankan terhadap
+  Postgres nyata (DIBLOKIR, `ALT-DEF-029`), aturan ini HANYA dijaga di level
+  aplikasi dan TIDAK aman terhadap race condition dua request bersamaan** -
+  ini dinyatakan eksplisit, bukan diklaim sudah terjamin. Yang benar-benar
+  ADA di schema adalah `@@unique([tenantId, outletId, fingerprint])` (payload
+  yang sama tidak didaftarkan dua kali di outlet yang sama) - constraint yang
+  berbeda dan tidak menggantikan aturan satu-aktif.
+- **Keputusan 4 - NO webhook, NO payment gateway, NO bank API, NO e-wallet
+  API, NO konfirmasi otomatis - dinyatakan sebagai batasan arsitektur, bukan
+  sekadar "belum diimplementasikan".** Tidak boleh ada endpoint callback/
+  webhook masuk dari pihak ketiga di seluruh domain pembayaran, tidak ada
+  dependency SDK payment gateway, dan tidak ada jalur kode yang mengubah
+  `StatusPembayaran` menjadi `DIBAYAR` tanpa aktor manusia berizin
+  (`ALT-QRS-010`). Nominal final SELALU dihitung server-side dari total
+  pesanan dan disisipkan ke payload QRIS statis outlet saat runtime
+  (`ALT-QRS-006`); klien TIDAK PERNAH mengirimkan nominal - kalau klien boleh
+  mengirim nominal, pelanggan dapat membayar 1.000 untuk tagihan 100.000 dan
+  QR yang dipajang akan "benar" menurut sistem. Digabung dengan ADR-020
+  Keputusan 2 (tombol pelanggan tidak pernah menghasilkan `DIBAYAR`), dua
+  guard ini yang menjaga seluruh alur QRIS manual.
+- **Cakupan yang SENGAJA TIDAK dikerjakan:** parser EMV & validator CRC16
+  (`ALT-QRS-003`/`ALT-QRS-004`) - itu kode, bukan skema; implementasi
+  enkripsi/dekripsi nyata; penyimpanan file gambar QR (`ALT-QRS-002` -
+  gambar diturunkan dari payload saat runtime, tidak disimpan sebagai blob
+  terpisah pada desain ini); rotasi kunci; eksekusi SQL partial index; migrasi
+  Postgres nyata (`ALT-DEF-029`).
+
 ## Status ringkas
 
 Semua ADR di atas berstatus **DITERIMA sebagai keputusan desain**, tetapi
 implementasinya di kode berstatus **BELUM DIKERJAKAN** kecuali skema Prisma awal
 (ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015, ADR-016,
-ADR-017, ADR-018 sudah tercermin di `prisma/schema/schema.prisma`).
+ADR-017, ADR-018, ADR-019, ADR-020, ADR-021 sudah tercermin di
+`prisma/schema/schema.prisma`).

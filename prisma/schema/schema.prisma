@@ -121,6 +121,15 @@ model Tenant {
   rmStokKritis            RmStokKritis[]
   rmKinerjaKaryawanHarian RmKinerjaKaryawanHarian[]
   pembayaran              Pembayaran[]
+  // ALT-DEF-014/ALT-DEF-015: model baru domain pembayaran & konfigurasi QRIS.
+  alokasiPembayaran       AlokasiPembayaran[]
+  pembayaranMetodeBaris   PembayaranMetodeBaris[]
+  koreksiPembayaran       KoreksiPembayaran[]
+  qrisKonfirmasiManual    QrisKonfirmasiManual[]
+  struk                   Struk[]
+  pembayaranRefund        PembayaranRefund[]
+  konfigurasiQris         KonfigurasiQris[]
+  riwayatKonfigurasiQris  RiwayatKonfigurasiQris[]
   permintaanPersetujuan   PermintaanPersetujuan[]
   idempotencyKey          IdempotencyKey[]
   domainOutboxEvent       DomainOutboxEvent[]
@@ -156,6 +165,9 @@ model Outlet {
   tiketDapur              TiketDapur[]
   giliranKasir            GiliranKasir[]
   pembayaran              Pembayaran[]
+  // ALT-DEF-015: konfigurasi QRIS statis per outlet + audit perubahannya.
+  konfigurasiQris         KonfigurasiQris[]
+  riwayatKonfigurasiQris  RiwayatKonfigurasiQris[]
   mutasiStok              MutasiStok[]
   karyawanUtama           Karyawan[]                @relation("KaryawanOutletUtama")
   jadwalShift             JadwalShift[]
@@ -235,6 +247,11 @@ model Pengguna {
   pembayaranDikonfirmasi          Pembayaran[]              @relation("PembayaranDikonfirmasiOleh")
   qrisKonfirmasiDiverifikasi      QrisKonfirmasiManual[]    @relation("QrisDiverifikasiOleh")
   pembayaranRefundDisetujui       PembayaranRefund[]        @relation("RefundDisetujuiOleh")
+  // ALT-DEF-014/ALT-DEF-015: aktor koreksi pembayaran dan konfigurasi QRIS.
+  koreksiPembayaranDikoreksi      KoreksiPembayaran[]       @relation("KoreksiPembayaranDikoreksiOleh")
+  konfigurasiQrisDibuat           KonfigurasiQris[]         @relation("KonfigurasiQrisDibuatOleh")
+  konfigurasiQrisDiverifikasi     KonfigurasiQris[]         @relation("KonfigurasiQrisDiverifikasiOleh")
+  riwayatKonfigurasiQrisDilakukan RiwayatKonfigurasiQris[]  @relation("RiwayatKonfigurasiQrisDilakukanOleh")
   cutiIzinDisetujui               CutiIzin[]                @relation("CutiDisetujuiOleh")
   rekapKasHarianDiverifikasi      RekapKasHarian[]          @relation("RekapDiverifikasiOleh")
   biayaOperasionalDicatat         BiayaOperasional[]        @relation("BiayaDicatatOleh")
@@ -1382,19 +1399,23 @@ model Pesanan {
   pelanggan  Pelanggan? @relation(fields: [tenantId, pelangganId], references: [tenantId, id])
   dibuatOleh Pengguna   @relation("PesananDibuatOleh", fields: [dibuatOlehId], references: [id])
 
-  itemPesanan    ItemPesanan[]
-  riwayatStatus  PesananRiwayatStatus[]
-  perubahan      PesananPerubahan[]
-  penolakan      PesananPenolakan?
-  pembatalan     PesananPembatalan?
-  pembayaran     Pembayaran[]
-  promoPemakaian PromoPemakaian?
+  itemPesanan       ItemPesanan[]
+  riwayatStatus     PesananRiwayatStatus[]
+  perubahan         PesananPerubahan[]
+  penolakan         PesananPenolakan?
+  pembatalan        PesananPembatalan?
+  // ALT-DEF-014: relasi lama `pembayaran Pembayaran[]` DIHAPUS - Pesanan tidak
+  // lagi terhubung langsung ke Pembayaran. Berapa yang sudah dibayar untuk
+  // pesanan ini = SUM(alokasiPembayaran.jumlah) atas Pembayaran berstatus
+  // DIBAYAR. Lihat ADR-019.
+  alokasiPembayaran AlokasiPembayaran[]
+  promoPemakaian    PromoPemakaian?
   // ALT-DEF-006: TiketDapur? (1:1) -> TiketDapur[] (1:N) - satu pesanan dapat
   // menghasilkan banyak tiket dapur (satu per stasiun/gelombang tujuan).
-  tiketDapur     TiketDapur[]
-  gelombangDapur GelombangDapur[]
-  transaksiKasir TransaksiKasir[]
-  poinRiwayat    PoinRiwayat[]
+  tiketDapur        TiketDapur[]
+  gelombangDapur    GelombangDapur[]
+  transaksiKasir    TransaksiKasir[]
+  poinRiwayat       PoinRiwayat[]
 
   @@unique([outletId, nomorPesanan])
   // ALT-DEF-010: agar TiketDapur/Pembayaran bisa memakai composite-FK
@@ -1796,20 +1817,38 @@ enum JenisTransaksiKasir {
   KOREKSI
 }
 
+// ALT-DEF-004/ADR-019: scope metode bayar dibatasi PERSIS pada empat nilai di
+// bawah. `KARTU_DEBIT`/`KARTU_KREDIT`/`EWALLET` DIHAPUS - ketiganya mengandaikan
+// integrasi payment gateway/EDC/e-wallet API yang secara eksplisit DILARANG oleh
+// ALT-QRS-010 dan ADR-003 (QRIS mode manual). Nilai `CAMPURAN` SENGAJA TIDAK
+// ADA dan tidak boleh ditambahkan: pembayaran campuran dimodelkan sebagai SATU
+// `Pembayaran` dengan BEBERAPA baris `PembayaranMetodeBaris` (mis. tunai 50.000
+// + QRIS 30.000 = satu Pembayaran, dua baris metode), bukan sebagai "metode"
+// tersendiri - lihat ADR-019.
 enum KodeMetodeBayar {
   TUNAI
+  TRANSFER_MANUAL
   QRIS_MANUAL
-  KARTU_DEBIT
-  KARTU_KREDIT
-  EWALLET
+  SALDO_TOKO
 }
 
+// ALT-DEF-014/ADR-020: state machine pembayaran 9 status. Nilai lama
+// `DIKONFIRMASI`/`DIREFUND` diganti `DIBAYAR`/`DIKEMBALIKAN` (+ status baru
+// `DRAF`, `MENUNGGU_KONFIRMASI`, `DIKOREKSI`, `DIKEMBALIKAN_SEBAGIAN`).
+// `MENUNGGU_KONFIRMASI` adalah status kunci alur QRIS manual: pelanggan menekan
+// "Sudah Membayar" -> `MENUNGGU_KONFIRMASI`, dan HANYA kasir yang boleh
+// melanjutkannya ke `DIBAYAR` setelah memverifikasi notifikasi merchant. Tabel
+// transisi lengkap ada di docs/arsitektur/STATE-MACHINES.md bagian "Pembayaran".
 enum StatusPembayaran {
+  DRAF
   MENUNGGU
-  DIKONFIRMASI
+  MENUNGGU_KONFIRMASI
+  DIBAYAR
   GAGAL
   DIBATALKAN
-  DIREFUND
+  DIKOREKSI
+  DIKEMBALIKAN_SEBAGIAN
+  DIKEMBALIKAN
 }
 
 model GiliranKasir {
@@ -1863,18 +1902,46 @@ model MetodeBayar {
   tenant Tenant                  @relation(fields: [tenantId], references: [id])
   baris  PembayaranMetodeBaris[]
 
+  // Satu baris katalog per kode metode bayar per tenant - mencegah dua baris
+  // "TUNAI" berbeda dalam satu tenant (yang akan membuat agregasi analitik
+  // per metode, ALT-ANL-010, ambigu).
+  @@unique([tenantId, kode])
+  // ALT-DEF-004/ADR-019: diperlukan agar PembayaranMetodeBaris bisa memakai
+  // composite-FK (tenantId, metodeBayarId) -> MetodeBayar(tenantId, id).
+  @@unique([tenantId, id])
   @@map("metode_bayar")
 }
 
+// ALT-DEF-014/ADR-019: `Pembayaran` adalah PERISTIWA PEMBAYARAN itu sendiri -
+// sejumlah uang yang diterima dalam satu tindakan kasir - dan TIDAK LAGI terikat
+// 1:1 ke satu `Pesanan`. Kolom `pesananId` beserta composite-FK-nya SENGAJA
+// DIHAPUS; keterkaitan ke pesanan sekarang selalu lewat `AlokasiPembayaran`.
+// Ini yang memungkinkan DUA arah sekaligus:
+//   (a) satu pembayaran dialokasikan ke BANYAK pesanan (group/patungan bill),
+//   (b) satu pesanan dilunasi oleh BANYAK pembayaran (bayar sebagian/bertahap).
+//
+// INVARIANT JUMLAH (tidak dapat dipaksakan Prisma/Postgres deklaratif, WAJIB
+// divalidasi server-side di DALAM SATU transaksi DB - lihat ADR-019 Keputusan 4):
+//   1. SUM(PembayaranMetodeBaris.jumlah WHERE pembayaranId = this.id) == this.jumlah
+//   2. SUM(AlokasiPembayaran.jumlah    WHERE pembayaranId = this.id) == this.jumlah
+// Invariant (1) adalah "uang ini masuk lewat metode apa saja"; invariant (2)
+// adalah "uang ini melunasi tagihan yang mana saja". Keduanya harus benar
+// bersamaan dan diuji oleh integration test `pembayaran_invariant_jumlah_*`
+// (batch berikutnya - lihat catatan cakupan di ADR-019).
 model Pembayaran {
   id                 String           @id
   tenantId           String
   outletId           String
-  pesananId          String
-  totalDibayar       Int
+  // Total nilai peristiwa pembayaran ini (rupiah). Menggantikan nama lama
+  // `totalDibayar` yang menyiratkan "total tagihan pesanan" - padahal satu
+  // Pembayaran kini bisa melunasi sebagian saja, atau beberapa pesanan sekaligus.
+  jumlah             Int
+  // `totalDiterima`/`kembalian` khusus alur TUNAI (uang fisik yang diserahkan
+  // pelanggan dan kembaliannya). Untuk QRIS_MANUAL/TRANSFER_MANUAL/SALDO_TOKO
+  // nilainya sama dengan `jumlah` dan `kembalian = 0`.
   totalDiterima      Int
   kembalian          Int              @default(0)
-  status             StatusPembayaran @default(MENUNGGU)
+  status             StatusPembayaran @default(DRAF)
   dikonfirmasiOlehId String?
   createdAt          DateTime         @default(now())
   dikonfirmasiPada   DateTime?
@@ -1882,67 +1949,278 @@ model Pembayaran {
   tenant           Tenant    @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
   outlet           Outlet    @relation(fields: [tenantId, outletId], references: [tenantId, id])
-  // ALT-DEF-010: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
-  pesanan          Pesanan   @relation(fields: [tenantId, pesananId], references: [tenantId, id])
   dikonfirmasiOleh Pengguna? @relation("PembayaranDikonfirmasiOleh", fields: [dikonfirmasiOlehId], references: [id])
 
+  alokasi        AlokasiPembayaran[]
   metodeBaris    PembayaranMetodeBaris[]
+  koreksi        KoreksiPembayaran[]
   qrisKonfirmasi QrisKonfirmasiManual?
   struk          Struk?
   refund         PembayaranRefund[]
 
+  // ALT-DEF-014/ADR-013: diperlukan agar AlokasiPembayaran/KoreksiPembayaran/
+  // PembayaranMetodeBaris/QrisKonfirmasiManual/Struk/PembayaranRefund bisa
+  // memakai composite-FK (tenantId, pembayaranId) -> Pembayaran(tenantId, id).
+  @@unique([tenantId, id])
   @@map("pembayaran")
 }
 
+// ALT-DEF-014/ALT-KSR-004/ALT-KSR-005 (BARU): menghubungkan satu peristiwa
+// `Pembayaran` ke satu `Pesanan` beserta berapa rupiah dari pembayaran tersebut
+// yang diterapkan ke pesanan itu. Inilah model yang membuat split bill (satu
+// pembayaran -> banyak pesanan) DAN pembayaran sebagian/bertahap (satu pesanan
+// -> banyak pembayaran) mungkin sekaligus, tanpa mengubah bentuk `Pembayaran`.
+//
+// `@@unique([pembayaranId, pesananId])`: paling banyak SATU baris alokasi per
+// pasangan (pembayaran, pesanan). Bila satu pembayaran perlu menambah nilai
+// untuk pesanan yang sama, baris yang ada DIPERBARUI (dan dicatat lewat
+// `KoreksiPembayaran`), bukan menambah baris kedua - kalau tidak, "berapa yang
+// sudah dibayar untuk pesanan X oleh pembayaran Y" jadi pertanyaan agregat yang
+// tidak perlu.
+model AlokasiPembayaran {
+  id           String   @id
+  tenantId     String
+  pembayaranId String
+  pesananId    String
+  jumlah       Int
+  createdAt    DateTime @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010/ADR-013: composite-FK (tenantId, pembayaranId) -> Pembayaran(tenantId, id).
+  pembayaran Pembayaran @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
+  // ALT-DEF-010/ADR-013: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
+  // Menggantikan composite-FK yang dulu ada langsung di `Pembayaran.pesanan`.
+  pesanan    Pesanan    @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+
+  @@unique([pembayaranId, pesananId])
+  @@map("alokasi_pembayaran")
+}
+
+// ALT-DEF-004/ADR-019: mekanisme PEMBAYARAN CAMPURAN. Satu `Pembayaran` dengan
+// beberapa baris di sini = pelanggan membayar dengan lebih dari satu metode
+// sekaligus (mis. tunai 50.000 + QRIS manual 30.000). Tidak ada enum `CAMPURAN`
+// di `KodeMetodeBayar` - "campuran" adalah properti kardinalitas tabel ini,
+// bukan sebuah metode bayar.
 model PembayaranMetodeBaris {
   id            String @id
+  tenantId      String
   pembayaranId  String
   metodeBayarId String
   jumlah        Int
 
-  pembayaran  Pembayaran  @relation(fields: [pembayaranId], references: [id])
-  metodeBayar MetodeBayar @relation(fields: [metodeBayarId], references: [id])
+  tenant      Tenant      @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010/ADR-013: composite-FK ganda (pola KeanggotaanOutlet) - satu
+  // kolom `tenantId` dipakai dua kali agar baris metode tidak mungkin merujuk
+  // pembayaran milik tenant A sekaligus katalog metode bayar milik tenant B.
+  pembayaran  Pembayaran  @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
+  metodeBayar MetodeBayar @relation(fields: [tenantId, metodeBayarId], references: [tenantId, id])
 
   @@map("pembayaran_metode_baris")
 }
 
+// ALT-DEF-014/ALT-QRS-009 (BARU): koreksi nilai pembayaran yang salah input
+// (mis. kasir mengetik 150.000 padahal 15.000, atau salah menandai QRIS lunas).
+// Append-only mengikuti ADR-006 (no hard-delete pada data finansial): baris
+// `Pembayaran` asli TIDAK ditimpa diam-diam - status pembayaran menjadi
+// `DIKOREKSI` dan nilai sebelum/sesudah tercatat di sini.
+model KoreksiPembayaran {
+  id              String   @id
+  tenantId        String
+  pembayaranId    String
+  alasan          String
+  jumlahSebelum   Int
+  jumlahSesudah   Int
+  dikoreksiOlehId String
+  createdAt       DateTime @default(now())
+
+  tenant        Tenant     @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010/ADR-013: composite-FK (tenantId, pembayaranId) -> Pembayaran(tenantId, id).
+  pembayaran    Pembayaran @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
+  dikoreksiOleh Pengguna   @relation("KoreksiPembayaranDikoreksiOleh", fields: [dikoreksiOlehId], references: [id])
+
+  @@map("koreksi_pembayaran")
+}
+
+// ALT-QRS-007: bukti verifikasi manual kasir atas pembayaran QRIS. Baris ini
+// HANYA boleh ditulis oleh kasir/supervisor (izin
+// `pembayaran.qris.konfirmasi-manual`) - tindakan pelanggan menekan tombol
+// "Sudah Membayar" TIDAK pernah menulis baris ini dan TIDAK pernah menghasilkan
+// status `DIBAYAR` (ADR-021 Keputusan 4).
 model QrisKonfirmasiManual {
   id                 String   @id
+  tenantId           String
   pembayaranId       String   @unique
   catatanKasir       String?
   diverifikasiOlehId String
   diverifikasiPada   DateTime @default(now())
 
-  pembayaran       Pembayaran @relation(fields: [pembayaranId], references: [id])
+  tenant           Tenant     @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010/ADR-013: composite-FK (tenantId, pembayaranId) -> Pembayaran(tenantId, id).
+  pembayaran       Pembayaran @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
   diverifikasiOleh Pengguna   @relation("QrisDiverifikasiOleh", fields: [diverifikasiOlehId], references: [id])
 
+  // Diperlukan agar composite-FK di atas valid sebagai relasi one-to-one
+  // (pembayaranId sudah @unique tunggal di atas) - pola yang sama dipakai
+  // RekapKasHarian.giliranKasir.
+  @@unique([tenantId, pembayaranId])
   @@map("qris_konfirmasi_manual")
 }
 
+// ALT-KSR-008/ALT-KSR-009: struk adalah bukti untuk SATU PERISTIWA PEMBAYARAN,
+// bukan untuk satu pesanan. Konsekuensi langsung dari ALT-DEF-014: pada
+// pembayaran bertahap satu pesanan dapat memiliki BEBERAPA struk (satu per
+// pembayaran), dan pada group bill satu struk dapat mencakup BEBERAPA pesanan
+// (isi struk dirender dari `AlokasiPembayaran` pembayaran tsb). Relasi 1:1
+// `Struk <-> Pembayaran` tetap benar dan sengaja dipertahankan - lihat ADR-019
+// Keputusan 5.
 model Struk {
   id               String    @id
+  tenantId         String
   pembayaranId     String    @unique
   nomorStruk       String    @unique
   dicetakPada      DateTime?
   jumlahCetakUlang Int       @default(0)
 
-  pembayaran Pembayaran @relation(fields: [pembayaranId], references: [id])
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010/ADR-013: composite-FK (tenantId, pembayaranId) -> Pembayaran(tenantId, id).
+  pembayaran Pembayaran @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
 
+  @@unique([tenantId, pembayaranId])
   @@map("struk")
 }
 
+// ALT-KSR-007: refund manual dengan approval supervisor. Append-only (ADR-006) -
+// tidak pernah menghapus/menimpa `Pembayaran` asal. Status pembayaran menjadi
+// `DIKEMBALIKAN_SEBAGIAN` bila SUM(refund.jumlah) < Pembayaran.jumlah, dan
+// `DIKEMBALIKAN` bila sama dengan Pembayaran.jumlah (invariant level-aplikasi,
+// lihat tabel transisi di STATE-MACHINES.md bagian "Pembayaran").
 model PembayaranRefund {
   id              String   @id
+  tenantId        String
   pembayaranId    String
   jumlah          Int
   alasan          String
   disetujuiOlehId String
   createdAt       DateTime @default(now())
 
-  pembayaran    Pembayaran @relation(fields: [pembayaranId], references: [id])
+  tenant        Tenant     @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010/ADR-013: composite-FK (tenantId, pembayaranId) -> Pembayaran(tenantId, id).
+  pembayaran    Pembayaran @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
   disetujuiOleh Pengguna   @relation("RefundDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
 
   @@map("pembayaran_refund")
+}
+
+// =====================================================================================
+// 9b. KONFIGURASI QRIS MANUAL (ALT-DEF-015, docs/database/16-qris.md)
+//
+// TIDAK ADA webhook, payment gateway, bank API, e-wallet API, atau konfirmasi
+// otomatis apa pun di seluruh bagian ini - dilarang eksplisit oleh ALT-QRS-010
+// dan ADR-003/ADR-021. Yang disimpan hanyalah payload QRIS STATIS resmi milik
+// outlet (didapat dari bank/PJSP di luar sistem ini). Nominal tagihan disisipkan
+// ke payload tersebut SAAT RUNTIME oleh server (ALT-QRS-006) dan dihitung
+// SERVER-SIDE dari total pesanan - klien TIDAK PERNAH mengirimkan nominal final.
+// =====================================================================================
+
+enum StatusKonfigurasiQris {
+  DRAF
+  MENUNGGU_VERIFIKASI
+  AKTIF
+  NONAKTIF
+}
+
+enum AksiKonfigurasiQris {
+  DIBUAT
+  DIUBAH
+  DIAKTIFKAN
+  DINONAKTIFKAN
+  DIVERIFIKASI
+}
+
+// ALT-QRS-001 s.d. ALT-QRS-005 / ALT-SEC-007 (BARU).
+//
+// ENKRIPSI (ADR-021 Keputusan 2): `payloadTerenkripsi` menyimpan ciphertext
+// hasil AES-256-GCM level-aplikasi (nonce + tag + ciphertext, base64) - payload
+// EMV mentah TIDAK PERNAH ditulis ke kolom mana pun. Kunci berasal dari
+// env/KMS, bukan dari database, sehingga dump database saja tidak cukup untuk
+// membacanya (itulah kriteria terima ALT-SEC-007). Postgres/Prisma tidak
+// melakukan enkripsi ini secara otomatis - ini murni tanggung jawab layer
+// aplikasi sebelum `create`/`update`.
+//
+// `fingerprint` adalah SHA-256 atas payload PLAINTEXT (bukan atas ciphertext -
+// ciphertext berubah setiap enkripsi karena nonce acak, sehingga tidak berguna
+// untuk deteksi perubahan). Dipakai untuk mendeteksi "apakah payload yang
+// diunggah sama dengan yang sudah tersimpan" tanpa mendekripsi apa pun.
+//
+// SATU KONFIGURASI AKTIF PER OUTLET (ALT-QRS-001, ADR-021 Keputusan 3):
+// constraint ini TIDAK dapat diekspresikan di DSL Prisma - ia butuh PARTIAL
+// UNIQUE INDEX Postgres:
+//   CREATE UNIQUE INDEX konfigurasi_qris_satu_aktif_per_outlet
+//     ON konfigurasi_qris (tenant_id, outlet_id) WHERE status = 'AKTIF';
+// SQL-nya ada di prisma/migrations/manual/001_konfigurasi_qris_partial_unique.sql
+// dan WAJIB dijalankan bersama migrasi pertama. `@@unique([tenantId, outletId,
+// status])` SENGAJA TIDAK dipakai sebagai pengganti: ia akan melarang outlet
+// punya lebih dari satu konfigurasi NONAKTIF (riwayat konfigurasi lama) - itu
+// SALAH dan merupakan constraint palsu yang tidak menegakkan aturan sebenarnya.
+model KonfigurasiQris {
+  id                 String                @id
+  tenantId           String
+  outletId           String
+  payloadTerenkripsi String
+  fingerprint        String
+  namaMerchant       String
+  kotaMerchant       String
+  status             StatusKonfigurasiQris @default(DRAF)
+  dibuatOlehId       String
+  diverifikasiOlehId String?
+  diverifikasiPada   DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  tenant           Tenant    @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010/ADR-013: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet           Outlet    @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  dibuatOleh       Pengguna  @relation("KonfigurasiQrisDibuatOleh", fields: [dibuatOlehId], references: [id])
+  diverifikasiOleh Pengguna? @relation("KonfigurasiQrisDiverifikasiOleh", fields: [diverifikasiOlehId], references: [id])
+
+  riwayat RiwayatKonfigurasiQris[]
+
+  // Payload yang sama persis tidak boleh didaftarkan dua kali di outlet yang
+  // sama (deteksi unggah-ulang tanpa perlu mendekripsi apa pun).
+  @@unique([tenantId, outletId, fingerprint])
+  // Diperlukan agar RiwayatKonfigurasiQris bisa memakai composite-FK
+  // (tenantId, konfigurasiQrisId) -> KonfigurasiQris(tenantId, id).
+  @@unique([tenantId, id])
+  @@map("konfigurasi_qris")
+}
+
+// ALT-QRS-008 (BARU): audit append-only atas setiap perubahan konfigurasi QRIS.
+// Ini adalah konfigurasi YANG MENENTUKAN KE REKENING SIAPA UANG PELANGGAN
+// MENGALIR - setiap perubahannya wajib dapat ditelusuri (siapa, kapan, dari
+// nilai apa ke nilai apa). Baris di sini TIDAK PERNAH diubah/dihapus (ADR-006).
+// `sebelum`/`sesudah` menyimpan snapshot metadata (namaMerchant/kotaMerchant/
+// status/fingerprint) - TIDAK PERNAH memuat payload QRIS (terenkripsi maupun
+// plaintext), agar tabel audit tidak menjadi jalur kebocoran yang melewati
+// ALT-SEC-007.
+model RiwayatKonfigurasiQris {
+  id                String              @id
+  tenantId          String
+  outletId          String
+  konfigurasiQrisId String
+  aksi              AksiKonfigurasiQris
+  sebelum           Json?
+  sesudah           Json?
+  dilakukanOlehId   String
+  createdAt         DateTime            @default(now())
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010/ADR-013: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet          Outlet          @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010/ADR-013: composite-FK (tenantId, konfigurasiQrisId) -> KonfigurasiQris(tenantId, id).
+  konfigurasiQris KonfigurasiQris @relation(fields: [tenantId, konfigurasiQrisId], references: [tenantId, id])
+  dilakukanOleh   Pengguna        @relation("RiwayatKonfigurasiQrisDilakukanOleh", fields: [dilakukanOlehId], references: [id])
+
+  @@map("riwayat_konfigurasi_qris")
 }
 
 // =====================================================================================

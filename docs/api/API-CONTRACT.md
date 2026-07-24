@@ -308,24 +308,107 @@ scope batch ALT-DEF-006 - batch ini hanya memodelkan skema + kontrak.
 
 ## 11. Pembayaran & Kasir (`packages/kasir`, `packages/pembayaran`, `packages/qris`)
 
-| Metode | Path | Deskripsi |
-|---|---|---|
-| POST | `/api/v1/giliran-kasir/buka` | Buka giliran kasir dengan modal awal. |
-| POST | `/api/v1/giliran-kasir/{id}/tutup` | Tutup giliran, hitung kas fisik. |
-| POST | `/api/v1/giliran-kasir/{id}/verifikasi` | Supervisor verifikasi selisih kas. |
-| GET | `/api/v1/metode-bayar` | Daftar metode pembayaran aktif. |
-| POST | `/api/v1/pembayaran` | Inisiasi pembayaran untuk pesanan (mendukung split bill). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "pembayaran" di master spec). |
-| POST | `/api/v1/pembayaran/{id}/konfirmasi-qris-manual` | Kasir konfirmasi QRIS manual (lihat catatan mode manual). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "konfirmasi QRIS" di master spec). |
-| POST | `/api/v1/pembayaran/{id}/konfirmasi` | Tandai pembayaran DIKONFIRMASI (tunai/kartu). |
-| POST | `/api/v1/pembayaran/{id}/batalkan` | Batalkan pembayaran sebelum selesai. |
-| POST | `/api/v1/pembayaran/{id}/refund` | Ajukan/proses refund (butuh approval supervisor). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "refund" di master spec). |
-| POST | `/api/v1/pembayaran/{id}/struk/cetak-ulang` | Cetak ulang struk (increment `jumlahCetakUlang`). |
+| Metode | Path | Deskripsi | Izin |
+|---|---|---|---|
+| POST | `/api/v1/giliran-kasir/buka` | Buka giliran kasir dengan modal awal (`ALT-KSR-001`). | `kasir.giliran.kelola` |
+| POST | `/api/v1/giliran-kasir/{id}/tutup` | Tutup giliran, hitung kas fisik (`ALT-KSR-010`). | `kasir.giliran.kelola` |
+| GET | `/api/v1/giliran-kasir/{id}/rekonsiliasi` | Bandingkan kas sistem vs kas fisik (`ALT-KSR-011`). | `kasir.rekonsiliasi.lihat` |
+| POST | `/api/v1/giliran-kasir/{id}/verifikasi` | Supervisor verifikasi selisih kas (`ALT-KSR-012`). | `kasir.giliran.verifikasi` |
+| POST | `/api/v1/giliran-kasir/{id}/buka-kembali` | Buka ulang giliran yang sudah ditutup untuk koreksi (`ALT-KSR-013`, wajib approval). | `kasir.giliran.buka-kembali` |
+| GET | `/api/v1/metode-bayar` | Daftar metode pembayaran aktif. Scope final dan tertutup: `TUNAI`, `TRANSFER_MANUAL`, `QRIS_MANUAL`, `SALDO_TOKO` (`ALT-DEF-004`/ADR-019). | - |
+| POST | `/api/v1/pembayaran` | Buat `Pembayaran` (`status = DRAF`) beserta baris `AlokasiPembayaran` dan `PembayaranMetodeBaris`-nya dalam **satu transaksi**. Body memuat `alokasi[] {pesananId, jumlah}` dan `metode[] {metodeBayarId, jumlah}`. Server MENOLAK (`422`) bila salah satu invariant jumlah tidak terpenuhi (lihat 11.1). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "pembayaran" di master spec). | `pembayaran.buat` |
+| POST | `/api/v1/pembayaran/{id}/ajukan` | `DRAF -> MENUNGGU`. Untuk metode `QRIS_MANUAL`, respons memuat payload QRIS bernominal yang dihasilkan server dari konfigurasi AKTIF outlet (lihat 11.2). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | `pembayaran.buat` |
+| PUT | `/api/v1/pembayaran/{id}/alokasi` | Ganti seluruh set `AlokasiPembayaran` untuk pembayaran ini (`ALT-KSR-004`). **Hanya berlaku saat `status = DRAF`** - setelah `DIBAYAR`, perubahan alokasi HANYA lewat `/koreksi`. Invariant jumlah divalidasi ulang. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | `pembayaran.alokasi.kelola` |
+| POST | `/api/v1/pembayaran/{id}/tahan` | Tahan/parkir transaksi kasir untuk dilanjutkan nanti (`ALT-KSR-003`). | `pembayaran.tahan` |
+| POST | `/api/v1/pembayaran/{id}/konfirmasi` | `MENUNGGU -> DIBAYAR` untuk metode `TUNAI`/`SALDO_TOKO` saja. Server MENOLAK bila pembayaran memuat baris metode `QRIS_MANUAL`/`TRANSFER_MANUAL` - keduanya wajib lewat `/konfirmasi-qris-manual`. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | `pembayaran.buat` |
+| POST | `/api/v1/pembayaran/{id}/klaim-sudah-bayar` | **Endpoint pelanggan** (token QR meja, tanpa `izin.kode`): `MENUNGGU -> MENUNGGU_KONFIRMASI`. Tombol "Sudah Membayar". **Endpoint ini TIDAK PERNAH menghasilkan `DIBAYAR`** dan tidak menulis `QrisKonfirmasiManual` - lihat 11.2. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | publik via token QR meja aktif |
+| POST | `/api/v1/pembayaran/{id}/konfirmasi-qris-manual` | **Endpoint kasir**: `MENUNGGU_KONFIRMASI -> DIBAYAR` setelah kasir memverifikasi dana masuk di aplikasi merchant. Menulis `QrisKonfirmasiManual` dalam transaksi yang sama. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "konfirmasi QRIS" di master spec). | `pembayaran.qris.konfirmasi-manual` |
+| POST | `/api/v1/pembayaran/{id}/koreksi` | Koreksi nominal salah input (`ALT-QRS-009`): menulis `KoreksiPembayaran` (`jumlahSebelum`/`jumlahSesudah`/`alasan`), status `DIBAYAR -> DIKOREKSI -> DIBAYAR`. Butuh approval supervisor. Append-only - tidak menimpa baris asal. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | `transaksi.koreksi-pembayaran` |
+| POST | `/api/v1/pembayaran/{id}/batalkan` | Batalkan pembayaran sebelum uang diterima (`DRAF`/`MENUNGGU`/`MENUNGGU_KONFIRMASI` saja). Ditolak bila `status = DIBAYAR`. | `transaksi.batalkan` |
+| POST | `/api/v1/pembayaran/{id}/refund` | Ajukan/proses refund (butuh approval supervisor, `ALT-KSR-007`). Status menjadi `DIKEMBALIKAN_SEBAGIAN`/`DIKEMBALIKAN` sesuai agregat. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "refund" di master spec). | `pembayaran.refund` |
+| POST | `/api/v1/pembayaran/{id}/struk/cetak` | Cetak struk pembayaran (`ALT-KSR-008`). | `pembayaran.struk.cetak` |
+| POST | `/api/v1/pembayaran/{id}/struk/cetak-ulang` | Cetak ulang struk (increment `jumlahCetakUlang`, `ALT-KSR-009`). | `pembayaran.struk.cetak-ulang` |
 
-Catatan QRIS: rilis awal memakai **mode manual** - kasir memverifikasi notifikasi masuk
-di aplikasi bank/QRIS lalu menandai pembayaran lunas lewat
-`/pembayaran/{id}/konfirmasi-qris-manual`. Endpoint ini dirancang agar mudah diganti
-dengan callback otomatis dari payment gateway QRIS pada rilis berikutnya tanpa
-mengubah bentuk resource `Pembayaran`.
+### 11.1 Invariant jumlah (`ALT-DEF-014`, ADR-019 Keputusan 4)
+
+Setiap penulisan `Pembayaran` beserta barisnya WAJIB memenuhi, di dalam **satu
+transaksi database**:
+
+1. `SUM(PembayaranMetodeBaris.jumlah) == Pembayaran.jumlah`
+2. `SUM(AlokasiPembayaran.jumlah) == Pembayaran.jumlah`
+
+Prisma/Postgres tidak menegakkan agregat lintas-baris secara deklaratif -
+validasi ini murni server-side dan tidak boleh dilewati jalur penulisan mana pun.
+Pelanggaran menghasilkan `422 Unprocessable Entity` dan **membatalkan seluruh
+transaksi** (tidak ada penulisan parsial).
+
+**`Pembayaran` tidak lagi punya `pesananId`.** Relasi ke pesanan selalu lewat
+`AlokasiPembayaran`, yang memungkinkan satu pembayaran melunasi beberapa pesanan
+(group bill, `ALT-KSR-004`) DAN satu pesanan dilunasi beberapa pembayaran
+(bayar bertahap, `ALT-KSR-005`). Endpoint yang dulu mengharapkan
+`pembayaran.pesananId` harus membaca `pembayaran.alokasi[]`.
+
+**Pembayaran campuran** (mis. tunai 50.000 + QRIS 30.000) adalah SATU
+`Pembayaran` dengan DUA baris `metode[]` - **tidak ada** metode bernama
+`CAMPURAN`, dan `KARTU_DEBIT`/`KARTU_KREDIT`/`EWALLET` sudah dihapus seluruhnya
+dari kontrak ini (`ALT-DEF-004`).
+
+### 11.2 Alur QRIS manual dan guard tombol pelanggan (`ALT-QRS-006`/`ALT-QRS-007`, ADR-020 Keputusan 2)
+
+1. Server menghitung total tagihan **server-side** dari pesanan yang dialokasikan.
+   **Klien TIDAK PERNAH mengirimkan nominal final** - kalau boleh, pelanggan dapat
+   membayar 1.000 untuk tagihan 100.000 dan QR yang dipajang akan "benar" menurut
+   sistem.
+2. Server menyisipkan nominal tsb ke payload QRIS statis outlet yang berstatus
+   `AKTIF` (didekripsi runtime, lihat bagian 18) dan mengembalikan QR bernominal.
+3. Pelanggan membayar lewat aplikasi banknya - **di luar sistem ini**.
+4. Pelanggan menekan "Sudah Membayar" -> `POST /pembayaran/{id}/klaim-sudah-bayar`
+   -> status **`MENUNGGU_KONFIRMASI` saja**.
+5. Kasir memeriksa notifikasi masuk di aplikasi merchant.
+6. Kasir mengonfirmasi -> `POST /pembayaran/{id}/konfirmasi-qris-manual` ->
+   `QrisKonfirmasiManual` ditulis DAN status menjadi `DIBAYAR`.
+
+> **Guard wajib:** endpoint langkah 4 dapat diakses pelanggan lewat token QR meja
+> dan **tidak boleh punya jalur kode apa pun menuju `DIBAYAR`**. Hanya endpoint
+> langkah 6, dengan izin `pembayaran.qris.konfirmasi-manual`, yang boleh
+> menghasilkan `DIBAYAR`. Tanpa guard ini siapa pun yang memegang link QR meja
+> dapat menandai tagihannya sendiri lunas.
+
+### 11.3 Larangan integrasi (`ALT-QRS-010`, ADR-021 Keputusan 4)
+
+**TIDAK ADA** dan tidak akan pernah ada di kontrak API ini:
+
+- endpoint webhook/callback masuk dari payment gateway, bank, atau e-wallet;
+- dependency SDK payment gateway apa pun;
+- jalur kode yang mengubah `StatusPembayaran` menjadi `DIBAYAR` tanpa aktor
+  manusia berizin;
+- metode bayar kartu debit/kredit/e-wallet.
+
+Ini **batasan arsitektur permanen**, bukan "belum diimplementasikan". Catatan pada
+versi lama dokumen ini yang menyebut endpoint konfirmasi manual "dirancang agar
+mudah diganti callback otomatis payment gateway pada rilis berikutnya" DIHAPUS
+karena bertentangan langsung dengan `ALT-QRS-010`.
+
+## 11b. Konfigurasi QRIS Outlet (`packages/qris`, `ALT-DEF-015`)
+
+| Metode | Path | Deskripsi | Izin |
+|---|---|---|---|
+| GET | `/api/v1/outlet/{id}/qris` | Konfigurasi QRIS outlet (metadata + status). **Tidak pernah mengembalikan payload**, terenkripsi maupun plaintext - hanya `fingerprint`, `namaMerchant`, `kotaMerchant`, `status` (`ALT-SEC-007`). | `qris.konfigurasi.kelola` |
+| PUT | `/api/v1/outlet/{id}/qris` | Buat/ubah konfigurasi QRIS (`ALT-QRS-001`). Server memvalidasi struktur EMV (`ALT-QRS-003`) dan CRC16 (`ALT-QRS-004`) sebelum menyimpan, lalu mengenkripsi payload (AES-256-GCM, kunci dari env/KMS) - payload mentah tidak pernah ditulis. Menulis `RiwayatKonfigurasiQris` (`DIBUAT`/`DIUBAH`). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | `qris.konfigurasi.kelola` |
+| POST | `/api/v1/outlet/{id}/qris/unggah` | Unggah gambar QR resmi bank/PJSP, payload di-decode dari gambar lalu divalidasi seperti di atas (`ALT-QRS-002`). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | `qris.konfigurasi.kelola` |
+| POST | `/api/v1/outlet/{id}/qris/{konfigurasiId}/aktifkan` | `-> AKTIF`. Menonaktifkan konfigurasi AKTIF sebelumnya **dalam transaksi yang sama** (satu AKTIF per outlet, lihat catatan constraint di bawah). Menulis `RiwayatKonfigurasiQris` (`DIAKTIFKAN` + `DINONAKTIFKAN`). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | `qris.konfigurasi.kelola` |
+| POST | `/api/v1/outlet/{id}/qris/{konfigurasiId}/verifikasi` | Verifikasi konfigurasi oleh pihak kedua sebelum diaktifkan (`diverifikasiOlehId`/`diverifikasiPada`). Menulis `RiwayatKonfigurasiQris` (`DIVERIFIKASI`). | `qris.konfigurasi.kelola` |
+| GET | `/api/v1/outlet/{id}/qris/riwayat` | Riwayat perubahan konfigurasi QRIS (`ALT-QRS-008`), append-only. `sebelum`/`sesudah` hanya memuat metadata - tidak pernah payload. | `qris.audit.lihat` |
+| GET | `/api/v1/pembayaran/{id}/qris-nominal` | Hasilkan QR bernominal untuk pembayaran ini (`ALT-QRS-006`). Nominal SELALU dihitung server-side dari alokasi pesanan; **tidak ada parameter nominal yang diterima dari klien**. | `qris.generate` |
+
+**Constraint "satu konfigurasi AKTIF per outlet" (`ALT-QRS-001`, ADR-021
+Keputusan 3):** ini **partial unique index Postgres**
+(`CREATE UNIQUE INDEX ... ON konfigurasi_qris ("tenantId", "outletId") WHERE
+status = 'AKTIF'`) yang tidak dapat diekspresikan di DSL Prisma. SQL-nya ada di
+`prisma/migrations/manual/001_konfigurasi_qris_partial_unique.sql`. **Index
+tersebut BELUM PERNAH dijalankan** (tidak ada Postgres di environment ini,
+`ALT-DEF-029`) - sampai saat itu aturan ini hanya dijaga guard level-aplikasi
+dan **tidak aman terhadap race condition**. Jangan menganggapnya sudah terjamin.
 
 ## 12. Promo (`packages/promo`)
 
@@ -404,9 +487,13 @@ setiap baris tabel endpoint pada dokumen ini untuk detail per-endpoint):
 | checkout | `POST /api/v1/pesanan` (kanal KASIR/PELAYAN) |
 | submit pesanan QR | `POST /api/v1/pesanan` (kanal QR_PELANGGAN) |
 | accept pesanan | `POST /api/v1/pesanan/{id}/terima` (`MENUNGGU_PERSETUJUAN -> DITERIMA`, ALT-DEF-005) dan `POST /api/v1/pesanan/{id}/konfirmasi` (`DITERIMA`/`MENUNGGU_PEMBAYARAN -> DIKONFIRMASI`) |
-| pembayaran | `POST /api/v1/pembayaran` |
+| pembayaran | `POST /api/v1/pembayaran`, `POST /api/v1/pembayaran/{id}/ajukan`, `POST /api/v1/pembayaran/{id}/konfirmasi` |
+| alokasi pembayaran (ALT-DEF-014) | `PUT /api/v1/pembayaran/{id}/alokasi` |
+| klaim bayar oleh pelanggan (ALT-DEF-014) | `POST /api/v1/pembayaran/{id}/klaim-sudah-bayar` - retry dari perangkat pelanggan sangat mungkin (jaringan seluler); tanpa idempotensi akan menghasilkan notifikasi kasir ganda |
 | konfirmasi QRIS | `POST /api/v1/pembayaran/{id}/konfirmasi-qris-manual` |
+| koreksi pembayaran (ALT-DEF-014) | `POST /api/v1/pembayaran/{id}/koreksi` - retry tanpa idempotensi akan menulis baris `KoreksiPembayaran` ganda untuk satu koreksi yang sama |
 | refund | `POST /api/v1/pembayaran/{id}/refund` |
+| konfigurasi QRIS (ALT-DEF-015) | `PUT /api/v1/outlet/{id}/qris`, `POST /api/v1/outlet/{id}/qris/unggah`, `POST /api/v1/outlet/{id}/qris/{konfigurasiId}/aktifkan` - retry tanpa idempotensi dapat menghasilkan dua konfigurasi AKTIF sebelum partial index ADR-021 terpasang |
 | penerimaan barang | `POST /api/v1/purchase-order/{id}/penerimaan` |
 | posting mutasi stok | `POST /api/v1/mutasi-stok/penyesuaian` |
 | posting opname | `POST /api/v1/stok-opname/{id}/selesaikan` |
