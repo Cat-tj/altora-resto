@@ -49,3 +49,4 @@ Catatan:
 
 - Alur status `MEJA` dan `RESERVASI` mengikuti state machine "Meja" di `docs/arsitektur/STATE-MACHINES.md`.
 - `SESI_MEJA_QR.token` adalah token unik per sesi duduk yang dipakai pada rute publik `/pesan/{token}` (lihat `docs/ui-ux/ROUTE-MAP.md`); ditutup (bukan dihapus) saat meja selesai dipakai.
+- **ALT-DEF-010 (composite tenant/outlet-scoped FK, lihat ADR-013 di `docs/engineering/DECISION-LOG.md`):** semua FK bergaya `xxxId FK` di atas yang menunjuk ke model tenant/outlet-owned kini adalah composite-FK di level database, bukan FK ID tunggal - `AREA_MEJA.outletId`/`MEJA.outletId` -> `Outlet(tenantId, outletId)`; `MEJA.areaMejaId` -> `AreaMeja(outletId, areaMejaId)`; `RESERVASI.outletId` -> `Outlet(tenantId, outletId)`, `RESERVASI.mejaId` -> `Meja(outletId, mejaId)`, `RESERVASI.pelangganId` -> `Pelanggan(tenantId, pelangganId)`. `SESI_MEJA_QR` dijudge aman tanpa composite (hanya satu relasi ke `Meja`, tidak ada FK kedua yang bisa menyimpang).

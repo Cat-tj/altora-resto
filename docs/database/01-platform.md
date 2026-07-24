@@ -225,3 +225,4 @@ Catatan:
   `prisma/seed/izin.seed.ts` untuk seed kode izin starter.
 - `SESI` tidak pernah di-hard-delete; pencabutan sesi memakai `dicabutPada`.
 - `AUDIT_LOG` bersifat append-only, sumber kebenaran untuk jejak audit semua domain lain.
+- **ALT-DEF-010 (composite tenant/outlet-scoped FK, lihat ADR-013 di `docs/engineering/DECISION-LOG.md`):** `PERANGKAT.outletId` kini composite-FK `(tenantId, outletId) -> Outlet(tenantId, id)`, bukan FK ID tunggal - menjamin `Perangkat` tidak bisa merujuk `Outlet` milik tenant lain. `PENGATURAN_OUTLET` dijudge aman tanpa composite (hanya satu relasi ke `Outlet`, tidak ada FK kedua yang bisa menyimpang).

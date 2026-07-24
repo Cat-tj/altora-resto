@@ -71,3 +71,4 @@ Catatan:
 
 - Harga dasar ada di `HARGA_ITEM_OUTLET` per outlet (bukan kolom harga tunggal di `ITEM_MENU`) supaya harga bisa berbeda per outlet dalam satu tenant.
 - Relasi ke `RESEP` bersifat opsional (item menu tanpa resep = tidak memotong stok otomatis).
+- **ALT-DEF-010 (composite tenant/outlet-scoped FK, lihat ADR-013 di `docs/engineering/DECISION-LOG.md`):** `KATEGORI_MENU.outletId` (nullable) dan `ITEM_MENU.kategoriId` kini composite-FK berbasis `tenantId` ke `Outlet`/`KategoriMenu`. `HARGA_ITEM_OUTLET` sebelumnya TIDAK punya kolom `tenantId` sama sekali (gap ditemukan saat audit) - kini ditambahkan `tenantId` beserta DUA composite-FK sekaligus ke `ItemMenu(tenantId, id)` dan `Outlet(tenantId, id)` (pola sama seperti `KeanggotaanOutlet`/ADR-011), menjamin harga per outlet tidak bisa merujuk item menu atau outlet milik tenant lain.

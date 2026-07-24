@@ -51,3 +51,4 @@ erDiagram
 Catatan:
 
 - Kombinasi promo (`bisaDigabung`) dan urutan evaluasi aturan divalidasi di `packages/promo` saat kalkulasi total pesanan; `PROMO_PEMAKAIAN` menyimpan hasil akhir sebagai jejak audit (berapa diskon riil yang diberikan), bukan hanya referensi promo.
+- **ALT-DEF-010 (lihat ADR-013 di `docs/engineering/DECISION-LOG.md`):** `PROMO` hanya punya relasi langsung ke `TENANT`, yang otomatis aman tanpa composite-FK (`Tenant.id` sudah menjadi identitas tenant itu sendiri). **CATATAN GAP terpisah (bukan defect composite-FK):** `PROMO` belum punya relasi/kolom outlet sama sekali meskipun `JENIS_SYARAT_PROMO.OUTLET_TERTENTU` menyiratkan promo seharusnya bisa dibatasi per outlet - model `PromoOutlet` **sengaja tidak** ditambahkan pada batch ini (di luar cakupan `ALT-DEF-010`/`ALT-DEF-014`), akan ditangani di batch domain promo berikutnya.

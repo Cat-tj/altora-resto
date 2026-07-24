@@ -161,6 +161,123 @@ migrasi nyata ke Postgres maupun test integrasi/isolasi-tenant sungguhan -
 karena itu status kedua defect di `DEFECT-LEDGER.md` adalah
 `SIAP_DIVERIFIKASI`, BUKAN `DITUTUP`.
 
+## Pass correction-loop 2026-07-25 (lanjutan): perbaikan ALT-DEF-010 dan ALT-DEF-014
+
+Cakupan: composite-FK tenant/outlet lintas skema (`Perangkat`, `KategoriMenu`,
+`ItemMenu`, `HargaItemOutlet`, `Gudang`, `StokBahan`, `MutasiStok`,
+`StokOpname`, `PurchaseOrder`, `PenerimaanBarang`, `AreaMeja`, `Meja`,
+`Reservasi`, `Pesanan`, `StasiunDapur`, `TiketDapur`, `GiliranKasir`,
+`Pembayaran`, `Karyawan`, `Absensi`, `RekapKasHarian`, `BiayaOperasional`,
+keempat tabel `RmXxx`), plus `@@unique([tenantId, id])` pendukung pada
+`Bahan`, `Supplier`, `Jabatan`, `KategoriBiaya`, `Pelanggan`. Lihat
+`docs/engineering/DECISION-LOG.md` ADR-013 untuk desain lengkap dan daftar
+model yang dijudge aman tanpa composite-FK.
+
+### 1. `prisma format`
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/altora_resto" npx prisma format --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 64ms 🚀
+```
+
+Catatan proses: format pertama kali GAGAL dua kali sebelum lulus - (1)
+"Ambiguous relation detected" pada `Outlet.hargaItemOutlet`/`ItemMenu.hargaOutlet`
+dan relasi `StokBahan`/`PenerimaanBarang` lain yang butuh nama relasi eksplisit
+(diperbaiki dengan menambahkan `@relation("HargaItemOutletOutlet")` dkk. pada
+sisi list-nya), dan (2) "A one-to-one relation must use unique fields on the
+defining side" pada `TiketDapur.pesanan` dan `RekapKasHarian.giliranKasir`
+(diperbaiki dengan menambahkan `@@unique([tenantId, pesananId])` pada
+`TiketDapur` dan `@@unique([tenantId, giliranKasirId])` pada
+`RekapKasHarian`). Kedua error ini murni aturan sintaks Prisma untuk
+composite-FK, BUKAN keterbatasan struktural yang butuh fallback - setelah
+diperbaiki, format/validate/generate semuanya lulus bersih (lihat di bawah).
+
+### 2. `prisma validate`
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/altora_resto" npx prisma validate --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+```
+
+### 3. `prisma generate` (tanpa koneksi database nyata)
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/altora_resto" npx prisma generate --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 654ms
+```
+
+### 4. Test struktur/arsitektur (dijalankan nyata)
+
+`packages/test-support/src/architecture/tenant-outlet-composite-constraints.test.ts`
+(baru, ALT-DEF-010/ALT-DEF-014) dijalankan lewat Node type-stripping:
+
+```
+$ node --experimental-strip-types packages/test-support/src/architecture/tenant-outlet-composite-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-010/ALT-DEF-014 lulus.
+```
+
+Test lama `keanggotaan-outlet-constraints.test.ts` (ALT-DEF-001/002)
+dijalankan ulang untuk memverifikasi tidak ada regresi dari perubahan skema
+besar-besaran pass ini:
+
+```
+$ node --experimental-strip-types packages/test-support/src/architecture/keanggotaan-outlet-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-001/ALT-DEF-002 lulus.
+```
+
+`tsc --noEmit` atas keempat file test (baru + lama) - semuanya **bersih,
+tanpa error**:
+
+```
+$ npx tsc --noEmit --strict --module ESNext --moduleResolution Bundler --target ES2022 --skipLibCheck --types node packages/test-support/src/architecture/tenant-outlet-composite-constraints.test.ts
+(tidak ada output - bersih)
+
+$ npx tsc --noEmit --strict --module ESNext --moduleResolution Bundler --target ES2022 --skipLibCheck packages/test-support/src/architecture/prisma-client-shape-tenant-outlet.test.ts
+(tidak ada output - bersih)
+
+$ npx tsc --noEmit --strict --module ESNext --moduleResolution Bundler --target ES2022 --skipLibCheck packages/test-support/src/architecture/prisma-client-shape.test.ts
+(tidak ada output - bersih)
+
+$ npx tsc --noEmit --strict --module ESNext --moduleResolution Bundler --target ES2022 --skipLibCheck --types node packages/test-support/src/architecture/keanggotaan-outlet-constraints.test.ts prisma/seed/izin.seed.ts
+(tidak ada output - bersih)
+```
+
+**DIBLOKIR:** eksekusi lewat `pnpm --filter @altora/test-support test`
+(vitest) tetap tidak bisa dijalankan di environment ini (sama seperti pass
+sebelumnya - lihat `ALT-DEF-027`). Assertion yang sama sudah dibuktikan lulus
+secara nyata lewat `node --experimental-strip-types` di atas.
+
+### 5. `prisma migrate dev` - DIBLOKIR (konsisten dengan pass sebelumnya)
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/altora_resto_migrate_test" npx prisma migrate dev --schema=prisma/schema/schema.prisma --name alt_def_010_014_composite_tenant_outlet --create-only
+Prisma schema loaded from prisma/schema/schema.prisma
+Datasource "db": PostgreSQL database "altora_resto_migrate_test", schema "public" at "localhost:5432"
+
+Error: P1010: User `user` was denied access on the database `altora_resto_migrate_test.public`
+```
+
+**DIBLOKIR: migrasi belum dapat diverifikasi karena PostgreSQL nyata tidak
+tersedia di environment ini** (konsisten dengan `ALT-DEF-029`). Tidak ada file
+migrasi yang dibuat/di-commit dari percobaan ini (`prisma/migrations/` tetap
+kosong).
+
+### Kesimpulan status
+
+Schema untuk ALT-DEF-010/ALT-DEF-014 sudah benar secara sintaks
+(`format`+`validate`), tipe yang dihasilkan sudah benar secara bentuk
+(`generate` + `tsc --noEmit`, termasuk `Unchecked...CreateInput` untuk tiga
+model yang baru mendapat kolom `tenantId` denormalisasi - `HargaItemOutlet`,
+`StokBahan`, `PenerimaanBarang`), dan seluruh composite-FK yang diklaim di
+ADR-013 sudah dibuktikan ada lewat test struktur nyata, tanpa regresi pada
+test ALT-DEF-001/002 yang sudah ada. **Belum ada** migrasi nyata ke Postgres
+maupun test integrasi/isolasi-tenant sungguhan - karena itu status kedua
+defect di `DEFECT-LEDGER.md` adalah `SIAP_DIVERIFIKASI`, BUKAN `DITUTUP`.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```

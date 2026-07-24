@@ -66,3 +66,4 @@ Catatan:
 
 - `KARYAWAN.penggunaId` terhubung ke `PENGGUNA` (bagian Platform) hanya jika karyawan tersebut memiliki akses login sistem; peran/permission tetap diatur lewat `packages/otorisasi`.
 - Semua koreksi absensi (mis. lupa presensi) dicatat sebagai baris `ABSENSI` baru dengan `metode = MANUAL_SUPERVISOR`, bukan mengedit baris asli.
+- **ALT-DEF-010 (composite tenant/outlet-scoped FK, lihat ADR-013 di `docs/engineering/DECISION-LOG.md`):** `KARYAWAN.outletUtamaId` kini composite-FK `(tenantId, outletUtamaId) -> Outlet(tenantId, id)`; `KARYAWAN.jabatanId` kini composite-FK `(tenantId, jabatanId) -> Jabatan(tenantId, id)`. `ABSENSI.outletId` kini composite-FK ke `Outlet(tenantId, id)`, dan `ABSENSI.karyawanId` kini composite-FK `(tenantId, karyawanId) -> Karyawan(tenantId, id)`.

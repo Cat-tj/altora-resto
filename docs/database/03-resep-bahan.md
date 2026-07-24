@@ -44,3 +44,4 @@ Catatan:
 
 - `RESEP_BAHAN.jumlah` boleh `Decimal` (bukan Int) karena satuan bahan baku (gram/ml) butuh presisi pecahan - berbeda dari nilai uang yang wajib `Int`.
 - Pemotongan stok otomatis saat pesanan selesai dihitung dari `RESEP_BAHAN` dikalikan kuantitas item pada pesanan, lalu dicatat sebagai baris baru di `MUTASI_STOK` (lihat `04-persediaan.md`) - bukan mengubah `STOK_BAHAN` secara langsung tanpa jejak.
+- **ALT-DEF-010 (lihat ADR-013 di `docs/engineering/DECISION-LOG.md`):** `BAHAN` mendapat `@@unique([tenantId, id])` tambahan agar model lain (`StokBahan`, `MutasiStok`, `RmStokKritis` di domain 04/14) bisa memakai composite-FK menuju `Bahan`. `RESEP_BAHAN` sendiri (baris/junction murni di bawah `Resep`) di luar cakupan audit composite-FK batch ini - lihat ADR-013 untuk daftar lengkap tabel baris yang dijudge aman tanpa composite.

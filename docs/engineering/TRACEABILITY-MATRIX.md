@@ -85,6 +85,20 @@ ini sampai pekerjaan sinkronisasi tersebut selesai.
 | ALT-UIX-003 | - | - | `apps/desktop` | - | BELUM DIKERJAKAN | - |
 | ALT-UIX-004 | `Perangkat` | - | - | - | BELUM DIKERJAKAN | - |
 
+## Security (`ALT-SEC`) - baris ditambahkan pass correction-loop ALT-DEF-010/ALT-DEF-014
+
+Baris berikut ditambahkan pada pass ini (bukan bagian dari draf awal 64-referensi di atas)
+karena requirement `ALT-SEC-001`/`ALT-SEC-002`/`ALT-SEC-003` langsung tersentuh oleh
+perbaikan composite-FK tenant/outlet - lihat `docs/engineering/DECISION-LOG.md` ADR-013 dan
+`docs/engineering/RELEASE-EVIDENCE.md`. Hanya baris yang langsung tersentuh oleh defect
+ini yang ditambahkan, bukan sinkronisasi penuh 249-requirement (tetap `ALT-DEF-020`).
+
+| Requirement ID | Entitas ERD | Endpoint API | Rute UI | Permission | Status | Bukti Uji |
+|---|---|---|---|---|---|---|
+| ALT-SEC-001 | Semua model tenant-scoped di `prisma/schema/schema.prisma` (lihat ADR-013 untuk daftar lengkap) | middleware semua endpoint (belum diimplementasikan sebagai kode - lihat `ALT-DEF-027`) | - | keamanan.tenant.isolasi | SEBAGIAN (jaminan level-skema selesai, middleware aplikasi BELUM DIKERJAKAN) | `prisma format`/`validate`/`generate` + `tenant-outlet-composite-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
+| ALT-SEC-002 | `Outlet`, `Gudang`, `Meja`, `AreaMeja`, `StasiunDapur`, `Pesanan`, `TiketDapur`, `GiliranKasir`, `Pembayaran`, `Karyawan`, `PurchaseOrder`, `PenerimaanBarang`, `MutasiStok`, `StokBahan`, `HargaItemOutlet`, `RekapKasHarian`, `BiayaOperasional`, `RmPenjualanHarian`, `RmPenjualanItemHarian`, `RmStokKritis`, `RmKinerjaKaryawanHarian` (composite-FK tenant/outlet ditambahkan pass ini, ALT-DEF-010) | - | - | keamanan.tenant.isolasi | SIAP_DIVERIFIKASI (constraint level-database ada dan tervalidasi; migrasi Postgres nyata + test integrasi sungguhan DIBLOKIR, lihat ALT-DEF-029) | `tenant-outlet-composite-constraints.test.ts`, `prisma-client-shape-tenant-outlet.test.ts` (lihat RELEASE-EVIDENCE.md) |
+| ALT-SEC-003 | `KeanggotaanOutlet` (composite-FK verifikasi ulang, ALT-DEF-001, tidak berubah pass ini) | middleware semua endpoint outlet-scoped (BELUM DIKERJAKAN sebagai kode) | - | keamanan.outlet.isolasi | SEBAGIAN (jaminan level-skema dari ALT-DEF-001 sudah ada; enforcement runtime BELUM DIKERJAKAN) | `keanggotaan-outlet-constraints.test.ts` (regresi diverifikasi ulang, lihat RELEASE-EVIDENCE.md) |
+
 ## Catatan gap yang ditemukan saat menyusun matriks ini
 
 - `ALT-PLT-001` (registrasi tenant baru) dan `ALT-PLT-006` (halaman audit log) belum

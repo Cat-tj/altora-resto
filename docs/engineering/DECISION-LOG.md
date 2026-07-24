@@ -239,8 +239,133 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
   `/api/v1/peran/{id}/izin`, `/api/v1/peran/{id}/batas-izin`,
   `/api/v1/persetujuan/{id}/putuskan`) diperbarui di `API-CONTRACT.md`.
 
+## ADR-013: Composite-FK tenant/outlet lintas skema (ALT-DEF-010, ALT-DEF-014)
+
+- **Status:** DITERIMA
+- **Konteks:** ADR-011 memperkenalkan pola composite-FK ganda untuk
+  `KeanggotaanOutlet` (dua relasi memakai kolom `tenantId` yang sama menuju
+  `Outlet(tenantId, id)` dan `KeanggotaanTenant(tenantId, id)`) sebagai
+  jaminan level-database bahwa entitas anak tidak bisa merujuk parent milik
+  tenant lain. `ALT-DEF-010` di `DEFECT-LEDGER.md` mencatat bahwa pola ini
+  BELUM diterapkan di hampir seluruh model lain di skema - setiap model yang
+  membawa `tenantId` sekaligus FK ke `Outlet`/model tenant-owned lain hanya
+  memakai FK ID tunggal, sehingga tidak ada jaminan level-data bahwa FK
+  tersebut benar-benar milik tenant yang sama. Ini adalah risiko keamanan
+  tertinggi di RISK-REGISTER.md (RISK-001). `ALT-DEF-014` (split
+  bill/`AlokasiPembayaran`) TIDAK dikerjakan business-logic-nya di batch ini
+  (lihat catatan cakupan di bawah) - hanya bagian tenant/outlet-safety pada
+  model `Pembayaran` yang sudah ada yang disentuh.
+- **Keputusan - pola umum:** Untuk setiap model anak yang membawa `tenantId`
+  DAN sebuah FK ke model tenant-owned (langsung `Outlet`, atau model lain yang
+  sendiri membawa `tenantId`/`outletId`, mis. `Gudang`, `Meja`,
+  `StasiunDapur`, `KategoriMenu`, `ItemMenu`, `Karyawan`, `Supplier`,
+  `Bahan`, `PurchaseOrder`, `Pesanan`, `GiliranKasir`, `Jabatan`,
+  `KategoriBiaya`, `Pelanggan`):
+  1. Parent mendapat `@@unique([tenantId, id])` tambahan (atau
+     `@@unique([outletId, id])` bila komposit yang dipakai adalah level
+     outlet, lihat poin 3).
+  2. Child mengganti relasi FK tunggal `@relation(fields: [xId], references: [id])`
+     menjadi composite `@relation(fields: [tenantId, xId], references: [tenantId, id])`.
+     `tenantId` pada child TIDAK pernah dihapus/diganti - ia tetap kolom
+     sendiri milik child, hanya sekarang dipakai ganda sebagai bagian
+     composite-FK yang membuat Postgres MENOLAK insert/update bila `xId` yang
+     dirujuk ternyata milik tenant lain.
+  3. **Varian outlet-level** dipakai ketika DUA entitas anak sama-sama sudah
+     membawa `outletId` sendiri dan risiko nyatanya adalah pencampuran
+     **outlet** (bukan cuma tenant) dalam tenant yang sama - dipakai untuk
+     `Meja`↔`AreaMeja`, `Pesanan`/`Reservasi`↔`Meja`, `TiketDapur`↔`StasiunDapur`.
+     Di sini parent mendapat `@@unique([outletId, id])` dan child memakai
+     `@relation(fields: [outletId, xId], references: [outletId, id])`.
+  4. Relasi ke `Tenant` ITU SENDIRI (fields: `[tenantId]`, references:
+     `Tenant.id`) **tidak pernah** diubah menjadi composite - `Tenant.id`
+     sudah menjadi identitas tenant itu sendiri, tidak ada perantara yang bisa
+     menyimpang. Composite hanya diperlukan ketika parent BUKAN `Tenant`
+     langsung.
+  5. Relasi ke `Pengguna` (identitas global, ADR-011) **tidak pernah**
+     di-composite-kan ke tenant - `Pengguna` sengaja lintas-tenant.
+- **Model yang mendapat composite-FK (relation name di kode di
+  `prisma/schema/schema.prisma`):** `Perangkat` (`outlet`), `KategoriMenu`
+  (`outlet`, opsional), `ItemMenu` (`kategori`), `HargaItemOutlet` (BARU:
+  `tenantId` ditambahkan - `HargaItemOutletItemMenu` + `HargaItemOutletOutlet`,
+  pola ganda seperti `KeanggotaanOutlet`), `Gudang` (`outlet`), `StokBahan`
+  (BARU: `tenantId` ditambahkan - `StokBahanGudang` + `StokBahanBahan`),
+  `MutasiStok` (`outlet`; `gudang` - relasi FK yang SEBELUMNYA tidak ada sama
+  sekali untuk kolom `gudangId`, kini ditambahkan langsung sebagai composite;
+  `bahan`), `StokOpname` (`gudang`), `PurchaseOrder` (`outlet`; `supplier`),
+  `PenerimaanBarang` (BARU: `tenantId` ditambahkan - `PenerimaanBarangPo` +
+  `PenerimaanBarangGudang`), `AreaMeja` (`outlet`), `Meja` (`outlet`;
+  `areaMeja` via outlet-level), `Reservasi` (`outlet`; `meja` via
+  outlet-level, opsional; `pelanggan`), `Pesanan` (`outlet`; `meja` via
+  outlet-level, opsional; `pelanggan`, opsional), `StasiunDapur` (`outlet`),
+  `TiketDapur` (`outlet`; `pesanan`; `stasiunDapur` via outlet-level,
+  opsional), `GiliranKasir` (`outlet`), `Pembayaran` (`outlet`; `pesanan`),
+  `Karyawan` (`jabatan`; `outletUtama`), `Absensi` (`outlet`; `karyawan`),
+  `RekapKasHarian` (`outlet`; `giliranKasir`, opsional), `BiayaOperasional`
+  (`outlet`; `kategoriBiaya`), `RmPenjualanHarian` (`outlet`),
+  `RmPenjualanItemHarian` (`outlet`; `itemMenu`), `RmStokKritis` (`outlet`;
+  `bahan`), `RmKinerjaKaryawanHarian` (`outlet`; `karyawan`).
+  Parent yang mendapat `@@unique([tenantId, id])` baru untuk mendukung di
+  atas: `KategoriMenu`, `ItemMenu`, `Bahan`, `Gudang`, `Supplier`,
+  `PurchaseOrder`, `Pesanan`, `GiliranKasir`, `Karyawan`, `Jabatan`,
+  `KategoriBiaya`, `Pelanggan`. Parent yang mendapat `@@unique([outletId, id])`
+  baru: `AreaMeja`, `Meja`, `StasiunDapur`.
+- **Model yang DIJUDGE AMAN tanpa composite-FK (dan alasannya):**
+  - `PengaturanOutlet` - hanya punya SATU relasi (`outletId -> Outlet`), tidak
+    ada FK kedua yang bisa menyimpang darinya; FK tunggal sudah cukup
+    men-scope baris ke satu outlet. Tidak membawa `tenantId` dan sengaja tidak
+    ditambahkan satu di sini karena tidak ada jaminan tambahan yang didapat.
+  - `SesiMejaQr` - hanya punya SATU relasi (`mejaId -> Meja`, yang sekarang
+    sudah tenant/outlet-safe lewat composite `Meja.outlet`). Sama seperti
+    `PengaturanOutlet`, tidak ada FK kedua untuk dibandingkan.
+  - `Promo` - hanya punya relasi ke `Tenant` langsung (lihat poin 4 di atas),
+    otomatis aman tanpa composite. **CATATAN GAP terpisah (bukan defect
+    composite-FK):** `Promo` belum punya relasi/kolom outlet sama sekali
+    meskipun `JenisSyaratPromo.OUTLET_TERTENTU` menyiratkan promo seharusnya
+    bisa dibatasi per outlet - **sengaja TIDAK** ditambahkan `PromoOutlet` di
+    batch ini (di luar scope `ALT-DEF-010`/`ALT-DEF-014`, akan ditangani di
+    batch domain promo berikutnya per instruksi correction-loop).
+  - Semua tabel baris/junction murni (mis. `ResepBahan`, `ItemPesanan`,
+    `ItemPesananModifier`, `PurchaseOrderBaris`, `PenerimaanBarangBaris`,
+    `StokOpnameBaris`, `TiketDapurBaris`, `PembayaranMetodeBaris`,
+    `PromoAturan`, `PesananRiwayatStatus`, dll.) - **tidak termasuk daftar
+    audit eksplisit batch ini** (lihat instruksi cakupan correction-loop) dan
+    tidak memiliki kolom `tenantId` sendiri; selalu diakses lewat parent
+    transaksionalnya yang sudah/akan menjadi tenant-safe. Menambahkan
+    `tenantId` + composite ke setiap tabel baris akan membebani skema secara
+    signifikan tanpa jalur akses independen yang nyata untuk dilindungi -
+    dicatat di sini sebagai keputusan sadar untuk TIDAK memaksimalkan
+    composite-FK di mana-mana, bukan kelalaian.
+  - `TransaksiKasir`, `ReturPembelian`, `QrisKonfirmasiManual`, `Struk`,
+    `PembayaranRefund`, `Kupon`, `PromoPemakaian`, `Keanggotaan`,
+    `PoinRiwayat`, `JadwalShift`, `PenugasanShift`, `CutiIzin` - eksplisit
+    **di luar daftar model yang diaudit batch ini** (lihat instruksi
+    cakupan); domain-domain ini (kasir/promo/membership/HR) akan mendapat
+    rework lebih dalam di batch domain masing-masing per rencana
+    correction-loop, dan tenant-safety-nya akan disentuh di batch tersebut,
+    bukan diam-diam dilewati di sini.
+- **Keterbatasan struktural Prisma yang ditemukan:** TIDAK ADA. Setiap
+  composite-FK yang dicoba di batch ini **berhasil** divalidasi oleh
+  `prisma format`/`prisma validate`/`prisma generate` (lihat
+  `RELEASE-EVIDENCE.md` bagian "Pass correction-loop 2026-07-25 (lanjutan
+  ALT-DEF-010/014)") - tidak ada fallback ke scalar+guard aplikasi yang
+  diperlukan di batch ini. Satu-satunya penyesuaian teknis yang dibutuhkan
+  (bukan keterbatasan, sekadar aturan Prisma) adalah menambahkan
+  `@@unique([tenantId, pesananId])` pada `TiketDapur` dan
+  `@@unique([tenantId, giliranKasirId])` pada `RekapKasHarian` - Prisma
+  mewajibkan composite-FK pada relasi one-to-one memakai unique constraint
+  yang mencakup seluruh field composite tersebut, bukan hanya field FK
+  tunggal yang sudah `@unique`.
+- **Konsekuensi:** Ini adalah perubahan skema terluas dalam satu pass
+  correction-loop (menyentuh lebih dari 25 model). `docs/database/*.md`
+  untuk setiap domain yang tersentuh diberi anotasi bahwa FK terkait kini
+  composite tenant/outlet-scoped. Status kedua defect di `DEFECT-LEDGER.md`
+  diset `SIAP_DIVERIFIKASI` (bukan `DITUTUP`) - migrasi nyata ke Postgres dan
+  test integrasi isolasi-tenant sungguhan tetap `DIBLOKIR` (`ALT-DEF-029`),
+  konsisten dengan status ADR-011/ADR-012 sebelumnya.
+
 ## Status ringkas
 
 Semua ADR di atas berstatus **DITERIMA sebagai keputusan desain**, tetapi
 implementasinya di kode berstatus **BELUM DIKERJAKAN** kecuali skema Prisma awal
-(ADR-002, ADR-004, ADR-005 sudah tercermin di `prisma/schema/schema.prisma`).
+(ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013 sudah tercermin di
+`prisma/schema/schema.prisma`).

@@ -48,3 +48,4 @@ Catatan:
 
 - `POIN_RIWAYAT` bersifat append-only (no hard-delete); `KEANGGOTAAN.poinAktif` adalah saldo turunan yang direkonsiliasi dari riwayat.
 - Kenaikan tier dievaluasi dari `poinKumulatif` terhadap `TIER_MEMBERSHIP.minPoinKumulatif`, dijalankan sebagai proses terpisah (bukan trigger DB implisit) agar bisa diaudit.
+- **ALT-DEF-010 (lihat ADR-013 di `docs/engineering/DECISION-LOG.md`):** `PELANGGAN` mendapat `@@unique([tenantId, id])` tambahan agar `Pesanan`/`Reservasi` (domain 06/07) bisa memakai composite-FK `(tenantId, pelangganId) -> Pelanggan(tenantId, id)` saat merujuk pelanggan.
