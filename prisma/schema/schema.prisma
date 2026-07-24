@@ -1,0 +1,1561 @@
+// Skema Prisma Altora Resto
+//
+// Mengimplementasikan ERD di docs/database/*.md. Aturan umum (lihat docs/database/README.md):
+// - ID memakai ULID, disimpan sebagai String @id.
+// - Setiap tabel transaksional/tenant-scoped membawa tenantId dan (jika relevan) outletId.
+// - Uang disimpan sebagai Int dalam rupiah (bukan Decimal/Float) - tidak ada floating point.
+// - Kuantitas bahan baku memakai Decimal (butuh presisi pecahan, mis. gram/ml).
+// - Timestamp disimpan UTC.
+// - Tidak ada hard-delete pada data finansial, stok, dan audit - lihat kolom status /
+//   dibatalkanPada / dibalikOlehId di setiap domain.
+//
+// Skema ini adalah draft awal ("BELUM DIKERJAKAN" secara implementasi/migrasi) - lihat
+// docs/engineering/MASTER-CHECKLIST.md dan docs/engineering/TRACEABILITY-MATRIX.md untuk
+// status pengerjaan per requirement.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================================================
+// 1. PLATFORM (docs/database/01-platform.md)
+// =====================================================================================
+
+enum StatusTenant {
+  AKTIF
+  NONAKTIF
+  SUSPENDED
+}
+
+enum StatusOutlet {
+  AKTIF
+  NONAKTIF
+}
+
+enum StatusPengguna {
+  AKTIF
+  NONAKTIF
+}
+
+enum JenisPerangkat {
+  KASIR
+  KDS
+  PRINTER
+  TABLET_PELAYAN
+}
+
+enum StatusPerangkat {
+  AKTIF
+  NONAKTIF
+}
+
+model Tenant {
+  id        String       @id
+  nama      String
+  slug      String       @unique
+  status    StatusTenant @default(AKTIF)
+  createdAt DateTime     @default(now())
+
+  outlet                  Outlet[]
+  pengguna                Pengguna[]
+  peran                   Peran[]
+  auditLog                AuditLog[]
+  pengaturanTenant        PengaturanTenant[]
+  satuan                  Satuan[]
+  bahan                   Bahan[]
+  resep                   Resep[]
+  modifierGrup            ModifierGrup[]
+  itemMenu                ItemMenu[]
+  supplier                Supplier[]
+  purchaseOrder           PurchaseOrder[]
+  returPembelian          ReturPembelian[]
+  pelanggan               Pelanggan[]
+  tierMembership          TierMembership[]
+  promo                   Promo[]
+  kupon                   Kupon[]
+  promoPemakaian          PromoPemakaian[]
+  jabatan                 Jabatan[]
+  karyawan                Karyawan[]
+  jadwalShift             JadwalShift[]
+  absensi                 Absensi[]
+  kategoriBiaya           KategoriBiaya[]
+  rekapKasHarian          RekapKasHarian[]
+  biayaOperasional        BiayaOperasional[]
+  metodeBayar             MetodeBayar[]
+  pesanan                 Pesanan[]
+  mutasiStok              MutasiStok[]
+  stokOpname              StokOpname[]
+  tiketDapur              TiketDapur[]
+  stasiunDapur            StasiunDapur[]
+  rmPenjualanHarian       RmPenjualanHarian[]
+  rmPenjualanItemHarian   RmPenjualanItemHarian[]
+  rmStokKritis            RmStokKritis[]
+  rmKinerjaKaryawanHarian RmKinerjaKaryawanHarian[]
+  pembayaran              Pembayaran[]
+
+  @@map("tenant")
+}
+
+model Outlet {
+  id        String       @id
+  tenantId  String
+  nama      String
+  kode      String
+  zonaWaktu String
+  status    StatusOutlet @default(AKTIF)
+  createdAt DateTime     @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  penggunaOutlet          PenggunaOutlet[]
+  perangkat               Perangkat[]
+  pengaturanOutlet        PengaturanOutlet[]
+  kategoriMenu            KategoriMenu[]
+  hargaItemOutlet         HargaItemOutlet[]
+  gudang                  Gudang[]
+  purchaseOrder           PurchaseOrder[]
+  areaMeja                AreaMeja[]
+  meja                    Meja[]
+  reservasi               Reservasi[]
+  pesanan                 Pesanan[]
+  stasiunDapur            StasiunDapur[]
+  tiketDapur              TiketDapur[]
+  giliranKasir            GiliranKasir[]
+  pembayaran              Pembayaran[]
+  mutasiStok              MutasiStok[]
+  karyawanUtama           Karyawan[]                @relation("KaryawanOutletUtama")
+  jadwalShift             JadwalShift[]
+  absensi                 Absensi[]
+  rekapKasHarian          RekapKasHarian[]
+  biayaOperasional        BiayaOperasional[]
+  rmPenjualanHarian       RmPenjualanHarian[]
+  rmPenjualanItemHarian   RmPenjualanItemHarian[]
+  rmStokKritis            RmStokKritis[]
+  rmKinerjaKaryawanHarian RmKinerjaKaryawanHarian[]
+
+  @@unique([tenantId, kode])
+  @@map("outlet")
+}
+
+model Pengguna {
+  id          String         @id
+  tenantId    String
+  namaLengkap String
+  email       String
+  pinHash     String?
+  status      StatusPengguna @default(AKTIF)
+  createdAt   DateTime       @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  penggunaOutlet             PenggunaOutlet[]
+  peran                      PenggunaPeran[]
+  sesi                       Sesi[]
+  auditLog                   AuditLog[]
+  karyawan                   Karyawan?
+  giliranKasir               GiliranKasir[]
+  purchaseOrderDibuat        PurchaseOrder[]        @relation("PoDibuatOleh")
+  penerimaanBarangDiterima   PenerimaanBarang[]     @relation("PenerimaanDiterimaOleh")
+  stokOpnameDibuat           StokOpname[]           @relation("OpnameDibuatOleh")
+  pesananDibuat              Pesanan[]              @relation("PesananDibuatOleh")
+  pesananRiwayatStatusDiubah PesananRiwayatStatus[] @relation("RiwayatStatusDiubahOleh")
+  pembayaranDikonfirmasi     Pembayaran[]           @relation("PembayaranDikonfirmasiOleh")
+  qrisKonfirmasiDiverifikasi QrisKonfirmasiManual[] @relation("QrisDiverifikasiOleh")
+  pembayaranRefundDisetujui  PembayaranRefund[]     @relation("RefundDisetujuiOleh")
+  cutiIzinDisetujui          CutiIzin[]             @relation("CutiDisetujuiOleh")
+  rekapKasHarianDiverifikasi RekapKasHarian[]       @relation("RekapDiverifikasiOleh")
+  biayaOperasionalDicatat    BiayaOperasional[]     @relation("BiayaDicatatOleh")
+
+  @@unique([tenantId, email])
+  @@map("pengguna")
+}
+
+model PenggunaOutlet {
+  id         String   @id
+  penggunaId String
+  outletId   String
+  createdAt  DateTime @default(now())
+
+  pengguna Pengguna @relation(fields: [penggunaId], references: [id])
+  outlet   Outlet   @relation(fields: [outletId], references: [id])
+
+  @@unique([penggunaId, outletId])
+  @@map("pengguna_outlet")
+}
+
+model Peran {
+  id          String @id
+  tenantId    String
+  kode        String
+  nama        String
+  permissions Json
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id])
+  pengguna PenggunaPeran[]
+
+  @@unique([tenantId, kode])
+  @@map("peran")
+}
+
+model PenggunaPeran {
+  id         String @id
+  penggunaId String
+  peranId    String
+
+  pengguna Pengguna @relation(fields: [penggunaId], references: [id])
+  peran    Peran    @relation(fields: [peranId], references: [id])
+
+  @@unique([penggunaId, peranId])
+  @@map("pengguna_peran")
+}
+
+model Perangkat {
+  id           String          @id
+  tenantId     String
+  outletId     String
+  jenis        JenisPerangkat
+  kodeAktivasi String          @unique
+  status       StatusPerangkat @default(AKTIF)
+  lastSeenAt   DateTime?
+
+  outlet Outlet @relation(fields: [outletId], references: [id])
+  sesi   Sesi[]
+
+  @@map("perangkat")
+}
+
+model Sesi {
+  id             String    @id
+  penggunaId     String
+  perangkatId    String?
+  dibuatPada     DateTime  @default(now())
+  kadaluarsaPada DateTime
+  dicabutPada    DateTime?
+
+  pengguna  Pengguna   @relation(fields: [penggunaId], references: [id])
+  perangkat Perangkat? @relation(fields: [perangkatId], references: [id])
+
+  @@map("sesi")
+}
+
+model AuditLog {
+  id         String   @id
+  tenantId   String
+  outletId   String?
+  penggunaId String
+  aksi       String
+  entitas    String
+  entitasId  String
+  sebelum    Json?
+  sesudah    Json?
+  createdAt  DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  pengguna Pengguna @relation(fields: [penggunaId], references: [id])
+
+  @@map("audit_log")
+}
+
+model PengaturanTenant {
+  id       String @id
+  tenantId String
+  kunci    String
+  nilai    Json
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, kunci])
+  @@map("pengaturan_tenant")
+}
+
+model PengaturanOutlet {
+  id       String @id
+  outletId String
+  kunci    String
+  nilai    Json
+
+  outlet Outlet @relation(fields: [outletId], references: [id])
+
+  @@unique([outletId, kunci])
+  @@map("pengaturan_outlet")
+}
+
+// =====================================================================================
+// 2. MENU & KATALOG (docs/database/02-menu-katalog.md)
+// =====================================================================================
+
+enum StatusAktifNonaktif {
+  AKTIF
+  NONAKTIF
+}
+
+enum StatusItemMenu {
+  AKTIF
+  NONAKTIF
+  HABIS
+}
+
+model KategoriMenu {
+  id       String              @id
+  tenantId String
+  outletId String?
+  nama     String
+  urutan   Int                 @default(0)
+  status   StatusAktifNonaktif @default(AKTIF)
+
+  outlet   Outlet?    @relation(fields: [outletId], references: [id])
+  itemMenu ItemMenu[]
+
+  @@map("kategori_menu")
+}
+
+model ItemMenu {
+  id              String         @id
+  tenantId        String
+  kategoriId      String
+  nama            String
+  deskripsi       String?
+  gambarUrl       String?
+  stokTakTerbatas Boolean        @default(true)
+  status          StatusItemMenu @default(AKTIF)
+  createdAt       DateTime       @default(now())
+
+  tenant                Tenant                  @relation(fields: [tenantId], references: [id])
+  kategori              KategoriMenu            @relation(fields: [kategoriId], references: [id])
+  varian                VarianMenu[]
+  modifierGrup          ItemModifierGrup[]
+  hargaOutlet           HargaItemOutlet[]
+  resep                 Resep?
+  itemPesanan           ItemPesanan[]
+  rmPenjualanItemHarian RmPenjualanItemHarian[]
+
+  @@map("item_menu")
+}
+
+model VarianMenu {
+  id            String              @id
+  itemMenuId    String
+  nama          String
+  hargaTambahan Int                 @default(0)
+  status        StatusAktifNonaktif @default(AKTIF)
+
+  itemMenu    ItemMenu      @relation(fields: [itemMenuId], references: [id])
+  itemPesanan ItemPesanan[]
+
+  @@map("varian_menu")
+}
+
+model ModifierGrup {
+  id         String  @id
+  tenantId   String
+  nama       String
+  wajibPilih Boolean @default(false)
+  minPilihan Int     @default(0)
+  maxPilihan Int     @default(1)
+
+  tenant       Tenant             @relation(fields: [tenantId], references: [id])
+  itemModifier ItemModifierGrup[]
+  opsi         ModifierOpsi[]
+
+  @@map("modifier_grup")
+}
+
+model ItemModifierGrup {
+  id             String @id
+  itemMenuId     String
+  modifierGrupId String
+  urutan         Int    @default(0)
+
+  itemMenu     ItemMenu     @relation(fields: [itemMenuId], references: [id])
+  modifierGrup ModifierGrup @relation(fields: [modifierGrupId], references: [id])
+
+  @@unique([itemMenuId, modifierGrupId])
+  @@map("item_modifier_grup")
+}
+
+model ModifierOpsi {
+  id             String              @id
+  modifierGrupId String
+  nama           String
+  hargaTambahan  Int                 @default(0)
+  status         StatusAktifNonaktif @default(AKTIF)
+
+  modifierGrup        ModifierGrup          @relation(fields: [modifierGrupId], references: [id])
+  itemPesananModifier ItemPesananModifier[]
+
+  @@map("modifier_opsi")
+}
+
+model HargaItemOutlet {
+  id           String   @id
+  itemMenuId   String
+  outletId     String
+  harga        Int
+  berlakuSejak DateTime @default(now())
+
+  itemMenu ItemMenu @relation(fields: [itemMenuId], references: [id])
+  outlet   Outlet   @relation(fields: [outletId], references: [id])
+
+  @@map("harga_item_outlet")
+}
+
+// =====================================================================================
+// 3. RESEP & BAHAN / BOM (docs/database/03-resep-bahan.md)
+// =====================================================================================
+
+model Bahan {
+  id            String              @id
+  tenantId      String
+  nama          String
+  kodeSku       String
+  satuanDasarId String
+  stokMinimum   Int                 @default(0)
+  status        StatusAktifNonaktif @default(AKTIF)
+
+  tenant          Tenant                  @relation(fields: [tenantId], references: [id])
+  satuanDasar     Satuan                  @relation(fields: [satuanDasarId], references: [id])
+  resepBahan      ResepBahan[]
+  stokBahan       StokBahan[]
+  poBaris         PurchaseOrderBaris[]
+  penerimaanBaris PenerimaanBarangBaris[]
+  mutasiStok      MutasiStok[]
+  opnameBaris     StokOpnameBaris[]
+  rmStokKritis    RmStokKritis[]
+
+  @@unique([tenantId, kodeSku])
+  @@map("bahan")
+}
+
+model Satuan {
+  id       String @id
+  tenantId String
+  nama     String
+  simbol   String
+
+  tenant     Tenant       @relation(fields: [tenantId], references: [id])
+  bahan      Bahan[]
+  resepBahan ResepBahan[]
+
+  @@map("satuan")
+}
+
+enum StatusResep {
+  AKTIF
+  NONAKTIF
+}
+
+model Resep {
+  id         String      @id
+  tenantId   String
+  itemMenuId String      @unique
+  versi      String
+  status     StatusResep @default(AKTIF)
+  createdAt  DateTime    @default(now())
+
+  tenant     Tenant       @relation(fields: [tenantId], references: [id])
+  itemMenu   ItemMenu     @relation(fields: [itemMenuId], references: [id])
+  resepBahan ResepBahan[]
+
+  @@map("resep")
+}
+
+model ResepBahan {
+  id       String  @id
+  resepId  String
+  bahanId  String
+  jumlah   Decimal
+  satuanId String
+
+  resep  Resep  @relation(fields: [resepId], references: [id])
+  bahan  Bahan  @relation(fields: [bahanId], references: [id])
+  satuan Satuan @relation(fields: [satuanId], references: [id])
+
+  @@map("resep_bahan")
+}
+
+// =====================================================================================
+// 4. PERSEDIAAN (docs/database/04-persediaan.md)
+// =====================================================================================
+
+enum JenisMutasiStok {
+  MASUK_PEMBELIAN
+  KELUAR_PENJUALAN
+  OPNAME_PENYESUAIAN
+  TRANSFER_MASUK
+  TRANSFER_KELUAR
+  RETUR
+}
+
+enum ReferensiJenisMutasi {
+  PEMBELIAN
+  PESANAN
+  OPNAME
+  TRANSFER
+}
+
+enum StatusStokOpname {
+  DIRENCANAKAN
+  BERLANGSUNG
+  SELESAI
+  DIBATALKAN
+}
+
+model Gudang {
+  id       String              @id
+  tenantId String
+  outletId String
+  nama     String
+  status   StatusAktifNonaktif @default(AKTIF)
+
+  outlet           Outlet             @relation(fields: [outletId], references: [id])
+  stokBahan        StokBahan[]
+  stokOpname       StokOpname[]
+  penerimaanBarang PenerimaanBarang[]
+
+  @@map("gudang")
+}
+
+model StokBahan {
+  id        String   @id
+  gudangId  String
+  bahanId   String
+  kuantitas Decimal  @default(0)
+  updatedAt DateTime @updatedAt
+
+  gudang Gudang @relation(fields: [gudangId], references: [id])
+  bahan  Bahan  @relation(fields: [bahanId], references: [id])
+
+  @@unique([gudangId, bahanId])
+  @@map("stok_bahan")
+}
+
+model MutasiStok {
+  id             String               @id
+  tenantId       String
+  outletId       String
+  gudangId       String
+  bahanId        String
+  jenis          JenisMutasiStok
+  jumlah         Decimal
+  referensiJenis ReferensiJenisMutasi
+  referensiId    String
+  dibalikOlehId  String?              @unique
+  dibuatOlehId   String
+  createdAt      DateTime             @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  outlet Outlet @relation(fields: [outletId], references: [id])
+  bahan  Bahan  @relation(fields: [bahanId], references: [id])
+
+  dibalikOleh  MutasiStok? @relation("MutasiPembalik", fields: [dibalikOlehId], references: [id])
+  pembalikDari MutasiStok? @relation("MutasiPembalik")
+
+  @@map("mutasi_stok")
+}
+
+model StokOpname {
+  id               String           @id
+  tenantId         String
+  gudangId         String
+  status           StatusStokOpname @default(DIRENCANAKAN)
+  dijadwalkanPada  DateTime
+  diselesaikanPada DateTime?
+  dibuatOlehId     String
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id])
+  gudang     Gudang            @relation(fields: [gudangId], references: [id])
+  dibuatOleh Pengguna          @relation("OpnameDibuatOleh", fields: [dibuatOlehId], references: [id])
+  baris      StokOpnameBaris[]
+
+  @@map("stok_opname")
+}
+
+model StokOpnameBaris {
+  id              String  @id
+  stokOpnameId    String
+  bahanId         String
+  kuantitasSistem Decimal
+  kuantitasFisik  Decimal
+  selisih         Decimal
+
+  stokOpname StokOpname @relation(fields: [stokOpnameId], references: [id])
+  bahan      Bahan      @relation(fields: [bahanId], references: [id])
+
+  @@map("stok_opname_baris")
+}
+
+// =====================================================================================
+// 5. SUPPLIER & PEMBELIAN (docs/database/05-supplier-pembelian.md)
+// =====================================================================================
+
+enum StatusPurchaseOrder {
+  DRAFT
+  DIAJUKAN
+  DISETUJUI
+  DIKIRIM_SUPPLIER
+  DITERIMA_SEBAGIAN
+  DITERIMA_PENUH
+  DIBATALKAN
+}
+
+enum StatusReturPembelian {
+  DIAJUKAN
+  DISETUJUI
+  DITOLAK
+  SELESAI
+}
+
+model Supplier {
+  id       String              @id
+  tenantId String
+  nama     String
+  kontak   String?
+  status   StatusAktifNonaktif @default(AKTIF)
+
+  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  purchaseOrder PurchaseOrder[]
+
+  @@map("supplier")
+}
+
+model PurchaseOrder {
+  id            String              @id
+  tenantId      String
+  outletId      String
+  supplierId    String
+  nomorPo       String              @unique
+  status        StatusPurchaseOrder @default(DRAFT)
+  totalEstimasi Int                 @default(0)
+  dibuatOlehId  String
+  createdAt     DateTime            @default(now())
+
+  tenant     Tenant               @relation(fields: [tenantId], references: [id])
+  outlet     Outlet               @relation(fields: [outletId], references: [id])
+  supplier   Supplier             @relation(fields: [supplierId], references: [id])
+  dibuatOleh Pengguna             @relation("PoDibuatOleh", fields: [dibuatOlehId], references: [id])
+  baris      PurchaseOrderBaris[]
+  penerimaan PenerimaanBarang[]
+
+  @@map("purchase_order")
+}
+
+model PurchaseOrderBaris {
+  id              String  @id
+  purchaseOrderId String
+  bahanId         String
+  jumlahDipesan   Decimal
+  hargaSatuan     Int
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  bahan         Bahan         @relation(fields: [bahanId], references: [id])
+
+  @@map("purchase_order_baris")
+}
+
+model PenerimaanBarang {
+  id              String   @id
+  purchaseOrderId String
+  gudangId        String
+  nomorPenerimaan String   @unique
+  diterimaPada    DateTime @default(now())
+  diterimaOlehId  String
+
+  purchaseOrder  PurchaseOrder           @relation(fields: [purchaseOrderId], references: [id])
+  gudang         Gudang                  @relation(fields: [gudangId], references: [id])
+  diterimaOleh   Pengguna                @relation("PenerimaanDiterimaOleh", fields: [diterimaOlehId], references: [id])
+  baris          PenerimaanBarangBaris[]
+  returPembelian ReturPembelian[]
+
+  @@map("penerimaan_barang")
+}
+
+model PenerimaanBarangBaris {
+  id                 String  @id
+  penerimaanBarangId String
+  bahanId            String
+  jumlahDiterima     Decimal
+  hargaSatuanAktual  Int
+
+  penerimaanBarang PenerimaanBarang @relation(fields: [penerimaanBarangId], references: [id])
+  bahan            Bahan            @relation(fields: [bahanId], references: [id])
+
+  @@map("penerimaan_barang_baris")
+}
+
+model ReturPembelian {
+  id                 String               @id
+  tenantId           String
+  penerimaanBarangId String
+  alasan             String
+  status             StatusReturPembelian @default(DIAJUKAN)
+  createdAt          DateTime             @default(now())
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id])
+  penerimaanBarang PenerimaanBarang @relation(fields: [penerimaanBarangId], references: [id])
+
+  @@map("retur_pembelian")
+}
+
+// =====================================================================================
+// 6. MEJA & RESERVASI (docs/database/06-meja-reservasi.md)
+// =====================================================================================
+
+enum StatusMeja {
+  TERSEDIA
+  TERPAKAI
+  DIPESAN
+  PERLU_DIBERSIHKAN
+  NONAKTIF
+}
+
+enum StatusReservasi {
+  DIAJUKAN
+  DIKONFIRMASI
+  TIBA
+  SELESAI
+  TIDAK_HADIR
+  DIBATALKAN
+}
+
+model AreaMeja {
+  id       String @id
+  tenantId String
+  outletId String
+  nama     String
+
+  outlet Outlet @relation(fields: [outletId], references: [id])
+  meja   Meja[]
+
+  @@map("area_meja")
+}
+
+model Meja {
+  id         String     @id
+  tenantId   String
+  outletId   String
+  areaMejaId String
+  nomor      String
+  kapasitas  Int
+  status     StatusMeja @default(TERSEDIA)
+
+  outlet    Outlet       @relation(fields: [outletId], references: [id])
+  areaMeja  AreaMeja     @relation(fields: [areaMejaId], references: [id])
+  reservasi Reservasi[]
+  pesanan   Pesanan[]
+  sesiQr    SesiMejaQr[]
+
+  @@unique([outletId, nomor])
+  @@map("meja")
+}
+
+model SesiMejaQr {
+  id             String    @id
+  mejaId         String
+  token          String    @unique
+  dibuatPada     DateTime  @default(now())
+  kadaluarsaPada DateTime
+  ditutupPada    DateTime?
+
+  meja Meja @relation(fields: [mejaId], references: [id])
+
+  @@map("sesi_meja_qr")
+}
+
+model Reservasi {
+  id             String          @id
+  tenantId       String
+  outletId       String
+  mejaId         String?
+  pelangganId    String
+  jumlahTamu     Int
+  waktuReservasi DateTime
+  status         StatusReservasi @default(DIAJUKAN)
+  createdAt      DateTime        @default(now())
+
+  outlet    Outlet    @relation(fields: [outletId], references: [id])
+  meja      Meja?     @relation(fields: [mejaId], references: [id])
+  pelanggan Pelanggan @relation(fields: [pelangganId], references: [id])
+
+  @@map("reservasi")
+}
+
+// =====================================================================================
+// 7. PESANAN (docs/database/07-pesanan.md)
+// =====================================================================================
+
+enum KanalPesanan {
+  KASIR
+  PELAYAN
+  QR_PELANGGAN
+}
+
+enum StatusPesanan {
+  BARU
+  DIKONFIRMASI
+  DIPROSES_DAPUR
+  SIAP_DISAJIKAN
+  DISAJIKAN
+  DIBAYAR
+  DIBATALKAN
+}
+
+enum StatusItemPesanan {
+  BARU
+  DIKIRIM_DAPUR
+  SIAP
+  DISAJIKAN
+  DIBATALKAN
+}
+
+model Pesanan {
+  id                 String        @id
+  tenantId           String
+  outletId           String
+  mejaId             String?
+  pelangganId        String?
+  kanal              KanalPesanan
+  nomorPesanan       String
+  status             StatusPesanan @default(BARU)
+  subtotal           Int           @default(0)
+  totalDiskon        Int           @default(0)
+  totalPajak         Int           @default(0)
+  totalServiceCharge Int           @default(0)
+  totalAkhir         Int           @default(0)
+  dibuatOlehId       String
+  createdAt          DateTime      @default(now())
+  dibatalkanPada     DateTime?
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  outlet     Outlet     @relation(fields: [outletId], references: [id])
+  meja       Meja?      @relation(fields: [mejaId], references: [id])
+  pelanggan  Pelanggan? @relation(fields: [pelangganId], references: [id])
+  dibuatOleh Pengguna   @relation("PesananDibuatOleh", fields: [dibuatOlehId], references: [id])
+
+  itemPesanan    ItemPesanan[]
+  riwayatStatus  PesananRiwayatStatus[]
+  pembayaran     Pembayaran[]
+  promoPemakaian PromoPemakaian?
+  tiketDapur     TiketDapur?
+  transaksiKasir TransaksiKasir[]
+  poinRiwayat    PoinRiwayat[]
+
+  @@unique([outletId, nomorPesanan])
+  @@map("pesanan")
+}
+
+model ItemPesanan {
+  id           String            @id
+  pesananId    String
+  itemMenuId   String
+  varianMenuId String?
+  kuantitas    Int
+  hargaSatuan  Int
+  catatan      String?
+  status       StatusItemPesanan @default(BARU)
+
+  pesanan    Pesanan     @relation(fields: [pesananId], references: [id])
+  itemMenu   ItemMenu    @relation(fields: [itemMenuId], references: [id])
+  varianMenu VarianMenu? @relation(fields: [varianMenuId], references: [id])
+
+  modifier        ItemPesananModifier[]
+  tiketDapurBaris TiketDapurBaris?
+
+  @@map("item_pesanan")
+}
+
+model ItemPesananModifier {
+  id             String @id
+  itemPesananId  String
+  modifierOpsiId String
+  hargaTambahan  Int
+
+  itemPesanan  ItemPesanan  @relation(fields: [itemPesananId], references: [id])
+  modifierOpsi ModifierOpsi @relation(fields: [modifierOpsiId], references: [id])
+
+  @@map("item_pesanan_modifier")
+}
+
+model PesananRiwayatStatus {
+  id               String   @id
+  pesananId        String
+  statusSebelumnya String
+  statusBaru       String
+  diubahOlehId     String
+  createdAt        DateTime @default(now())
+
+  pesanan    Pesanan  @relation(fields: [pesananId], references: [id])
+  diubahOleh Pengguna @relation("RiwayatStatusDiubahOleh", fields: [diubahOlehId], references: [id])
+
+  @@map("pesanan_riwayat_status")
+}
+
+// =====================================================================================
+// 8. DAPUR / KDS (docs/database/08-dapur.md)
+// =====================================================================================
+
+enum StatusTiketDapur {
+  MASUK_ANTRIAN
+  DIPROSES
+  SIAP
+  DIAMBIL_PELAYAN
+}
+
+enum StatusMasakBaris {
+  MENUNGGU
+  DIMASAK
+  SIAP
+}
+
+model StasiunDapur {
+  id       String @id
+  tenantId String
+  outletId String
+  nama     String
+
+  tenant     Tenant       @relation(fields: [tenantId], references: [id])
+  outlet     Outlet       @relation(fields: [outletId], references: [id])
+  tiketDapur TiketDapur[]
+
+  @@map("stasiun_dapur")
+}
+
+model TiketDapur {
+  id                String           @id
+  tenantId          String
+  outletId          String
+  pesananId         String           @unique
+  stasiunDapurId    String?
+  status            StatusTiketDapur @default(MASUK_ANTRIAN)
+  masukPada         DateTime         @default(now())
+  mulaiDiprosesPada DateTime?
+  siapPada          DateTime?
+
+  tenant       Tenant            @relation(fields: [tenantId], references: [id])
+  outlet       Outlet            @relation(fields: [outletId], references: [id])
+  pesanan      Pesanan           @relation(fields: [pesananId], references: [id])
+  stasiunDapur StasiunDapur?     @relation(fields: [stasiunDapurId], references: [id])
+  baris        TiketDapurBaris[]
+
+  @@map("tiket_dapur")
+}
+
+model TiketDapurBaris {
+  id            String           @id
+  tiketDapurId  String
+  itemPesananId String           @unique
+  statusMasak   StatusMasakBaris @default(MENUNGGU)
+
+  tiketDapur  TiketDapur  @relation(fields: [tiketDapurId], references: [id])
+  itemPesanan ItemPesanan @relation(fields: [itemPesananId], references: [id])
+
+  @@map("tiket_dapur_baris")
+}
+
+// =====================================================================================
+// 9. PEMBAYARAN & KASIR (docs/database/09-pembayaran-kasir.md)
+// =====================================================================================
+
+enum StatusGiliranKasir {
+  DIBUKA
+  DITUTUP_MENUNGGU_VERIFIKASI
+  DITUTUP_SELESAI
+}
+
+enum JenisTransaksiKasir {
+  PENJUALAN
+  REFUND
+  KOREKSI
+}
+
+enum KodeMetodeBayar {
+  TUNAI
+  QRIS_MANUAL
+  KARTU_DEBIT
+  KARTU_KREDIT
+  EWALLET
+}
+
+enum StatusPembayaran {
+  MENUNGGU
+  DIKONFIRMASI
+  GAGAL
+  DIBATALKAN
+  DIREFUND
+}
+
+model GiliranKasir {
+  id                 String             @id
+  tenantId           String
+  outletId           String
+  penggunaId         String
+  modalAwal          Int
+  modalAkhirDihitung Int?
+  modalAkhirSistem   Int?
+  status             StatusGiliranKasir @default(DIBUKA)
+  dibukaPada         DateTime           @default(now())
+  ditutupPada        DateTime?
+
+  outlet         Outlet           @relation(fields: [outletId], references: [id])
+  pengguna       Pengguna         @relation(fields: [penggunaId], references: [id])
+  transaksiKasir TransaksiKasir[]
+  rekapKasHarian RekapKasHarian?
+
+  @@map("giliran_kasir")
+}
+
+model TransaksiKasir {
+  id             String              @id
+  giliranKasirId String
+  pesananId      String
+  jenis          JenisTransaksiKasir
+  jumlah         Int
+  createdAt      DateTime            @default(now())
+
+  giliranKasir GiliranKasir @relation(fields: [giliranKasirId], references: [id])
+  pesanan      Pesanan      @relation(fields: [pesananId], references: [id])
+
+  @@map("transaksi_kasir")
+}
+
+model MetodeBayar {
+  id       String              @id
+  tenantId String
+  kode     KodeMetodeBayar
+  nama     String
+  status   StatusAktifNonaktif @default(AKTIF)
+
+  tenant Tenant                  @relation(fields: [tenantId], references: [id])
+  baris  PembayaranMetodeBaris[]
+
+  @@map("metode_bayar")
+}
+
+model Pembayaran {
+  id                 String           @id
+  tenantId           String
+  outletId           String
+  pesananId          String
+  totalDibayar       Int
+  totalDiterima      Int
+  kembalian          Int              @default(0)
+  status             StatusPembayaran @default(MENUNGGU)
+  dikonfirmasiOlehId String?
+  createdAt          DateTime         @default(now())
+  dikonfirmasiPada   DateTime?
+
+  tenant           Tenant    @relation(fields: [tenantId], references: [id])
+  outlet           Outlet    @relation(fields: [outletId], references: [id])
+  pesanan          Pesanan   @relation(fields: [pesananId], references: [id])
+  dikonfirmasiOleh Pengguna? @relation("PembayaranDikonfirmasiOleh", fields: [dikonfirmasiOlehId], references: [id])
+
+  metodeBaris    PembayaranMetodeBaris[]
+  qrisKonfirmasi QrisKonfirmasiManual?
+  struk          Struk?
+  refund         PembayaranRefund[]
+
+  @@map("pembayaran")
+}
+
+model PembayaranMetodeBaris {
+  id            String @id
+  pembayaranId  String
+  metodeBayarId String
+  jumlah        Int
+
+  pembayaran  Pembayaran  @relation(fields: [pembayaranId], references: [id])
+  metodeBayar MetodeBayar @relation(fields: [metodeBayarId], references: [id])
+
+  @@map("pembayaran_metode_baris")
+}
+
+model QrisKonfirmasiManual {
+  id                 String   @id
+  pembayaranId       String   @unique
+  catatanKasir       String?
+  diverifikasiOlehId String
+  diverifikasiPada   DateTime @default(now())
+
+  pembayaran       Pembayaran @relation(fields: [pembayaranId], references: [id])
+  diverifikasiOleh Pengguna   @relation("QrisDiverifikasiOleh", fields: [diverifikasiOlehId], references: [id])
+
+  @@map("qris_konfirmasi_manual")
+}
+
+model Struk {
+  id               String    @id
+  pembayaranId     String    @unique
+  nomorStruk       String    @unique
+  dicetakPada      DateTime?
+  jumlahCetakUlang Int       @default(0)
+
+  pembayaran Pembayaran @relation(fields: [pembayaranId], references: [id])
+
+  @@map("struk")
+}
+
+model PembayaranRefund {
+  id              String   @id
+  pembayaranId    String
+  jumlah          Int
+  alasan          String
+  disetujuiOlehId String
+  createdAt       DateTime @default(now())
+
+  pembayaran    Pembayaran @relation(fields: [pembayaranId], references: [id])
+  disetujuiOleh Pengguna   @relation("RefundDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+
+  @@map("pembayaran_refund")
+}
+
+// =====================================================================================
+// 10. PROMO (docs/database/10-promo.md)
+// =====================================================================================
+
+enum JenisPromo {
+  DISKON_PERSEN
+  DISKON_NOMINAL
+  BELI_X_GRATIS_Y
+  HARGA_PAKET
+}
+
+enum StatusPromo {
+  AKTIF
+  NONAKTIF
+  KADALUARSA
+}
+
+enum JenisSyaratPromo {
+  MIN_BELANJA
+  ITEM_TERTENTU
+  KATEGORI_TERTENTU
+  OUTLET_TERTENTU
+  JAM_TERTENTU
+}
+
+enum StatusKupon {
+  AKTIF
+  NONAKTIF
+  HABIS
+}
+
+model Promo {
+  id            String      @id
+  tenantId      String
+  nama          String
+  jenis         JenisPromo
+  berlakuSejak  DateTime
+  berlakuSampai DateTime
+  status        StatusPromo @default(AKTIF)
+  bisaDigabung  Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+
+  tenant    Tenant           @relation(fields: [tenantId], references: [id])
+  aturan    PromoAturan[]
+  kupon     Kupon[]
+  pemakaian PromoPemakaian[]
+
+  @@map("promo")
+}
+
+model PromoAturan {
+  id          String           @id
+  promoId     String
+  jenisSyarat JenisSyaratPromo
+  nilaiSyarat Json
+
+  promo Promo @relation(fields: [promoId], references: [id])
+
+  @@map("promo_aturan")
+}
+
+model Kupon {
+  id             String      @id
+  tenantId       String
+  promoId        String
+  kode           String      @unique
+  pelangganId    String?
+  kuotaPemakaian Int?
+  jumlahDipakai  Int         @default(0)
+  status         StatusKupon @default(AKTIF)
+
+  tenant    Tenant           @relation(fields: [tenantId], references: [id])
+  promo     Promo            @relation(fields: [promoId], references: [id])
+  pelanggan Pelanggan?       @relation(fields: [pelangganId], references: [id])
+  pemakaian PromoPemakaian[]
+
+  @@map("kupon")
+}
+
+model PromoPemakaian {
+  id          String   @id
+  tenantId    String
+  promoId     String
+  kuponId     String?
+  pesananId   String   @unique
+  nilaiDiskon Int
+  createdAt   DateTime @default(now())
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id])
+  promo   Promo   @relation(fields: [promoId], references: [id])
+  kupon   Kupon?  @relation(fields: [kuponId], references: [id])
+  pesanan Pesanan @relation(fields: [pesananId], references: [id])
+
+  @@map("promo_pemakaian")
+}
+
+// =====================================================================================
+// 11. PELANGGAN & KEANGGOTAAN (docs/database/11-pelanggan-keanggotaan.md)
+// =====================================================================================
+
+enum StatusKeanggotaan {
+  AKTIF
+  NONAKTIF
+}
+
+enum JenisPoinRiwayat {
+  PEROLEHAN
+  PENUKARAN
+  PENYESUAIAN
+  KADALUARSA
+}
+
+model Pelanggan {
+  id           String   @id
+  tenantId     String
+  namaLengkap  String
+  nomorTelepon String
+  email        String?
+  createdAt    DateTime @default(now())
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id])
+  keanggotaan Keanggotaan?
+  pesanan     Pesanan[]
+  reservasi   Reservasi[]
+  kupon       Kupon[]
+
+  @@unique([tenantId, nomorTelepon])
+  @@map("pelanggan")
+}
+
+model TierMembership {
+  id               String @id
+  tenantId         String
+  nama             String
+  minPoinKumulatif Int    @default(0)
+  benefit          Json
+
+  tenant      Tenant        @relation(fields: [tenantId], references: [id])
+  keanggotaan Keanggotaan[]
+
+  @@map("tier_membership")
+}
+
+model Keanggotaan {
+  id               String            @id
+  pelangganId      String            @unique
+  tierMembershipId String
+  poinAktif        Int               @default(0)
+  poinKumulatif    Int               @default(0)
+  status           StatusKeanggotaan @default(AKTIF)
+  bergabungPada    DateTime          @default(now())
+
+  pelanggan      Pelanggan      @relation(fields: [pelangganId], references: [id])
+  tierMembership TierMembership @relation(fields: [tierMembershipId], references: [id])
+  poinRiwayat    PoinRiwayat[]
+
+  @@map("keanggotaan")
+}
+
+model PoinRiwayat {
+  id            String           @id
+  keanggotaanId String
+  pesananId     String?
+  jenis         JenisPoinRiwayat
+  jumlah        Int
+  createdAt     DateTime         @default(now())
+
+  keanggotaan Keanggotaan @relation(fields: [keanggotaanId], references: [id])
+  pesanan     Pesanan?    @relation(fields: [pesananId], references: [id])
+
+  @@map("poin_riwayat")
+}
+
+// =====================================================================================
+// 12. KARYAWAN & ABSENSI (docs/database/12-karyawan-absensi.md)
+// =====================================================================================
+
+enum StatusKaryawan {
+  AKTIF
+  CUTI
+  NONAKTIF
+}
+
+enum StatusPenugasanShift {
+  DIJADWALKAN
+  DIBATALKAN
+}
+
+enum MetodeAbsensi {
+  QR
+  PIN
+  GPS
+  MANUAL_SUPERVISOR
+}
+
+enum StatusAbsensi {
+  TEPAT_WAKTU
+  TERLAMBAT
+  PULANG_AWAL
+  LEMBUR
+}
+
+enum JenisCutiIzin {
+  CUTI_TAHUNAN
+  SAKIT
+  IZIN
+}
+
+enum StatusCutiIzin {
+  DIAJUKAN
+  DISETUJUI
+  DITOLAK
+}
+
+model Jabatan {
+  id       String @id
+  tenantId String
+  nama     String
+
+  tenant   Tenant     @relation(fields: [tenantId], references: [id])
+  karyawan Karyawan[]
+
+  @@map("jabatan")
+}
+
+model Karyawan {
+  id               String         @id
+  tenantId         String
+  penggunaId       String?        @unique
+  jabatanId        String
+  outletUtamaId    String
+  nomorInduk       String         @unique
+  status           StatusKaryawan @default(AKTIF)
+  tanggalBergabung DateTime
+
+  tenant                  Tenant                    @relation(fields: [tenantId], references: [id])
+  pengguna                Pengguna?                 @relation(fields: [penggunaId], references: [id])
+  jabatan                 Jabatan                   @relation(fields: [jabatanId], references: [id])
+  outletUtama             Outlet                    @relation("KaryawanOutletUtama", fields: [outletUtamaId], references: [id])
+  penugasanShift          PenugasanShift[]
+  absensi                 Absensi[]
+  cutiIzin                CutiIzin[]
+  rmKinerjaKaryawanHarian RmKinerjaKaryawanHarian[]
+
+  @@map("karyawan")
+}
+
+model JadwalShift {
+  id         String @id
+  tenantId   String
+  outletId   String
+  nama       String
+  jamMulai   String
+  jamSelesai String
+
+  tenant         Tenant           @relation(fields: [tenantId], references: [id])
+  outlet         Outlet           @relation(fields: [outletId], references: [id])
+  penugasanShift PenugasanShift[]
+
+  @@map("jadwal_shift")
+}
+
+model PenugasanShift {
+  id            String               @id
+  karyawanId    String
+  jadwalShiftId String
+  tanggal       DateTime             @db.Date
+  status        StatusPenugasanShift @default(DIJADWALKAN)
+
+  karyawan    Karyawan    @relation(fields: [karyawanId], references: [id])
+  jadwalShift JadwalShift @relation(fields: [jadwalShiftId], references: [id])
+
+  @@map("penugasan_shift")
+}
+
+model Absensi {
+  id         String        @id
+  tenantId   String
+  outletId   String
+  karyawanId String
+  jamMasuk   DateTime
+  jamPulang  DateTime?
+  metode     MetodeAbsensi
+  status     StatusAbsensi
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  outlet   Outlet   @relation(fields: [outletId], references: [id])
+  karyawan Karyawan @relation(fields: [karyawanId], references: [id])
+
+  @@map("absensi")
+}
+
+model CutiIzin {
+  id              String         @id
+  karyawanId      String
+  jenis           JenisCutiIzin
+  tanggalMulai    DateTime       @db.Date
+  tanggalSelesai  DateTime       @db.Date
+  status          StatusCutiIzin @default(DIAJUKAN)
+  disetujuiOlehId String?
+
+  karyawan      Karyawan  @relation(fields: [karyawanId], references: [id])
+  disetujuiOleh Pengguna? @relation("CutiDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+
+  @@map("cuti_izin")
+}
+
+// =====================================================================================
+// 13. KEUANGAN INTERNAL (docs/database/13-keuangan.md)
+// =====================================================================================
+
+enum StatusRekapKasHarian {
+  DRAF
+  DIVERIFIKASI
+}
+
+enum StatusBiayaOperasional {
+  DIAJUKAN
+  DISETUJUI
+  DIBAYAR
+  DIBATALKAN
+}
+
+model KategoriBiaya {
+  id       String @id
+  tenantId String
+  nama     String
+
+  tenant           Tenant             @relation(fields: [tenantId], references: [id])
+  biayaOperasional BiayaOperasional[]
+
+  @@map("kategori_biaya")
+}
+
+model RekapKasHarian {
+  id                 String               @id
+  tenantId           String
+  outletId           String
+  giliranKasirId     String?              @unique
+  tanggal            DateTime             @db.Date
+  totalPenjualan     Int                  @default(0)
+  totalRefund        Int                  @default(0)
+  totalDiskon        Int                  @default(0)
+  selisihKas         Int                  @default(0)
+  status             StatusRekapKasHarian @default(DRAF)
+  diverifikasiOlehId String?
+
+  tenant           Tenant        @relation(fields: [tenantId], references: [id])
+  outlet           Outlet        @relation(fields: [outletId], references: [id])
+  giliranKasir     GiliranKasir? @relation(fields: [giliranKasirId], references: [id])
+  diverifikasiOleh Pengguna?     @relation("RekapDiverifikasiOleh", fields: [diverifikasiOlehId], references: [id])
+
+  @@map("rekap_kas_harian")
+}
+
+model BiayaOperasional {
+  id              String                 @id
+  tenantId        String
+  outletId        String
+  kategoriBiayaId String
+  jumlah          Int
+  keterangan      String
+  status          StatusBiayaOperasional @default(DIAJUKAN)
+  dicatatOlehId   String
+  createdAt       DateTime               @default(now())
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  outlet        Outlet        @relation(fields: [outletId], references: [id])
+  kategoriBiaya KategoriBiaya @relation(fields: [kategoriBiayaId], references: [id])
+  dicatatOleh   Pengguna      @relation("BiayaDicatatOleh", fields: [dicatatOlehId], references: [id])
+
+  @@map("biaya_operasional")
+}
+
+// =====================================================================================
+// 14. ANALITIK / READ MODEL (docs/database/14-analitik-read-model.md)
+// =====================================================================================
+
+model RmPenjualanHarian {
+  id             String   @id
+  tenantId       String
+  outletId       String
+  tanggal        DateTime @db.Date
+  totalTransaksi Int      @default(0)
+  totalPenjualan Int      @default(0)
+  totalDiskon    Int      @default(0)
+  totalRefund    Int      @default(0)
+  dihitungPada   DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  outlet Outlet @relation(fields: [outletId], references: [id])
+
+  @@unique([outletId, tanggal])
+  @@map("rm_penjualan_harian")
+}
+
+model RmPenjualanItemHarian {
+  id               String   @id
+  tenantId         String
+  outletId         String
+  itemMenuId       String
+  tanggal          DateTime @db.Date
+  kuantitasTerjual Int      @default(0)
+  totalPenjualan   Int      @default(0)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  outlet   Outlet   @relation(fields: [outletId], references: [id])
+  itemMenu ItemMenu @relation(fields: [itemMenuId], references: [id])
+
+  @@unique([outletId, itemMenuId, tanggal])
+  @@map("rm_penjualan_item_harian")
+}
+
+model RmStokKritis {
+  id               String   @id
+  tenantId         String
+  outletId         String
+  bahanId          String
+  kuantitasTerkini Decimal
+  ambangMinimum    Decimal
+  dihitungPada     DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  outlet Outlet @relation(fields: [outletId], references: [id])
+  bahan  Bahan  @relation(fields: [bahanId], references: [id])
+
+  @@unique([outletId, bahanId])
+  @@map("rm_stok_kritis")
+}
+
+model RmKinerjaKaryawanHarian {
+  id                      String   @id
+  tenantId                String
+  outletId                String
+  karyawanId              String
+  tanggal                 DateTime @db.Date
+  totalTransaksiDitangani Int      @default(0)
+  totalPenjualanDitangani Int      @default(0)
+  menitTerlambat          Int      @default(0)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  outlet   Outlet   @relation(fields: [outletId], references: [id])
+  karyawan Karyawan @relation(fields: [karyawanId], references: [id])
+
+  @@unique([outletId, karyawanId, tanggal])
+  @@map("rm_kinerja_karyawan_harian")
+}
