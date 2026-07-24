@@ -398,6 +398,125 @@ Postgres, implementasi handler auth/PIN sungguhan, maupun test integrasi
 login/PIN sungguhan - karena itu status kedua defect di
 `DEFECT-LEDGER.md` adalah `SIAP_DIVERIFIKASI`, BUKAN `DITUTUP`.
 
+## Pass correction-loop 2026-07-25 (lanjutan): perbaikan ALT-DEF-017
+
+Cakupan: infrastruktur idempotency/outbox/notifikasi - `IdempotencyKey`
+(`@@unique([tenantId, scope, key])`, FK biasa ke `Tenant`),
+`DomainOutboxEvent` (index `[status, availableAt]`), `Notification`
+(in-app saja, `penggunaId` nullable, index `[penggunaId, dibacaPada]`).
+Lihat `docs/engineering/DECISION-LOG.md` ADR-016 untuk desain lengkap.
+
+### 1. `prisma format`
+
+```
+$ npx prisma format --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 59ms 🚀
+```
+
+Tidak ada error sintaks yang perlu diperbaiki pada pass ini. Berbeda dari
+`IdempotencyKey`/`DomainOutboxEvent`/`Notification` yang SENGAJA tidak
+memakai pola composite-FK ganda (lihat ADR-016 Keputusan 2 dan 5), sehingga
+tidak ada risiko error "ambiguous relation"/"one-to-one relation" seperti
+yang sempat muncul di pass ALT-DEF-010/014.
+
+### 2. `prisma validate`
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/altora_resto_dummy" npx prisma validate --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+```
+
+### 3. `prisma generate` (tanpa koneksi database nyata)
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/altora_resto_dummy" npx prisma generate --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 666ms
+```
+
+Diverifikasi langsung lewat grep atas `node_modules/.prisma/client/index.d.ts`
+bahwa `IdempotencyKeyUncheckedCreateInput`, `DomainOutboxEventUncheckedCreateInput`,
+dan `NotificationUncheckedCreateInput` benar-benar dihasilkan.
+
+### 4. Test struktur/arsitektur (dijalankan nyata)
+
+`packages/test-support/src/architecture/idempotency-outbox-notification-constraints.test.ts`
+(baru, ALT-DEF-017) dijalankan lewat Node type-stripping:
+
+```
+$ node --experimental-strip-types packages/test-support/src/architecture/idempotency-outbox-notification-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-017 lulus.
+```
+
+Ketiga test lama dijalankan ulang untuk memverifikasi tidak ada regresi dari
+penambahan model/field pass ini:
+
+```
+$ node --experimental-strip-types packages/test-support/src/architecture/keanggotaan-outlet-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-001/ALT-DEF-002 lulus.
+
+$ node --experimental-strip-types packages/test-support/src/architecture/tenant-outlet-composite-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-010/ALT-DEF-014 lulus.
+
+$ node --experimental-strip-types packages/test-support/src/architecture/sesi-auth-pin-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-003/ALT-DEF-013 lulus.
+```
+
+`tsc --noEmit` atas file baru (test struktur + compile-time shape) - bersih,
+tanpa error:
+
+```
+$ npx tsc --noEmit --strict --module ESNext --moduleResolution Bundler --target ES2022 --skipLibCheck packages/test-support/src/architecture/prisma-client-shape-platform-infra.test.ts
+(tidak ada output - bersih)
+
+$ npx tsc --noEmit --strict --module ESNext --moduleResolution Bundler --target ES2022 --skipLibCheck --types node packages/test-support/src/architecture/*.test.ts prisma/seed/izin.seed.ts
+(tidak ada output - bersih, mencakup keanggotaan-outlet-constraints.test.ts,
+tenant-outlet-composite-constraints.test.ts, prisma-client-shape.test.ts,
+prisma-client-shape-tenant-outlet.test.ts, sesi-auth-pin-constraints.test.ts,
+prisma-client-shape-auth-pin.test.ts, idempotency-outbox-notification-constraints.test.ts,
+prisma-client-shape-platform-infra.test.ts sekaligus - tanpa regresi pada
+seluruh file test arsitektur sebelumnya)
+```
+
+**DIBLOKIR:** eksekusi lewat `pnpm --filter @altora/test-support test`
+(vitest) tetap tidak bisa dijalankan di environment ini (sama seperti
+pass-pass sebelumnya - lihat `ALT-DEF-027`). Assertion yang sama sudah
+dibuktikan lulus secara nyata lewat `node --experimental-strip-types` di
+atas.
+
+### 5. `prisma migrate dev` - DIBLOKIR (konsisten dengan pass sebelumnya)
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/altora_resto_migrate_test" npx prisma migrate dev --schema=prisma/schema/schema.prisma --name alt_def_017_idempotency_outbox_notification --create-only
+Prisma schema loaded from prisma/schema/schema.prisma
+Datasource "db": PostgreSQL database "altora_resto_migrate_test", schema "public" at "localhost:5432"
+
+Error: P1010: User `user` was denied access on the database `altora_resto_migrate_test.public`
+```
+
+**DIBLOKIR: migrasi belum dapat diverifikasi karena PostgreSQL nyata tidak
+tersedia di environment ini** (konsisten dengan `ALT-DEF-029`). Tidak ada
+file migrasi yang dibuat/di-commit dari percobaan ini
+(`prisma/migrations/` tetap kosong).
+
+### Kesimpulan status
+
+Schema untuk ALT-DEF-017 sudah benar secara sintaks (`format`+`validate`),
+tipe yang dihasilkan sudah benar secara bentuk (`generate` + `tsc --noEmit`,
+termasuk `Unchecked...CreateInput` untuk `IdempotencyKey`,
+`DomainOutboxEvent`, `Notification`), dan seluruh model/field yang diklaim di
+ADR-016 sudah dibuktikan ada lewat test struktur nyata, tanpa regresi pada
+test ALT-DEF-001/002/003/010/013/014 yang sudah ada. **Belum ada** migrasi
+nyata ke Postgres, middleware idempotency nyata, relay worker outbox nyata,
+publisher event domain nyata, maupun handler endpoint notifikasi sungguhan -
+karena itu status `ALT-DEF-017` adalah `SIAP_DIVERIFIKASI`, BUKAN `DITUTUP`.
+Dokumentasi requirement header `Idempotency-Key` di `docs/api/API-CONTRACT.md`
+bagian 17.1 juga menutup gap yang sebelumnya dicatat terpisah di
+`ALT-DEF-022`.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```
