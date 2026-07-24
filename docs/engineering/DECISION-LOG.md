@@ -107,6 +107,35 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
 - **Konsekuensi:** Bug filter tenant/outlet berisiko tinggi (kebocoran data lintas
   tenant) - butuh test wajib untuk setiap query baru (lihat RISK-REGISTER.md RISK-001).
 
+## ADR-010: Correction-loop kedua — audit ulang defect ledger sebelum implementasi kode
+
+- **Status:** DITERIMA
+- **Konteks:** Correction-loop pertama (commit `f955a61`) sudah mencatat 22 defect
+  arsitektur dalam format lama (kolom ID/Severity/Requirement ID/Deskripsi/
+  Status/Resolusi). `MASTER-CHECKLIST.md` sejak itu diperluas ke 248 requirement
+  (commit `b3559c3`), tetapi ledger defect belum diperbarui mengikuti taksonomi
+  severity/status baru (KRITIS/TINGGI/SEDANG/RENDAH dan
+  DIKONFIRMASI/SEDANG_DIPERBAIKI/SIAP_DIVERIFIKASI/DITUTUP/DITUNDA_DENGAN_ALASAN/
+  TIDAK_VALID) maupun mereferensikan Requirement ID yang benar setelah checklist
+  diperluas.
+- **Keputusan:** Jalankan correction-loop audit pass kedua yang: (1) menulis ulang
+  `docs/engineering/DEFECT-LEDGER.md` dengan format kolom baru dan melebur 22
+  defect lama menjadi `ALT-DEF-001` s.d. `ALT-DEF-022` tanpa kehilangan satu
+  temuan pun; (2) menambahkan 7 defect baru hasil audit langsung terhadap
+  `prisma/schema/schema.prisma` (`ALT-DEF-023` s.d. `ALT-DEF-029`) — mencakup
+  consent/merge pelanggan, shift lintas tengah malam, istirahat absensi, antrian
+  cetak, ketiadaan test/CI, dan migrasi yang belum pernah dijalankan dari database
+  kosong; (3) menyinkronkan `RISK-REGISTER.md` dengan risiko-risiko KRITIS yang
+  baru terformalkan; (4) menambahkan satu requirement baru (`ALT-PLT-026`, antrian
+  cetak) ke `MASTER-CHECKLIST.md` karena genuinely belum tercakup di mana pun.
+- **Konsekuensi:** Tidak ada defect yang ditutup pada pass ini (belum ada
+  implementasi kode yang memperbaikinya) — pass ini murni membuat correction loop
+  bisa dilacak dengan jujur. Implementasi kode untuk domain Platform/Otorisasi
+  (ALT-DEF-001, ALT-DEF-002, ALT-DEF-010) harus diprioritaskan lebih dulu karena
+  domain lain (Pesanan, Dapur, Promo, Kasir) bergantung pada fondasi
+  tenant/otorisasi yang benar sebelum bisa diimplementasikan dengan aman — lihat
+  urutan rekomendasi di `docs/engineering/DEFECT-LEDGER.md`.
+
 ## Status ringkas
 
 Semua ADR di atas berstatus **DITERIMA sebagai keputusan desain**, tetapi

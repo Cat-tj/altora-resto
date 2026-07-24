@@ -19,6 +19,42 @@ Kedua item di atas adalah **pemeriksaan statis** (validasi sintaks skema & tipe)
 bukti bahwa aplikasi berjalan, bahwa migrasi benar-benar diterapkan ke database nyata,
 atau bahwa fitur apa pun berfungsi end-to-end.
 
+## Catatan pass 2026-07-24: pencatatan defect, bukan perbaikan
+
+Pass correction-loop pada 2026-07-24 yang menulis ulang
+`docs/engineering/DEFECT-LEDGER.md` (29 defect, `ALT-DEF-001` s.d. `ALT-DEF-029`)
+adalah **pass pencatatan defect murni** — tidak ada schema, kode aplikasi, atau
+kontrak API yang diubah pada pass ini (hanya file di `docs/engineering/*.md`).
+Tidak ada bukti perbaikan untuk defect apa pun ditambahkan di sini karena memang
+belum ada perbaikan yang dilakukan; satu-satunya pengecualian adalah ALT-DEF-012
+yang bukti verifikasinya (`grep` jumlah baris requirement) sudah tercatat langsung
+di `DEFECT-LEDGER.md`, bukan di sini, karena itu bukti untuk gejala (ukuran
+checklist) bukan untuk akar masalah schema.
+
+Sebelum satu pun defect di `DEFECT-LEDGER.md` boleh berpindah status ke
+`DITUTUP`, verifikasi berikut wajib dijalankan dan hasilnya dicatat di sini
+sesuai format entri rilis di bawah:
+
+1. `npx prisma@5.20.0 validate --schema prisma/schema/schema.prisma` (dan
+   `format`) setelah perubahan schema — bukti sintaks valid, bukan bukti
+   perilaku benar.
+2. `prisma migrate dev` terhadap database Postgres kosong (lihat ALT-DEF-029) —
+   bukti bahwa schema benar-benar bisa diterapkan, bukan hanya valid secara
+   sintaks.
+3. Typecheck (`tsc --noEmit --strict`) atas paket yang terpengaruh perubahan
+   schema/API.
+4. Test otomatis terkait (unit/integration/security) untuk defect yang
+   diperbaiki — termasuk test isolasi tenant (lihat ALT-DEF-027) begitu harness
+   test tersedia.
+5. Pembaruan `docs/engineering/TRACEABILITY-MATRIX.md` untuk requirement yang
+   terpengaruh, supaya requirement->entitas/endpoint/rute/permission/bukti uji
+   tetap konsisten dengan `MASTER-CHECKLIST.md` (lihat ALT-DEF-020 di
+   `DEFECT-LEDGER.md` untuk status sinkronisasi saat ini).
+
+Tanpa kelima bukti di atas, status defect di `DEFECT-LEDGER.md` **tidak boleh**
+diklaim `DITUTUP` — ini menegaskan ulang aturan integritas bukti di bagian bawah
+dokumen ini.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```
