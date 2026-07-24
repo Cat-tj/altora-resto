@@ -9,7 +9,7 @@ sudah diverifikasi lulus** - semua masih `BELUM DIKERJAKAN` per penulisan dokume
 yang belum ada di `prisma/schema/schema.prisma` saat ini - lihat `docs/engineering/DEFECT-LEDGER.md`
 untuk kesenjangan yang perlu dikoreksi sebelum sebagian requirement ini bisa mulai dikerjakan).
 
-**Total requirement: 248** (target 200-250).
+**Total requirement: 249** (target 200-250).
 
 Format ID: `ALT-{DOMAIN}-{urut 3 digit}`, dimulai ulang dari 001 di tiap domain.
 
@@ -17,7 +17,7 @@ Format ID: `ALT-{DOMAIN}-{urut 3 digit}`, dimulai ulang dari 001 di tiap domain.
 
 | Domain | Nama Domain | Jumlah Requirement |
 |---|---|---|
-| ALT-PLT | Platform | 25 |
+| ALT-PLT | Platform | 26 |
 | ALT-MNU | Menu | 15 |
 | ALT-RSP | Resep & Produksi | 13 |
 | ALT-PSD | Persediaan | 18 |
@@ -34,7 +34,7 @@ Format ID: `ALT-{DOMAIN}-{urut 3 digit}`, dimulai ulang dari 001 di tiap domain.
 | ALT-ANL | Analitik | 12 |
 | ALT-UX | UI/UX & Platform | 15 |
 | ALT-SEC | Security | 10 |
-| **Total** | | **248** |
+| **Total** | | **249** |
 
 Kolom tabel requirement di bawah:
 
@@ -81,6 +81,7 @@ Kolom tabel requirement di bawah:
 | ALT-PLT-023 | Restore dari backup | Memulihkan data tenant dari snapshot backup tertentu (butuh approval Owner). | Platform | ALT-PLT-030 | Restore hanya bisa dijalankan oleh OWNER dan tercatat di AuditLog. | BackupJob | POST /api/v1/backup/{id}/restore | platform.backup.restore | /pengaturan/backup | Integration, Security | BELUM DIKERJAKAN | - |
 | ALT-PLT-024 | Diagnostik sistem per tenant | Halaman/endpoint ringkasan kesehatan integrasi tenant (queue lag, error rate). | Platform | - | Menampilkan status komponen kunci (DB, queue, storage) untuk tenant aktif. | - | GET /api/v1/diagnostik | platform.diagnostik.lihat | /pengaturan/diagnostik | Integration | BELUM DIKERJAKAN | - |
 | ALT-PLT-025 | Health check endpoint publik | Endpoint tanpa autentikasi untuk load balancer memeriksa ketersediaan layanan. | Platform | - | Mengembalikan 200 OK ketika DB dan dependency inti dapat diakses. | - | GET /api/v1/health | publik (tanpa izin) | - | Integration | BELUM DIKERJAKAN | - |
+| ALT-PLT-026 | Antrian cetak dengan retry | Model antrian cetak (printer queue) untuk tiket dapur/struk yang gagal cetak, dengan status dan jumlah percobaan. | Platform | ALT-PLT-015 | Kegagalan cetak tercatat sebagai baris `AntrianCetak` berstatus GAGAL yang bisa di-retry, bukan hilang begitu saja. | AntrianCetak | POST /api/v1/antrian-cetak/{id}/retry | platform.antrian-cetak.kelola | /pengaturan/perangkat | Unit, Integration | BELUM DIKERJAKAN | - |
 
 ## Menu (`ALT-MNU`) - 15 requirement
 
@@ -387,12 +388,13 @@ Kolom tabel requirement di bawah:
 
 ## Catatan penutup
 
-- Total requirement terdaftar: 248.
-- Status `BELUM DIKERJAKAN`: 248 (100%).
+- Total requirement terdaftar: 249 (248 semula + ALT-PLT-026 ditambahkan hasil rekonsiliasi defect ledger, lihat DEFECT-LEDGER.md ALT-DEF-026).
+- Status `BELUM DIKERJAKAN`: 249 (100%).
 - Status `DIKERJAKAN`/`SELESAI DEV`/`DIUJI`/`LULUS`: 0.
 - Beberapa requirement (terutama domain Persediaan, Pesanan, Platform, Security, QRIS)
   mereferensikan model data yang BELUM ada di `prisma/schema/schema.prisma` saat ini -
-  lihat pemetaan defect terkait di `docs/engineering/DEFECT-LEDGER.md` (DEF-001 s.d. DEF-021).
+  lihat pemetaan defect terkait di `docs/engineering/DEFECT-LEDGER.md` (ALT-DEF-001
+  s.d. ALT-DEF-029).
   Requirement tersebut tetap dicantumkan karena mencerminkan target scope penuh produk,
   bukan klaim bahwa modelnya sudah tersedia.
 - Dokumen ini wajib diperbarui setiap requirement berpindah status - lihat proses di

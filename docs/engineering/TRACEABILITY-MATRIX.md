@@ -1,10 +1,21 @@
 # Matriks Traceability - Altora Resto
 
-Status dokumen: **DRAF AWAL**. Menghubungkan setiap requirement
-(`docs/engineering/MASTER-CHECKLIST.md`) ke artefak konkret: entitas ERD, endpoint API,
-rute UI, permission, dan bukti uji. Kolom "Bukti Uji" merujuk ke
-`docs/engineering/RELEASE-EVIDENCE.md`; kosong berarti belum ada bukti karena belum
-diimplementasikan.
+Status dokumen: **DRAF AWAL — DIKETAHUI TIDAK SINKRON (lihat DEFECT-LEDGER.md
+ALT-DEF-020)**. Menghubungkan setiap requirement (`docs/engineering/MASTER-CHECKLIST.md`)
+ke artefak konkret: entitas ERD, endpoint API, rute UI, permission, dan bukti uji.
+Kolom "Bukti Uji" merujuk ke `docs/engineering/RELEASE-EVIDENCE.md`; kosong berarti
+belum ada bukti karena belum diimplementasikan.
+
+**Peringatan sinkronisasi:** dokumen ini ditulis sebelum `MASTER-CHECKLIST.md`
+diperluas ke 249 requirement (commit `b3559c3` + `ALT-PLT-026`). Baris di bawah
+hanya mencakup sebagian kecil requirement (~64 referensi `ALT-`) dan sebagian
+memakai prefix domain yang **sudah tidak ada** (`ALT-OTR-xxx` — lihat tabel
+rekonsiliasi ID di `docs/engineering/DEFECT-LEDGER.md`, prefix yang benar adalah
+`ALT-PLT-008` s.d. `ALT-PLT-012` untuk Otorisasi). Sinkronisasi penuh untuk 249
+requirement adalah pekerjaan terpisah yang lebih besar dari pass ini (dicatat
+sebagai `ALT-DEF-020`, status `DIKONFIRMASI`, belum `DITUTUP`) — jangan menganggap
+baris manapun di bawah ini sebagai representasi lengkap/akurat dari scope saat
+ini sampai pekerjaan sinkronisasi tersebut selesai.
 
 | Requirement ID | Entitas ERD | Endpoint API | Rute UI | Permission | Status | Bukti Uji |
 |---|---|---|---|---|---|---|
