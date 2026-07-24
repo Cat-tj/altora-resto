@@ -517,6 +517,127 @@ Dokumentasi requirement header `Idempotency-Key` di `docs/api/API-CONTRACT.md`
 bagian 17.1 juga menutup gap yang sebelumnya dicatat terpisah di
 `ALT-DEF-022`.
 
+## Pass correction-loop 2026-07-25 (lanjutan): perbaikan ALT-DEF-005 dan ALT-DEF-016
+
+Batch ini mengganti `StatusPesanan` 7-status lama dengan state machine
+14-status penuh, mengubah `PesananRiwayatStatus.statusSebelumnya/statusBaru`
+dari `String` bebas menjadi enum, menambah model `PesananPerubahan`/
+`PesananPenolakan`/`PesananPembatalan`, menambah kolom snapshot lengkap ke
+`ItemPesanan`/`ItemPesananModifier`, dan menyelaraskan `StatusItemPesanan` ke
+daftar penuh dari correction spec. Lihat ADR-017 di
+`docs/engineering/DECISION-LOG.md` untuk rasional desain lengkap.
+
+### 1. `prisma format` + `prisma validate`
+
+```
+$ npx prisma format --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 68ms 🚀
+
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/db" npx prisma validate --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+```
+
+(Satu iterasi awal gagal validate dengan `Error code: P1012` karena
+`Pesanan.status @default(BARU)` masih merujuk nilai enum lama yang sudah
+dihapus - diperbaiki menjadi `@default(DRAF)` sebelum re-run di atas, bukti
+bahwa validasi ini benar-benar dijalankan terhadap perubahan nyata, bukan
+diasumsikan lulus.)
+
+### 2. `prisma generate` tanpa koneksi database nyata
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/db" npx prisma generate --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 696ms
+```
+
+Diverifikasi lewat grep terhadap `node_modules/.prisma/client/index.d.ts` bahwa
+tipe input untuk model baru/diperbarui benar-benar ter-generate:
+
+```
+$ grep -n "PesananPerubahanUncheckedCreateInput\|PesananPenolakanUncheckedCreateInput\|PesananPembatalanUncheckedCreateInput\|JenisPerubahanPesanan\b" node_modules/.prisma/client/index.d.ts | head -5
+691:export const JenisPerubahanPesanan: {
+701:export type JenisPerubahanPesanan = (typeof JenisPerubahanPesanan)[keyof typeof JenisPerubahanPesanan]
+1015:export type JenisPerubahanPesanan = $Enums.JenisPerubahanPesanan
+1017:export const JenisPerubahanPesanan: typeof $Enums.JenisPerubahanPesanan
+66059:    data: XOR<PesananPerubahanCreateInput, PesananPerubahanUncheckedCreateInput>
+```
+
+### 3. Test struktur baru dijalankan nyata (`node --experimental-strip-types`)
+
+```
+$ node --experimental-strip-types packages/test-support/src/architecture/pesanan-state-machine-snapshot-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-005/ALT-DEF-016 lulus.
+```
+
+Assertion yang lulus mencakup: `StatusPesanan` memuat seluruh 14 nilai baru
+dan TIDAK lagi memuat nilai lama (`BARU`/`DIPROSES_DAPUR`/`SIAP_DISAJIKAN`/
+`DIBAYAR`); `StatusItemPesanan` diselaraskan ke 9 nilai penuh; enum
+`JenisPerubahanPesanan` ada dengan 7 nilai starter; `PesananRiwayatStatus.
+statusSebelumnya`/`statusBaru` bertipe enum `StatusPesanan` (bukan `String`);
+`ItemPesanan` punya seluruh 10 kolom `*Snapshot`/`resepVersiId` (scalar polos,
+TANPA relasi FK ke `VersiResep`); `ItemPesananModifier` punya 4 kolom snapshot
+baru + `modifierOpsiId` tetap dipertahankan; `PesananPerubahan`/
+`PesananPenolakan`/`PesananPembatalan` ada dengan bentuk yang sesuai
+(`PesananPenolakan.pesananId` dan `PesananPembatalan.pesananId` sama-sama
+`@unique`, lihat ADR-017 Keputusan 3 dan 4 untuk alasan berbeda di balik
+keduanya); regresi `Pesanan.outlet` composite-FK (`ALT-DEF-010`) dan
+`TiketDapur.pesananId @unique` (kardinalitas 1:1 dipertahankan, scope
+`ALT-DEF-006`) tetap tegak.
+
+### 4. `tsc --noEmit --strict` atas seluruh file test arsitektur (regresi)
+
+```
+$ npx tsc --noEmit --strict --module ESNext --moduleResolution Bundler --target ES2022 --skipLibCheck --types node packages/test-support/src/architecture/*.test.ts prisma/seed/izin.seed.ts
+(tidak ada output - bersih, mencakup KESEPULUH file test arsitektur sekaligus:
+keanggotaan-outlet-constraints.test.ts, tenant-outlet-composite-constraints.test.ts,
+prisma-client-shape.test.ts, prisma-client-shape-tenant-outlet.test.ts,
+sesi-auth-pin-constraints.test.ts, prisma-client-shape-auth-pin.test.ts,
+idempotency-outbox-notification-constraints.test.ts,
+prisma-client-shape-platform-infra.test.ts,
+pesanan-state-machine-snapshot-constraints.test.ts (BARU),
+prisma-client-shape-pesanan.test.ts (BARU) - tanpa regresi pada
+seluruh file test arsitektur sebelumnya)
+```
+
+Seluruh 8 file test arsitektur yang sudah ada sebelum batch ini (dijalankan
+satu per satu lewat `node --experimental-strip-types` untuk file berbasis
+assertion teks) tetap lulus tanpa regresi:
+
+```
+$ for f in packages/test-support/src/architecture/*.test.ts; do node --experimental-strip-types "$f"; done
+OK: seluruh assertion arsitektur ALT-DEF-017 lulus.
+OK: seluruh assertion arsitektur ALT-DEF-001/ALT-DEF-002 lulus.
+OK: seluruh assertion arsitektur ALT-DEF-005/ALT-DEF-016 lulus.
+(file prisma-client-shape*.test.ts tidak mencetak apa pun - murni type-check
+via `satisfies`, tidak ada assertion runtime; TIDAK melempar error apa pun
+saat dieksekusi = lulus)
+OK: seluruh assertion arsitektur ALT-DEF-003/ALT-DEF-013 lulus.
+OK: seluruh assertion arsitektur ALT-DEF-010/ALT-DEF-014 lulus.
+```
+
+### 5. `prisma migrate dev` - DIBLOKIR (konsisten dengan pass sebelumnya)
+
+Tidak dicoba ulang pada pass ini - keterbatasan lingkungan yang sama sudah
+didokumentasikan lengkap di pass ALT-DEF-017 di atas (`P1010: User denied
+access`, tidak ada Postgres nyata di environment ini, `ALT-DEF-029`).
+
+### Kesimpulan status
+
+Schema untuk ALT-DEF-005/ALT-DEF-016 sudah benar secara sintaks
+(`format`+`validate`), tipe yang dihasilkan sudah benar secara bentuk
+(`generate` + `tsc --noEmit --strict`), dan seluruh model/field yang diklaim
+di ADR-017 sudah dibuktikan ada lewat test struktur nyata, tanpa regresi pada
+KESELURUHAN 8 test arsitektur yang sudah ada sebelumnya (ALT-DEF-001/002/
+003/010/013/014/017). **Belum ada** migrasi nyata ke Postgres, handler/
+endpoint transisi status nyata, middleware guard kanal/kebijakan-prepaid
+nyata, publisher event domain nyata, maupun model `PesananRetur`
+(`ALT-PES-018`, scope batch berikutnya) - karena itu status `ALT-DEF-005` dan
+`ALT-DEF-016` adalah `SIAP_DIVERIFIKASI`, BUKAN `DITUTUP`.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```
