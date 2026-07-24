@@ -112,6 +112,9 @@ model Tenant {
   mutasiStok              MutasiStok[]
   stokOpname              StokOpname[]
   tiketDapur              TiketDapur[]
+  riwayatStatusTiketDapur RiwayatStatusTiketDapur[]
+  gelombangDapur          GelombangDapur[]
+  aturanRoutingDapur      AturanRoutingDapur[]
   stasiunDapur            StasiunDapur[]
   rmPenjualanHarian       RmPenjualanHarian[]
   rmPenjualanItemHarian   RmPenjualanItemHarian[]
@@ -163,6 +166,7 @@ model Outlet {
   rmPenjualanItemHarian   RmPenjualanItemHarian[]
   rmStokKritis            RmStokKritis[]
   rmKinerjaKaryawanHarian RmKinerjaKaryawanHarian[]
+  AturanRoutingDapur      AturanRoutingDapur[]
 
   @@unique([tenantId, kode])
   // Diperlukan (bukan sekadar @id) agar KeanggotaanOutlet bisa memakai composite FK
@@ -217,29 +221,32 @@ model Pengguna {
   auditLog                        AuditLog[]
   karyawan                        Karyawan?
   giliranKasir                    GiliranKasir[]
-  purchaseOrderDibuat             PurchaseOrder[]         @relation("PoDibuatOleh")
-  penerimaanBarangDiterima        PenerimaanBarang[]      @relation("PenerimaanDiterimaOleh")
-  stokOpnameDibuat                StokOpname[]            @relation("OpnameDibuatOleh")
-  pesananDibuat                   Pesanan[]               @relation("PesananDibuatOleh")
-  pesananRiwayatStatusDiubah      PesananRiwayatStatus[]  @relation("RiwayatStatusDiubahOleh")
+  purchaseOrderDibuat             PurchaseOrder[]           @relation("PoDibuatOleh")
+  penerimaanBarangDiterima        PenerimaanBarang[]        @relation("PenerimaanDiterimaOleh")
+  stokOpnameDibuat                StokOpname[]              @relation("OpnameDibuatOleh")
+  pesananDibuat                   Pesanan[]                 @relation("PesananDibuatOleh")
+  pesananRiwayatStatusDiubah      PesananRiwayatStatus[]    @relation("RiwayatStatusDiubahOleh")
   // ALT-DEF-005/ALT-PES-010/ALT-PES-011: pengguna yang melakukan
   // perubahan/penolakan/pembatalan pesanan - lihat model PesananPerubahan/
   // PesananPenolakan/PesananPembatalan di bagian 7 (Pesanan).
-  pesananPerubahanDiubah          PesananPerubahan[]      @relation("PesananPerubahanDiubahOleh")
-  pesananPenolakanDitolak         PesananPenolakan[]      @relation("PesananPenolakanDitolakOleh")
-  pesananPembatalanDibatalkan     PesananPembatalan[]     @relation("PesananPembatalanDibatalkanOleh")
-  pembayaranDikonfirmasi          Pembayaran[]            @relation("PembayaranDikonfirmasiOleh")
-  qrisKonfirmasiDiverifikasi      QrisKonfirmasiManual[]  @relation("QrisDiverifikasiOleh")
-  pembayaranRefundDisetujui       PembayaranRefund[]      @relation("RefundDisetujuiOleh")
-  cutiIzinDisetujui               CutiIzin[]              @relation("CutiDisetujuiOleh")
-  rekapKasHarianDiverifikasi      RekapKasHarian[]        @relation("RekapDiverifikasiOleh")
-  biayaOperasionalDicatat         BiayaOperasional[]      @relation("BiayaDicatatOleh")
-  izinSementaraDiberikan          IzinSementara[]         @relation("IzinSementaraDiberikanOleh")
-  permintaanPersetujuanDiputuskan PermintaanPersetujuan[] @relation("PersetujuanDisetujuiOleh")
+  pesananPerubahanDiubah          PesananPerubahan[]        @relation("PesananPerubahanDiubahOleh")
+  pesananPenolakanDitolak         PesananPenolakan[]        @relation("PesananPenolakanDitolakOleh")
+  pesananPembatalanDibatalkan     PesananPembatalan[]       @relation("PesananPembatalanDibatalkanOleh")
+  pembayaranDikonfirmasi          Pembayaran[]              @relation("PembayaranDikonfirmasiOleh")
+  qrisKonfirmasiDiverifikasi      QrisKonfirmasiManual[]    @relation("QrisDiverifikasiOleh")
+  pembayaranRefundDisetujui       PembayaranRefund[]        @relation("RefundDisetujuiOleh")
+  cutiIzinDisetujui               CutiIzin[]                @relation("CutiDisetujuiOleh")
+  rekapKasHarianDiverifikasi      RekapKasHarian[]          @relation("RekapDiverifikasiOleh")
+  biayaOperasionalDicatat         BiayaOperasional[]        @relation("BiayaDicatatOleh")
+  izinSementaraDiberikan          IzinSementara[]           @relation("IzinSementaraDiberikanOleh")
+  permintaanPersetujuanDiputuskan PermintaanPersetujuan[]   @relation("PersetujuanDisetujuiOleh")
   // ALT-DEF-017: notifikasi in-app - Pengguna adalah identitas GLOBAL (ADR-011),
   // sengaja TIDAK di-composite-kan ke tenant, sama seperti relasi Pengguna lain
   // di seluruh skema ini (lihat ADR-013 poin 5).
   notifikasi                      Notification[]
+  // ALT-DEF-006: aktor (nullable) yang mengubah status TiketDapur / memicu GelombangDapur.
+  riwayatStatusTiketDapurDiubah   RiwayatStatusTiketDapur[]
+  gelombangDapurDipicu            GelombangDapur[]
 
   @@map("pengguna")
 }
@@ -720,8 +727,9 @@ model KategoriMenu {
   urutan   Int                 @default(0)
   status   StatusAktifNonaktif @default(AKTIF)
 
-  outlet   Outlet?    @relation(fields: [tenantId, outletId], references: [tenantId, id])
-  itemMenu ItemMenu[]
+  outlet             Outlet?              @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  itemMenu           ItemMenu[]
+  aturanRoutingDapur AturanRoutingDapur[]
 
   @@unique([tenantId, id])
   @@map("kategori_menu")
@@ -748,6 +756,7 @@ model ItemMenu {
   resep                 Resep?
   itemPesanan           ItemPesanan[]
   rmPenjualanItemHarian RmPenjualanItemHarian[]
+  aturanRoutingDapur    AturanRoutingDapur[]
 
   @@unique([tenantId, id])
   @@map("item_menu")
@@ -1380,7 +1389,10 @@ model Pesanan {
   pembatalan     PesananPembatalan?
   pembayaran     Pembayaran[]
   promoPemakaian PromoPemakaian?
-  tiketDapur     TiketDapur?
+  // ALT-DEF-006: TiketDapur? (1:1) -> TiketDapur[] (1:N) - satu pesanan dapat
+  // menghasilkan banyak tiket dapur (satu per stasiun/gelombang tujuan).
+  tiketDapur     TiketDapur[]
+  gelombangDapur GelombangDapur[]
   transaksiKasir TransaksiKasir[]
   poinRiwayat    PoinRiwayat[]
 
@@ -1563,17 +1575,40 @@ model PesananPembatalan {
 // 8. DAPUR / KDS (docs/database/08-dapur.md)
 // =====================================================================================
 
+// ALT-DEF-006: 8 status penuh menggantikan 4 status lama
+// (MASUK_ANTRIAN/DIPROSES/SIAP/DIAMBIL_PELAYAN) - lihat ADR-018 di
+// docs/engineering/DECISION-LOG.md dan tabel transisi di
+// docs/arsitektur/STATE-MACHINES.md bagian "Dapur (Tiket Dapur)".
 enum StatusTiketDapur {
-  MASUK_ANTRIAN
-  DIPROSES
+  BARU
+  DITERIMA
+  DITAHAN
+  SEDANG_DISIAPKAN
+  SELESAI_SEBAGIAN
   SIAP
-  DIAMBIL_PELAYAN
+  DISAJIKAN
+  DIBATALKAN
 }
 
+// ALT-DEF-006/ADR-018 Keputusan 6: TETAP terpisah dari StatusTiketDapur -
+// ini adalah status masak PER BARIS ITEM (granularitas lebih halus dan lebih
+// sederhana daripada status tiket), bukan status agregat tiket. Satu
+// TiketDapur baru SIAP ketika SELURUH TiketDapurBaris-nya SIAP (lihat guard
+// transisi SELESAI_SEBAGIAN -> SIAP di STATE-MACHINES.md) - menggabungkan
+// keduanya ke satu enum akan memaksa nilai seperti DITAHAN/DIBATALKAN yang
+// tidak relevan pada level baris tunggal.
 enum StatusMasakBaris {
   MENUNGGU
   DIMASAK
   SIAP
+}
+
+// ALT-DEF-006: status MENUNGGU/DIPICU/SELESAI untuk satu gelombang masak
+// (lihat model GelombangDapur di bawah).
+enum StatusGelombangDapur {
+  MENUNGGU
+  DIPICU
+  SELESAI
 }
 
 // ALT-DEF-010: outlet lewat composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
@@ -1585,44 +1620,106 @@ model StasiunDapur {
   outletId String
   nama     String
 
-  tenant     Tenant       @relation(fields: [tenantId], references: [id])
-  outlet     Outlet       @relation(fields: [tenantId, outletId], references: [tenantId, id])
-  tiketDapur TiketDapur[]
+  tenant             Tenant               @relation(fields: [tenantId], references: [id])
+  outlet             Outlet               @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  tiketDapur         TiketDapur[]
+  aturanRoutingDapur AturanRoutingDapur[]
 
   @@unique([outletId, id])
   @@map("stasiun_dapur")
+}
+
+// ALT-DEF-006/ALT-DPR-002: aturan lookup yang menentukan item menu/kategori
+// menu tertentu diarahkan ke stasiun dapur mana (mis. "Kopi -> Bar", "Nasi ->
+// Dapur", "Dessert -> Stasiun Dessert"). Tabel ini HANYA menyimpan aturan -
+// pembuatan TiketDapur nyata saat pesanan dikonfirmasi (yang MEMBACA aturan
+// ini untuk menentukan stasiun tujuan tiap baris) adalah handler/feature work
+// di luar scope batch ini (lihat ADR-018 Keputusan 4 dan bagian "Cakupan yang
+// SENGAJA TIDAK dikerjakan").
+model AturanRoutingDapur {
+  id             String              @id
+  tenantId       String
+  outletId       String
+  // Invariant level-aplikasi (TIDAK bisa dipaksakan Prisma/SQL murni - lihat
+  // ADR-018 Keputusan 4): TEPAT SATU dari itemMenuId/kategoriMenuId harus
+  // diisi (XOR). itemMenuId diisi -> aturan spesifik satu item menu;
+  // kategoriMenuId diisi -> aturan berlaku untuk seluruh item dalam kategori
+  // tsb. Validasi XOR ini wajib dilakukan di service-layer sebelum insert.
+  itemMenuId     String?
+  kategoriMenuId String?
+  stasiunDapurId String
+  prioritas      Int                 @default(0)
+  status         StatusAktifNonaktif @default(AKTIF)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet       Outlet        @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, itemMenuId) -> ItemMenu(tenantId, id) - nullable (lihat invariant XOR di atas).
+  itemMenu     ItemMenu?     @relation(fields: [tenantId, itemMenuId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, kategoriMenuId) -> KategoriMenu(tenantId, id) - nullable (lihat invariant XOR di atas).
+  kategoriMenu KategoriMenu? @relation(fields: [tenantId, kategoriMenuId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (outletId, stasiunDapurId) -> StasiunDapur(outletId, id).
+  stasiunDapur StasiunDapur  @relation(fields: [outletId, stasiunDapurId], references: [outletId, id])
+
+  @@map("aturan_routing_dapur")
 }
 
 model TiketDapur {
   id                String           @id
   tenantId          String
   outletId          String
-  pesananId         String           @unique
+  pesananId         String
   stasiunDapurId    String?
-  status            StatusTiketDapur @default(MASUK_ANTRIAN)
+  // ALT-DEF-006: gelombang masak (mis. re-fire untuk repeat course) - lihat
+  // GelombangDapur untuk metadata level-gelombang, dan @@unique di bawah untuk
+  // batasan "satu tiket per pesanan per stasiun per gelombang".
+  nomorGelombang    Int              @default(1)
+  status            StatusTiketDapur @default(BARU)
   masukPada         DateTime         @default(now())
   mulaiDiprosesPada DateTime?
   siapPada          DateTime?
 
-  tenant       Tenant            @relation(fields: [tenantId], references: [id])
+  tenant        Tenant                    @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
-  outlet       Outlet            @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  outlet        Outlet                    @relation(fields: [tenantId, outletId], references: [tenantId, id])
   // ALT-DEF-010: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id) -
   // menjamin tiket dapur tidak bisa merujuk pesanan tenant lain meskipun
-  // tenantId TiketDapur sendiri dicatat terpisah dari Pesanan.
-  pesanan      Pesanan           @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  // tenantId TiketDapur sendiri dicatat terpisah dari Pesanan. ALT-DEF-006:
+  // BUKAN lagi relasi one-to-one - satu Pesanan kini bisa punya banyak
+  // TiketDapur (satu per stasiun/gelombang, lihat @@unique di bawah).
+  pesanan       Pesanan                   @relation(fields: [tenantId, pesananId], references: [tenantId, id])
   // ALT-DEF-010: composite-FK (outletId, stasiunDapurId) -> StasiunDapur(outletId, id) -
   // memakai outletId agar stasiun dapur yang dirujuk dijamin di outlet yang
   // sama dengan tiket (lihat juga test isolasi TiketDapur↔StasiunDapur/Outlet).
-  stasiunDapur StasiunDapur?     @relation(fields: [outletId, stasiunDapurId], references: [outletId, id])
-  baris        TiketDapurBaris[]
+  stasiunDapur  StasiunDapur?             @relation(fields: [outletId, stasiunDapurId], references: [outletId, id])
+  baris         TiketDapurBaris[]
+  riwayatStatus RiwayatStatusTiketDapur[]
 
-  // Diperlukan agar composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id)
-  // valid sebagai relasi one-to-one (pesananId sudah @unique tunggal di atas).
-  @@unique([tenantId, pesananId])
+  // ALT-DEF-006: menggantikan `pesananId @unique` (1:1) lama - satu pesanan
+  // dapat menghasilkan banyak tiket, TAPI paling banyak SATU tiket per
+  // kombinasi (pesanan, stasiun, gelombang). Lihat ADR-018 Keputusan 1.
+  @@unique([pesananId, stasiunDapurId, nomorGelombang])
   @@map("tiket_dapur")
 }
 
+// ALT-DEF-006/ADR-018 Keputusan 2: itemPesananId TETAP @unique. Di bawah alur
+// routing gelombang-tunggal normal, satu ItemPesanan (satu baris pesanan,
+// mis. "1x Cappuccino") pergi ke TEPAT SATU tiket/stasiun - constraint
+// komposit baru `[pesananId, stasiunDapurId, nomorGelombang]` ada di
+// TiketDapur (level tiket), BUKAN di TiketDapurBaris, karena granularitas
+// "banyak gelombang" dimodelkan sebagai banyak TiketDapur (satu per
+// gelombang) yang masing-masing punya baris sendiri-sendiri - bukan sebagai
+// banyak baris untuk ItemPesanan yang sama dalam SATU tiket. Jika kelak
+// re-fire/repeat-course butuh ItemPesanan yang sama muncul di gelombang
+// KEDUA, itu akan jadi baris baru di TiketDapurBaris milik TiketDapur
+// gelombang-2 yang BERBEDA (bukan baris kedua di tiket gelombang-1 yang
+// sama) - sehingga @unique per-ItemPesanan tetap valid SELAMA satu
+// ItemPesanan tidak pernah dikirim dua kali ke tiket YANG SAMA. Menghapus
+// @unique ini sekarang akan menghilangkan jaring pengaman "item terkirim
+// dobel ke tiket yang sama" tanpa ada kebutuhan bisnis konkret yang
+// menuntutnya pada batch ini.
 model TiketDapurBaris {
   id            String           @id
   tiketDapurId  String
@@ -1633,6 +1730,54 @@ model TiketDapurBaris {
   itemPesanan ItemPesanan @relation(fields: [itemPesananId], references: [id])
 
   @@map("tiket_dapur_baris")
+}
+
+// ALT-DEF-006: riwayat transisi status TiketDapur, mengikuti pola enum-typed
+// history yang sama seperti PesananRiwayatStatus (ALT-DEF-005) - TANPA
+// String bebas.
+model RiwayatStatusTiketDapur {
+  id               String           @id
+  tenantId         String
+  tiketDapurId     String
+  statusSebelumnya StatusTiketDapur
+  statusBaru       StatusTiketDapur
+  diubahOlehId     String?
+  createdAt        DateTime         @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  tiketDapur TiketDapur @relation(fields: [tiketDapurId], references: [id])
+  // Nullable - event sistem/timer (mis. auto-hold karena SLA) tidak selalu
+  // punya aktor manusia.
+  diubahOleh Pengguna?  @relation(fields: [diubahOlehId], references: [id])
+
+  @@map("riwayat_status_tiket_dapur")
+}
+
+// ALT-DEF-006/ADR-018 Keputusan 3: dimodelkan sebagai tabel nyata (bukan
+// sekadar field `TiketDapur.nomorGelombang`) karena ada metadata level-
+// gelombang yang tidak dimiliki satu TiketDapur individual: kapan gelombang
+// ini secara eksplisit "dipicu" (mis. pelayan menekan tombol "kirim course
+// kedua sekarang"), siapa yang memicu, dan status agregat gelombang itu
+// sendiri (MENUNGGU/DIPICU/SELESAI) yang terpisah dari status
+// masing-masing TiketDapur di dalamnya (satu gelombang bisa mencakup banyak
+// TiketDapur lintas stasiun sekaligus).
+model GelombangDapur {
+  id             String               @id
+  tenantId       String
+  pesananId      String
+  nomorGelombang Int
+  dipicuPada     DateTime?
+  dipicuOlehId   String?
+  status         StatusGelombangDapur @default(MENUNGGU)
+  createdAt      DateTime             @default(now())
+
+  tenant     Tenant    @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
+  pesanan    Pesanan   @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  dipicuOleh Pengguna? @relation(fields: [dipicuOlehId], references: [id])
+
+  @@unique([pesananId, nomorGelombang])
+  @@map("gelombang_dapur")
 }
 
 // =====================================================================================

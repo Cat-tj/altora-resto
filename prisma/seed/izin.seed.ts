@@ -103,6 +103,23 @@ export const IZIN_SEED: readonly IzinSeedEntry[] = [
   { kode: "pesanan.batalkan", nama: "Batalkan pesanan", domain: "pesanan", deskripsi: "Membatalkan seluruh pesanan (menulis PesananPembatalan); butuh approval supervisor bila status sudah DIKONFIRMASI/DIKIRIM_KE_DAPUR/SEDANG_DISIAPKAN." },
   { kode: "pesanan.retur.kelola", nama: "Kelola retur pesanan", domain: "pesanan", deskripsi: "Memproses retur pesanan yang sudah SELESAI (SELESAI -> DIRETUR); model detail retur adalah scope ALT-PES-018 batch berikutnya." },
   { kode: "pesanan.riwayat.lihat", nama: "Lihat riwayat pesanan", domain: "pesanan", deskripsi: "Membaca daftar pesanan, riwayat status, dan riwayat perubahan (PesananRiwayatStatus/PesananPerubahan)." },
+
+  // dapur / KDS (baru, ALT-DEF-006 - lihat docs/keamanan/PERMISSION-MATRIX.md
+  // bagian 1a dan tabel transisi lengkap di docs/arsitektur/STATE-MACHINES.md
+  // bagian "Dapur (Tiket Dapur)". MASTER-CHECKLIST.md sudah mereferensikan
+  // kode-kode ini sejak sebelumnya (ALT-DPR-001 s.d. ALT-DPR-015) tetapi belum
+  // pernah ditambahkan ke seed literal ini - genuinely hilang, bukan duplikat.
+  { kode: "dapur.stasiun.kelola", nama: "Kelola stasiun dapur", domain: "dapur", deskripsi: "CRUD stasiun kerja dapur (Dapur Panas, Bar, Dessert) per outlet (ALT-DPR-001)." },
+  { kode: "dapur.routing.kelola", nama: "Kelola routing item ke stasiun", domain: "dapur", deskripsi: "Mengelola AturanRoutingDapur - menentukan item menu/kategori menu diarahkan ke stasiun dapur mana (ALT-DPR-002). Tepat satu dari itemMenuId/kategoriMenuId wajib diisi (invariant XOR level-aplikasi, ADR-018 Keputusan 4)." },
+  { kode: "dapur.tiket.buat-otomatis", nama: "Buat tiket dapur otomatis (internal)", domain: "dapur", deskripsi: "Izin INTERNAL yang dipakai event konfirmasi pesanan saat membuat TiketDapur per stasiun tujuan (ALT-DPR-003) - bukan izin yang diberikan ke peran manusia." },
+  { kode: "dapur.tiket.lihat", nama: "Lihat papan tiket dapur", domain: "dapur", deskripsi: "Membaca antrian/detail TiketDapur beserta barisnya di layar KDS, termasuk menerima (BARU -> DITERIMA) dan memulai (DITERIMA -> SEDANG_DISIAPKAN) tiket." },
+  { kode: "dapur.tiket.prioritas", nama: "Ubah prioritas tiket dapur", domain: "dapur", deskripsi: "Menandai/melepas prioritas tinggi pada tiket agar tampil di atas antrian KDS (ALT-DPR-006) - tidak mengubah status tiket." },
+  { kode: "dapur.tiket.tahan", nama: "Tahan/lepas-tahan tiket dapur", domain: "dapur", deskripsi: "Menahan sementara tiket (-> DITAHAN, alasan wajib) dan melepasnya kembali (ALT-DPR-007). Dipisah dari dapur.tiket.lihat karena hold menghentikan timer SLA waktu masak." },
+  { kode: "dapur.baris.siap", nama: "Tandai baris tiket siap", domain: "dapur", deskripsi: "Menandai satu TiketDapurBaris berstatus SIAP (StatusMasakBaris), membuat tiket menjadi SELESAI_SEBAGIAN bila masih ada baris tersisa (ALT-DPR-008)." },
+  { kode: "dapur.tiket.siap", nama: "Tandai tiket dapur siap", domain: "dapur", deskripsi: "Menandai keseluruhan tiket SIAP setelah SELURUH barisnya SIAP (ALT-DPR-009) - memicu notifikasi ke pelayan." },
+  { kode: "dapur.tiket.ambil", nama: "Tandai tiket diambil/disajikan", domain: "dapur", deskripsi: "Transisi SIAP -> DISAJIKAN saat pelayan mengambil tiket dari pass (ALT-DPR-010). Pesanan induk baru DISAJIKAN bila SELURUH tiketnya DISAJIKAN." },
+  { kode: "dapur.cetak", nama: "Cetak tiket dapur", domain: "dapur", deskripsi: "Mencetak tiket fisik ke printer stasiun terkait saat tiket dibuat (ALT-DPR-011) - gagal cetak tidak menghambat alur data." },
+  { kode: "dapur.cetak-ulang", nama: "Cetak ulang tiket dapur", domain: "dapur", deskripsi: "Mencetak ulang tiket bila kertas macet/hilang (ALT-DPR-012) - jumlah cetak ulang tercatat untuk audit." },
 ] as const;
 
 // Sanity check struktural sederhana - dipakai oleh

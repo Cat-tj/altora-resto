@@ -229,7 +229,7 @@ side-effect/audit-event setiap transisi. `izin.kode` per baris mengacu ke
 | POST | `/api/v1/pesanan/{id}/tolak` | `MENUNGGU_PERSETUJUAN -> DITOLAK`, body wajib `{ "alasan": string }` - menulis 1 baris `PesananPenolakan`. Pesanan yang ditolak boleh diedit lalu dikirim ulang lewat `POST /api/v1/pesanan/{id}/kirim-ulang` (`DITOLAK -> DIKIRIM`, lihat ADR-017 Keputusan 2). | `pesanan.tolak` |
 | POST | `/api/v1/pesanan/{id}/kirim-ulang` | `DITOLAK -> DIKIRIM` - mengirim ulang pesanan yang sama (BUKAN pesanan baru) setelah dikoreksi. | `pesanan.buat` atau publik via token QR meja |
 | POST | `/api/v1/pesanan/{id}/konfirmasi` | `DITERIMA -> DIKONFIRMASI` (langsung) atau `MENUNGGU_PEMBAYARAN -> DIKONFIRMASI` (setelah verifikasi pembayaran dimuka) - memicu pembuatan tiket dapur di transisi berikutnya. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "accept pesanan" di master spec). | `pesanan.status.ubah` |
-| POST | `/api/v1/pesanan/{id}/kirim-dapur` | `DIKONFIRMASI -> DIKIRIM_KE_DAPUR` - membuat `TiketDapur` (kardinalitas 1:1 dipertahankan, `ALT-DEF-006` mengubah ini di batch berikutnya). | `pesanan.status.ubah` |
+| POST | `/api/v1/pesanan/{id}/kirim-dapur` | `DIKONFIRMASI -> DIKIRIM_KE_DAPUR` - membuat **satu atau lebih** `TiketDapur` - satu per stasiun tujuan per gelombang, ditentukan dengan membaca `AturanRoutingDapur` (kardinalitas 1:N sejak `ALT-DEF-006`/ADR-018, lihat bagian 10). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`) - retry tanpa idempotensi akan membuat tiket dapur ganda di setiap stasiun. | `pesanan.status.ubah` |
 | POST | `/api/v1/pesanan/{id}/tandai-disajikan` | `SIAP -> DISAJIKAN`. | `pesanan.status.ubah` |
 | POST | `/api/v1/pesanan/{id}/selesaikan` | `DISAJIKAN -> SELESAI`, guard: total `Pembayaran` yang `DIKONFIRMASI` `>= totalAkhir`. | `pesanan.status.ubah` |
 | POST | `/api/v1/pesanan/{id}/batalkan` | Batalkan pesanan - menulis 1 baris `PesananPembatalan` (`alasan` wajib). TIDAK BISA dipanggil dari status `SIAP`/`DISAJIKAN`/`SELESAI`/`DIBATALKAN`/`DIRETUR` (409 jika dicoba). Butuh approval supervisor jika status saat ini `DIKONFIRMASI`/`DIKIRIM_KE_DAPUR`/`SEDANG_DISIAPKAN` (lihat `PERMISSION-MATRIX.md`). | `pesanan.batalkan` |
@@ -262,15 +262,49 @@ Contoh request `POST /api/v1/pesanan`:
 Domain ini hanya membaca **read-contract** dari Pesanan (`@altora/pesanan/kontrak-dapur`);
 endpoint di bawah hanya mengelola tiket dapur miliknya sendiri.
 
-| Metode | Path | Deskripsi |
-|---|---|---|
-| GET | `/api/v1/dapur/tiket` | Antrian tiket dapur aktif (real-time, polling/SSE). |
-| GET | `/api/v1/dapur/tiket/{id}` | Detail tiket dapur + baris (read-only ref ke item pesanan). |
-| POST | `/api/v1/dapur/tiket/{id}/mulai` | MASUK_ANTRIAN -> DIPROSES. |
-| POST | `/api/v1/dapur/tiket/{id}/baris/{barisId}/siap` | Tandai satu baris SIAP. |
-| POST | `/api/v1/dapur/tiket/{id}/siap` | Semua baris selesai -> tiket SIAP. |
-| POST | `/api/v1/dapur/tiket/{id}/ambil` | SIAP -> DIAMBIL_PELAYAN. |
-| GET | `/api/v1/dapur/stasiun` | Daftar stasiun dapur per outlet. |
+**ALT-DEF-006 (correction-loop lanjutan, lihat ADR-018):** seluruh endpoint di
+bawah beroperasi **per-TIKET**, BUKAN per-pesanan. Satu `Pesanan` kini
+menghasilkan **banyak** `TiketDapur` (satu per stasiun tujuan per gelombang),
+sehingga:
+
+- `{id}` pada path `/api/v1/dapur/tiket/{id}/...` adalah **`TiketDapur.id`**,
+  bukan `Pesanan.id` - klien KDS TIDAK boleh mengasumsikan pemetaan 1:1 dan
+  tidak boleh memakai `pesananId` sebagai kunci tiket.
+- `GET /api/v1/dapur/tiket` dapat mengembalikan **lebih dari satu tiket dengan
+  `pesananId` yang sama** (satu per stasiun/gelombang). Papan KDS per stasiun
+  memfilter dengan `?stasiunDapurId=`; UI yang mengelompokkan per pesanan wajib
+  menangani N tiket per pesanan (`ALT-DPR-003`).
+- Menandai satu tiket `SIAP` **tidak** membuat `Pesanan` menjadi `SIAP` -
+  `Pesanan.status` baru berubah setelah SELURUH tiket pesanan tsb `SIAP`/
+  `DISAJIKAN` (guard agregat, lihat `STATE-MACHINES.md` bagian 5).
+- Status tiket kini 8 nilai (`BARU`/`DITERIMA`/`DITAHAN`/`SEDANG_DISIAPKAN`/
+  `SELESAI_SEBAGIAN`/`SIAP`/`DISAJIKAN`/`DIBATALKAN`) menggantikan 4 nilai lama.
+
+| Metode | Path | Deskripsi | izin.kode |
+|---|---|---|---|
+| GET | `/api/v1/dapur/tiket` | Antrian tiket dapur aktif (real-time, polling/SSE). Query opsional: `stasiunDapurId` (papan KDS per stasiun, `ALT-DPR-014`), `pesananId`, `nomorGelombang`, `status`. **Dapat mengembalikan banyak tiket untuk satu `pesananId`.** | `dapur.tiket.lihat` |
+| GET | `/api/v1/dapur/tiket/{id}` | Detail satu tiket dapur + barisnya (`{id}` = `TiketDapur.id`; baris adalah ref read-only ke `ItemPesanan`, `ALT-DPR-004`). | `dapur.tiket.lihat` |
+| POST | `/api/v1/dapur/tiket/{id}/terima` | `BARU -> DITERIMA` (staf stasiun acknowledge tiket, belum mulai masak). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`) - layar KDS multi-perangkat (`ALT-DPR-014`) dan reconnect (`ALT-DPR-015`) dapat mengirim ulang aksi yang sama. | `dapur.tiket.lihat` |
+| POST | `/api/v1/dapur/tiket/{id}/mulai` | `DITERIMA -> SEDANG_DISIAPKAN` (atau `DITAHAN -> SEDANG_DISIAPKAN`) - set `mulaiDiprosesPada`, start timer `ALT-DPR-005`. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`) - mencegah `mulaiDiprosesPada` tertimpa oleh retry/duplikat dari layar KDS lain. | `dapur.tiket.lihat` |
+| POST | `/api/v1/dapur/tiket/{id}/tahan` | `DITERIMA/SEDANG_DISIAPKAN -> DITAHAN` (`ALT-DPR-007`, `alasan` wajib; timer SLA berhenti). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | `dapur.tiket.tahan` |
+| POST | `/api/v1/dapur/tiket/{id}/lepas-tahan` | `DITAHAN -> DITERIMA` (belum masak) atau `DITAHAN -> SEDANG_DISIAPKAN` (langsung masak) - timer SLA dilanjutkan. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | `dapur.tiket.tahan` |
+| PATCH | `/api/v1/dapur/tiket/{id}/prioritas` | Tandai/lepas prioritas tiket agar tampil di atas antrian (`ALT-DPR-006`). Tidak mengubah `status`. | `dapur.tiket.prioritas` |
+| POST | `/api/v1/dapur/tiket/{id}/baris/{barisId}/siap` | Tandai satu `TiketDapurBaris` `SIAP` (`ALT-DPR-008`) - tiket menjadi `SELESAI_SEBAGIAN` bila masih ada baris tersisa. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | `dapur.baris.siap` |
+| POST | `/api/v1/dapur/tiket/{id}/siap` | `SEDANG_DISIAPKAN/SELESAI_SEBAGIAN -> SIAP` (`ALT-DPR-009`) - guard: SELURUH baris tiket ini `SIAP`; set `siapPada`, notifikasi pelayan. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`) - mencegah notifikasi "pesanan siap" terkirim dobel. | `dapur.tiket.siap` |
+| POST | `/api/v1/dapur/tiket/{id}/ambil` | `SIAP -> DISAJIKAN` (`ALT-DPR-010`) - `Pesanan` baru ikut `DISAJIKAN` bila SELURUH tiketnya `DISAJIKAN`. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | `dapur.tiket.ambil` |
+| POST | `/api/v1/dapur/tiket/{id}/cetak-ulang` | Cetak ulang tiket fisik bila kertas macet/hilang (`ALT-DPR-012`); jumlah cetak ulang tercatat untuk audit. | `dapur.cetak-ulang` |
+| GET | `/api/v1/dapur/stasiun` | Daftar stasiun dapur per outlet (`ALT-DPR-001`). | `dapur.tiket.lihat` |
+| POST | `/api/v1/dapur/stasiun` | Buat stasiun dapur baru untuk outlet. | `dapur.stasiun.kelola` |
+| GET | `/api/v1/dapur/routing` | Daftar `AturanRoutingDapur` per outlet (`ALT-DPR-002`) - aturan "item menu / kategori menu -> stasiun dapur". | `dapur.routing.kelola` |
+| PUT | `/api/v1/dapur/routing` | Buat/ubah aturan routing. Body wajib memenuhi invariant **XOR**: tepat satu dari `itemMenuId`/`kategoriMenuId` diisi (validasi service-layer, lihat ADR-018 Keputusan 4) - pelanggaran mengembalikan `422 VALIDASI_GAGAL`. | `dapur.routing.kelola` |
+| GET | `/api/v1/dapur/tiket/{id}/riwayat` | Riwayat transisi status tiket (`RiwayatStatusTiketDapur`, enum-typed `statusSebelumnya`/`statusBaru`). | `dapur.tiket.lihat` |
+
+**Catatan cakupan:** endpoint pembuatan tiket TIDAK ada di daftar ini secara
+sengaja - `TiketDapur` dibuat **internal** oleh event konfirmasi pesanan
+(`POST /api/v1/pesanan/{id}/kirim-dapur`) yang membaca `AturanRoutingDapur`
+untuk menentukan stasiun tujuan tiap baris (`ALT-DPR-003`, izin internal
+`dapur.tiket.buat-otomatis`). Handler nyatanya adalah feature work di luar
+scope batch ALT-DEF-006 - batch ini hanya memodelkan skema + kontrak.
 
 ## 11. Pembayaran & Kasir (`packages/kasir`, `packages/pembayaran`, `packages/qris`)
 

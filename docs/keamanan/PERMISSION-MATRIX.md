@@ -34,7 +34,8 @@ konkret per tenant, bukan payload Json.
 Daftar kode `Izin.kode` berikut adalah starter set yang di-seed lewat
 `prisma/seed/izin.seed.ts` (33 kode dasar + `akun.reset-pin` pada batch
 ALT-DEF-003/ALT-DEF-013 + 9 kode `pesanan.*` baru pada batch ALT-DEF-005/
-ALT-DEF-016 - lihat catatan di bawah tabel), dikelompokkan per `domain`:
+ALT-DEF-016 + 11 kode `dapur.*` baru pada batch ALT-DEF-006 = **54 kode** -
+lihat catatan di bawah tabel), dikelompokkan per `domain`:
 
 | Domain | Kode Izin |
 |---|---|
@@ -54,6 +55,26 @@ ALT-DEF-016 - lihat catatan di bawah tabel), dikelompokkan per `domain`:
 | data | `data.ekspor` |
 | akun | `akun.reset-pin` |
 | pesanan | `pesanan.buat`, `pesanan.item.tambah`, `pesanan.ubah`, `pesanan.terima`, `pesanan.tolak`, `pesanan.status.ubah`, `pesanan.batalkan`, `pesanan.retur.kelola`, `pesanan.riwayat.lihat` |
+| dapur | `dapur.stasiun.kelola`, `dapur.routing.kelola`, `dapur.tiket.buat-otomatis`, `dapur.tiket.lihat`, `dapur.tiket.prioritas`, `dapur.tiket.tahan`, `dapur.baris.siap`, `dapur.tiket.siap`, `dapur.tiket.ambil`, `dapur.cetak`, `dapur.cetak-ulang` |
+
+**Kode baru batch ALT-DEF-006 (`domain dapur`):** diperiksa dulu terhadap
+katalog yang sudah ada - **tidak satu pun** kode `dapur.*` pernah ada di seed
+literal ini (`grep dapur prisma/seed/izin.seed.ts` sebelum perubahan hanya
+menemukan kata "dapur" di dalam *deskripsi* `pesanan.status.ubah`, bukan
+sebagai `kode`), sementara `MASTER-CHECKLIST.md` sudah mereferensikan seluruh
+11 kode ini sejak sebelumnya (`ALT-DPR-001` s.d. `ALT-DPR-015`) - jadi
+genuinely hilang, bukan duplikat. Pola persis sama dengan lubang `pesanan.*`
+yang ditemukan pada batch ALT-DEF-005/ALT-DEF-016. `dapur.routing.kelola`
+adalah kode yang secara langsung dibutuhkan oleh model baru
+`AturanRoutingDapur` pada batch ini (`ALT-DPR-002`);
+`dapur.tiket.buat-otomatis` adalah izin **internal** (dipakai oleh event
+konfirmasi pesanan yang membuat tiket, bukan oleh peran manusia mana pun -
+karena itu ia TIDAK muncul sebagai baris di matriks bagian 2).
+`dapur.tiket.tahan` dipisah dari `dapur.tiket.lihat` karena hold menghentikan
+timer SLA (`ALT-DPR-007`) dan karenanya dibatasi lebih ketat daripada aksi
+KDS harian biasa - lihat tabel transisi lengkap di
+`docs/arsitektur/STATE-MACHINES.md` bagian "Dapur (Tiket Dapur)" dan ADR-018
+di `docs/engineering/DECISION-LOG.md`.
 
 **Kode baru batch ALT-DEF-005/ALT-DEF-016 (`domain pesanan`):** `MASTER-CHECKLIST.md`
 sudah mereferensikan seluruh kode `pesanan.*` ini sejak sebelumnya
@@ -147,7 +168,12 @@ Legenda: `M` = boleh (Miliki akses penuh), `B` = boleh dengan approval Bertingka
 | Batalkan pesanan (status DIKONFIRMASI/DIKIRIM_KE_DAPUR/SEDANG_DISIAPKAN) | M | B | B | - | - | - | - | - | - |
 | Retur pesanan (SELESAI -> DIRETUR, `pesanan.retur.kelola`) | M | B | B | - | - | - | - | - | - |
 | **Dapur (KDS)** |
-| Kelola tiket dapur | M | M | L | - | L | M | - | - | - |
+| Lihat papan/antrian tiket dapur (`dapur.tiket.lihat`) | M | M | L | - | L | M | - | - | - |
+| Terima/mulai tiket, tandai baris & tiket siap (`dapur.baris.siap`, `dapur.tiket.siap`) | M | M | L | - | L | M | - | - | - |
+| Tahan/lepas-tahan tiket (`dapur.tiket.tahan`) | M | M | M | - | - | M | - | - | - |
+| Tandai tiket diambil/disajikan (`dapur.tiket.ambil`) | M | M | M | - | M | M | - | - | - |
+| Kelola stasiun dapur (`dapur.stasiun.kelola`) | M | M | L | - | - | L | - | - | - |
+| Kelola aturan routing item -> stasiun (`dapur.routing.kelola`) | M | M | L | - | - | L | - | - | - |
 | **Kasir & Pembayaran** |
 | Buka/tutup giliran kasir | M | B | B | M | - | - | - | - | - |
 | Verifikasi selisih kas | M | M | M | - | - | - | - | - | - |
