@@ -29,8 +29,23 @@ function readSchema(): string {
   return readFileSync(SCHEMA_PATH, "utf-8");
 }
 
+// ALT-DEF-033: needle assertion di file ini semula dicocokkan secara
+// whitespace-EXACT terhadap teks schema.prisma. Itu rapuh: `prisma format`
+// menyelaraskan lebar kolom antar-field, sehingga MENAMBAH field baru ke
+// sebuah model (mis. `TiketDapur.nomorGelombang` pada ALT-DEF-006) menggeser
+// spasi pada baris-baris LAIN yang tidak disentuh sama sekali dan membuat
+// assertion gagal PALSU - constraint yang diuji (composite-FK ALT-DEF-010)
+// sebenarnya masih utuh. Runs spasi/tab horizontal kini dinormalisasi di
+// kedua sisi sebelum dibandingkan; newline TIDAK dinormalisasi supaya needle
+// yang sengaja memakai "\n" (penanda awal deklarasi field) tetap bermakna.
+// Normalisasi ini murni lebih permisif - seluruh assertion yang sebelumnya
+// lulus tetap lulus.
+function normalisasiSpasiHorizontal(teks: string): string {
+  return teks.replace(/[ \t]+/g, " ");
+}
+
 function assertContains(haystack: string, needle: string, pesan: string): void {
-  if (!haystack.includes(needle)) {
+  if (!normalisasiSpasiHorizontal(haystack).includes(normalisasiSpasiHorizontal(needle))) {
     throw new Error(`ASSERTION GAGAL: ${pesan}\nTidak ditemukan: ${JSON.stringify(needle)}`);
   }
 }

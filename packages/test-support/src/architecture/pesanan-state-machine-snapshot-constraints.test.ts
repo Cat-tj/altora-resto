@@ -243,12 +243,33 @@ export function jalankanSemuaAssertion(): void {
     "Pesanan harus punya relasi opsional (nol-atau-satu) ke PesananPembatalan.",
   );
 
-  // --- Regresi: TiketDapur.pesananId TETAP @unique (kardinalitas 1:1 - scope ALT-DEF-006, BUKAN batch ini) ---
+  // --- ALT-DEF-006 (batch BERIKUTNYA, sudah dikerjakan): kardinalitas
+  // Pesanan<->TiketDapur ---
+  //
+  // Assertion di bawah semula berbunyi kebalikannya ("TiketDapur.pesananId
+  // harus TETAP @unique pada batch ini") - itu adalah scope-guard yang
+  // sengaja ditulis pada batch ALT-DEF-005/ALT-DEF-016 untuk memastikan
+  // perubahan kardinalitas TIDAK bocor lebih awal. Batch ALT-DEF-006 kini
+  // MEMANG mengerjakan perubahan itu (ADR-018 Keputusan 1), sehingga
+  // scope-guard tersebut sudah selesai tugasnya dan DIBALIK menjadi
+  // assertion arah-baru: `@unique` tunggal harus benar-benar HILANG.
+  // Assertion detail multi-stasiun yang lebih lengkap ada di
+  // dapur-kds-multi-stasiun.test.ts.
   const tiketDapurBody = getModelBody(schema, "TiketDapur");
-  assertContains(
+  assertNotContains(
     tiketDapurBody,
     "pesananId         String           @unique",
-    "TiketDapur.pesananId harus TETAP @unique pada batch ini - mengubah kardinalitas 1:1 adalah scope ALT-DEF-006 (batch berikutnya), BUKAN batch ALT-DEF-005/ALT-DEF-016 ini.",
+    "TiketDapur.pesananId TIDAK boleh lagi @unique tunggal - kardinalitas Pesanan->TiketDapur sudah 1:N sejak ALT-DEF-006/ADR-018 Keputusan 1.",
+  );
+  assertContains(
+    tiketDapurBody,
+    "@@unique([pesananId, stasiunDapurId, nomorGelombang])",
+    "TiketDapur harus punya @@unique([pesananId, stasiunDapurId, nomorGelombang]) sebagai pengganti pesananId @unique (ALT-DEF-006/ADR-018 Keputusan 1).",
+  );
+  assertContains(
+    pesananBody,
+    "tiketDapur     TiketDapur[]",
+    "Pesanan.tiketDapur harus berupa list TiketDapur[] (1:N), bukan TiketDapur? (1:1) - ALT-DEF-006/ADR-018 Keputusan 1.",
   );
 }
 
