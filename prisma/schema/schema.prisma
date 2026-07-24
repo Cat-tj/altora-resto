@@ -106,6 +106,9 @@ model Tenant {
   biayaOperasional        BiayaOperasional[]
   metodeBayar             MetodeBayar[]
   pesanan                 Pesanan[]
+  pesananPerubahan        PesananPerubahan[]
+  pesananPenolakan        PesananPenolakan[]
+  pesananPembatalan       PesananPembatalan[]
   mutasiStok              MutasiStok[]
   stokOpname              StokOpname[]
   tiketDapur              TiketDapur[]
@@ -219,6 +222,12 @@ model Pengguna {
   stokOpnameDibuat                StokOpname[]            @relation("OpnameDibuatOleh")
   pesananDibuat                   Pesanan[]               @relation("PesananDibuatOleh")
   pesananRiwayatStatusDiubah      PesananRiwayatStatus[]  @relation("RiwayatStatusDiubahOleh")
+  // ALT-DEF-005/ALT-PES-010/ALT-PES-011: pengguna yang melakukan
+  // perubahan/penolakan/pembatalan pesanan - lihat model PesananPerubahan/
+  // PesananPenolakan/PesananPembatalan di bagian 7 (Pesanan).
+  pesananPerubahanDiubah          PesananPerubahan[]      @relation("PesananPerubahanDiubahOleh")
+  pesananPenolakanDitolak         PesananPenolakan[]      @relation("PesananPenolakanDitolakOleh")
+  pesananPembatalanDibatalkan     PesananPembatalan[]     @relation("PesananPembatalanDibatalkanOleh")
   pembayaranDikonfirmasi          Pembayaran[]            @relation("PembayaranDikonfirmasiOleh")
   qrisKonfirmasiDiverifikasi      QrisKonfirmasiManual[]  @relation("QrisDiverifikasiOleh")
   pembayaranRefundDisetujui       PembayaranRefund[]      @relation("RefundDisetujuiOleh")
@@ -1265,22 +1274,75 @@ enum KanalPesanan {
   QR_PELANGGAN
 }
 
+// ALT-DEF-005: state machine penuh 14-status - menggantikan enum lama 7-status
+// (BARU/DIKONFIRMASI/DIPROSES_DAPUR/SIAP_DISAJIKAN/DISAJIKAN/DIBAYAR/
+// DIBATALKAN) yang terlalu dangkal untuk alur multi-kanal (kasir/pelayan/QR
+// pelanggan). Tabel transisi lengkap (aktor, guard, side-effect, audit event,
+// test) ada di docs/arsitektur/STATE-MACHINES.md bagian "Pesanan" - lihat juga
+// ADR-017 di docs/engineering/DECISION-LOG.md untuk rasional desain lengkap.
 enum StatusPesanan {
-  BARU
+  // Draf lokal (belum dikirim) - dipakai kanal QR_PELANGGAN saat pelanggan
+  // masih menyusun pesanan, dan opsional untuk KASIR/PELAYAN (auto-skip ke
+  // DIKIRIM pada kanal ini, lihat guard di STATE-MACHINES.md).
+  DRAF
+  // Pesanan sudah dikirim oleh pemesan, menunggu diproses lebih lanjut.
+  DIKIRIM
+  // Menunggu persetujuan staf (KHUSUS kanal QR_PELANGGAN - lihat guard).
+  MENUNGGU_PERSETUJUAN
+  DITERIMA
+  // Ditolak staf (mis. stok habis/meja salah) - lihat PesananPenolakan.
+  DITOLAK
+  // Menunggu pembayaran dimuka (guard: kebijakan prepaid tenant aktif).
+  MENUNGGU_PEMBAYARAN
   DIKONFIRMASI
-  DIPROSES_DAPUR
-  SIAP_DISAJIKAN
+  DIKIRIM_KE_DAPUR
+  SEDANG_DISIAPKAN
+  SIAP
   DISAJIKAN
-  DIBAYAR
+  SELESAI
+  // Terminal - lihat PesananPembatalan untuk alasan+approval. TIDAK bisa
+  // dicapai dari SIAP/DISAJIKAN/SELESAI (lihat guard per baris di
+  // STATE-MACHINES.md).
   DIBATALKAN
+  // HANYA dicapai dari SELESAI (retur setelah lunas) - lihat catatan di
+  // STATE-MACHINES.md; model detail PesananRetur adalah scope ALT-PES-018,
+  // batch domain kasir berikutnya, BUKAN batch ini.
+  DIRETUR
 }
 
+// ALT-DEF-005/ALT-DEF-016: diselaraskan ke daftar penuh dari correction spec
+// (DRAF/DITERIMA/DIKIRIM_KE_DAPUR/DITAHAN/SEDANG_DISIAPKAN/SIAP/DISAJIKAN/
+// DIBATALKAN/DIRETUR) - granularitas ITEM, sengaja terpisah dari
+// StatusPesanan (granularitas ORDER); satu pesanan bisa punya item dengan
+// status berbeda-beda (mis. satu item DITAHAN sementara item lain sudah
+// DIKIRIM_KE_DAPUR).
 enum StatusItemPesanan {
-  BARU
-  DIKIRIM_DAPUR
+  DRAF
+  DITERIMA
+  DIKIRIM_KE_DAPUR
+  // Item ditahan sementara (mis. menunggu konfirmasi stok) tanpa membatalkan
+  // seluruh pesanan.
+  DITAHAN
+  SEDANG_DISIAPKAN
   SIAP
   DISAJIKAN
   DIBATALKAN
+  DIRETUR
+}
+
+// ALT-PES-010: taksonomi jenis perubahan pesanan pasca-konfirmasi. Dipilih
+// sebagai enum (bukan String bebas seperti Izin.domain/PermintaanPersetujuan.
+// jenisAksi) karena starter list ini cukup stabil/terbatas untuk kebutuhan
+// batch ini - lihat ADR-017 untuk rasional lengkap dan opsi yang
+// dipertimbangkan (String bebas vs enum).
+enum JenisPerubahanPesanan {
+  TAMBAH_ITEM
+  UBAH_KUANTITAS
+  HAPUS_ITEM
+  PINDAH_MEJA
+  SPLIT
+  MERGE
+  LAINNYA
 }
 
 model Pesanan {
@@ -1291,7 +1353,7 @@ model Pesanan {
   pelangganId        String?
   kanal              KanalPesanan
   nomorPesanan       String
-  status             StatusPesanan @default(BARU)
+  status             StatusPesanan @default(DRAF)
   subtotal           Int           @default(0)
   totalDiskon        Int           @default(0)
   totalPajak         Int           @default(0)
@@ -1313,6 +1375,9 @@ model Pesanan {
 
   itemPesanan    ItemPesanan[]
   riwayatStatus  PesananRiwayatStatus[]
+  perubahan      PesananPerubahan[]
+  penolakan      PesananPenolakan?
+  pembatalan     PesananPembatalan?
   pembayaran     Pembayaran[]
   promoPemakaian PromoPemakaian?
   tiketDapur     TiketDapur?
@@ -1326,6 +1391,13 @@ model Pesanan {
   @@map("pesanan")
 }
 
+// ALT-DEF-016/ALT-PES-006: seluruh kolom `*Snapshot` diisi SEKALI saat item
+// ditambahkan ke pesanan dan TIDAK PERNAH diperbarui setelahnya, meskipun
+// data master (ItemMenu/VarianMenu/ModifierOpsi/Resep) berubah kemudian -
+// menjamin struk/riwayat transaksi lama tidak pernah berubah tampilannya.
+// Relasi itemMenuId/varianMenuId/modifierOpsiId TETAP dipertahankan (bukan
+// dihapus) untuk keperluan analitik/traceability ke definisi menu terkini,
+// tetapi TIDAK PERNAH lagi jadi sumber tampilan histori - lihat ADR-017.
 model ItemPesanan {
   id           String            @id
   pesananId    String
@@ -1334,7 +1406,28 @@ model ItemPesanan {
   kuantitas    Int
   hargaSatuan  Int
   catatan      String?
-  status       StatusItemPesanan @default(BARU)
+  status       StatusItemPesanan @default(DRAF)
+
+  // --- Snapshot (ALT-DEF-016) ---
+  namaItemSnapshot      String
+  namaVarianSnapshot    String?
+  hargaDasarSnapshot    Int
+  hargaVarianSnapshot   Int     @default(0)
+  // Jumlah harga seluruh ItemPesananModifier baris ini pada saat pemesanan -
+  // dihitung SEKALI dari sum(ItemPesananModifier.totalSnapshot) saat item
+  // dibuat dan disimpan sebagai nilai tetap (bukan dihitung ulang tiap baca),
+  // sama seperti *Snapshot lain di model ini - lihat ADR-017 Keputusan 2.
+  hargaModifierSnapshot Int     @default(0)
+  diskonSnapshot        Int     @default(0)
+  pajakSnapshot         Int     @default(0)
+  serviceChargeSnapshot Int     @default(0)
+  totalBarisSnapshot    Int
+  // Forward-reference ke VersiResep (model BELUM ADA - scope ALT-DEF-008,
+  // batch resep-versioning berikutnya). Sengaja scalar String? POLOS tanpa
+  // relasi FK apa pun pada batch ini - lihat ADR-017 Keputusan 3. TODO(batch
+  // ALT-DEF-008/resep-versioning): tambahkan `resepVersi VersiResep? @relation(...)`
+  // begitu model VersiResep ada, dan migrasikan kolom ini jadi FK sungguhan.
+  resepVersiId          String?
 
   pesanan    Pesanan     @relation(fields: [pesananId], references: [id])
   itemMenu   ItemMenu    @relation(fields: [itemMenuId], references: [id])
@@ -1346,11 +1439,25 @@ model ItemPesanan {
   @@map("item_pesanan")
 }
 
+// ALT-DEF-016/ALT-PES-007: modifierOpsiId TETAP dipertahankan untuk
+// traceability ke definisi modifier terkini, tetapi kolom `*Snapshot` di
+// bawah adalah SUMBER KEBENARAN untuk apa yang benar-benar ditampilkan di
+// bill historis - lihat catatan sama pada ItemPesanan di atas.
 model ItemPesananModifier {
   id             String @id
   itemPesananId  String
   modifierOpsiId String
   hargaTambahan  Int
+
+  // --- Snapshot (ALT-DEF-016) ---
+  namaModifierSnapshot String
+  hargaSnapshot        Int
+  // Kuantitas modifier ini (mis. "extra cheese x2") - default 1 untuk
+  // modifier yang secara alami tidak berulang.
+  jumlah               Int    @default(1)
+  // hargaSnapshot * jumlah - disimpan tetap (bukan dihitung ulang tiap baca),
+  // konsisten dengan pola *Snapshot lain di ItemPesanan.
+  totalSnapshot        Int
 
   itemPesanan  ItemPesanan  @relation(fields: [itemPesananId], references: [id])
   modifierOpsi ModifierOpsi @relation(fields: [modifierOpsiId], references: [id])
@@ -1358,18 +1465,98 @@ model ItemPesananModifier {
   @@map("item_pesanan_modifier")
 }
 
+// ALT-DEF-005/ALT-PES-009: statusSebelumnya/statusBaru sekarang bertipe enum
+// StatusPesanan (BUKAN String bebas seperti sebelumnya) - transisi status
+// tidak valid tidak akan bisa ditulis ke riwayat sama sekali (type-safe di
+// level Prisma Client/TypeScript), dan query bisa difilter per nilai enum.
 model PesananRiwayatStatus {
-  id               String   @id
+  id               String        @id
   pesananId        String
-  statusSebelumnya String
-  statusBaru       String
+  statusSebelumnya StatusPesanan
+  statusBaru       StatusPesanan
   diubahOlehId     String
-  createdAt        DateTime @default(now())
+  createdAt        DateTime      @default(now())
 
   pesanan    Pesanan  @relation(fields: [pesananId], references: [id])
   diubahOleh Pengguna @relation("RiwayatStatusDiubahOleh", fields: [diubahOlehId], references: [id])
 
   @@map("pesanan_riwayat_status")
+}
+
+// ALT-PES-010: mencatat SETIAP perubahan pesanan pasca-konfirmasi (tambah
+// item, ubah kuantitas, pindah meja, split, merge, dsb) sebagai baris BARU
+// append-only - TIDAK PERNAH menimpa ItemPesanan/Pesanan secara diam-diam.
+// `sebelum`/`sesudah` menyimpan snapshot Json bebas-bentuk dari bagian yang
+// berubah (mis. `{ "itemPesananId": "...", "kuantitas": 2 }` untuk
+// UBAH_KUANTITAS) - bentuk persis tiap jenisPerubahan didokumentasikan di
+// docs/database/07-pesanan.md, bukan dipaksakan jadi kolom terpisah di sini
+// karena bentuknya berbeda-beda per jenis.
+model PesananPerubahan {
+  id             String                @id
+  tenantId       String
+  pesananId      String
+  jenisPerubahan JenisPerubahanPesanan
+  sebelum        Json?
+  sesudah        Json?
+  diubahOlehId   String
+  createdAt      DateTime              @default(now())
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  pesanan    Pesanan  @relation(fields: [pesananId], references: [id])
+  diubahOleh Pengguna @relation("PesananPerubahanDiubahOleh", fields: [diubahOlehId], references: [id])
+
+  @@map("pesanan_perubahan")
+}
+
+// ALT-PES-010/ADR-017: SATU baris per pesanan (`pesananId @unique`) - BERBEDA
+// dari PesananPerubahan (banyak baris, riwayat perubahan apa pun) karena
+// penolakan hanya relevan untuk transisi MENUNGGU_PERSETUJUAN -> DITOLAK yang
+// terjadi PALING BANYAK SEKALI per "percobaan pengiriman" pesanan yang sama.
+// Keputusan retry (lihat ADR-017): pesanan yang DITOLAK BOLEH diedit dan
+// dikirim ulang (DITOLAK -> DIKIRIM, lihat StatusPesanan/STATE-MACHINES.md) -
+// tetapi ini tetap SATU baris `Pesanan` yang sama (bukan pesanan baru), dan
+// pada implementasi nyata setiap pengiriman-ulang yang ditolak LAGI akan
+// menimpa/menambah baris penolakan berikutnya. Untuk batch ini (schema-only,
+// belum ada service-layer), `pesananId` dibiarkan @unique karena skenario
+// "ditolak dua kali berturut-turut" butuh keputusan reset (hapus baris lama
+// vs baris baru) yang merupakan pekerjaan service-layer batch fitur
+// berikutnya, BUKAN perubahan skema pada batch ini - lihat ADR-017 untuk
+// pembahasan penuh trade-off ini.
+model PesananPenolakan {
+  id            String   @id
+  tenantId      String
+  pesananId     String   @unique
+  alasan        String
+  ditolakOlehId String
+  createdAt     DateTime @default(now())
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  pesanan     Pesanan  @relation(fields: [pesananId], references: [id])
+  ditolakOleh Pengguna @relation("PesananPenolakanDitolakOleh", fields: [ditolakOlehId], references: [id])
+
+  @@map("pesanan_penolakan")
+}
+
+// ALT-PES-011/ADR-017: pembatalan SELURUH pesanan (order-level) - BERBEDA
+// dari pembatalan SATU item (`ItemPesanan.status = DIBATALKAN`, yang bisa
+// terjadi berkali-kali untuk item berbeda dalam satu pesanan yang sama tanpa
+// membatalkan pesanan itu sendiri). `pesananId` @unique karena DIBATALKAN
+// adalah status TERMINAL pada StatusPesanan (tidak ada transisi keluar dari
+// DIBATALKAN, lihat enum StatusPesanan/STATE-MACHINES.md) - satu pesanan
+// hanya bisa dibatalkan SATU KALI sepanjang hidupnya.
+model PesananPembatalan {
+  id               String   @id
+  tenantId         String
+  pesananId        String   @unique
+  alasan           String
+  dibatalkanOlehId String
+  createdAt        DateTime @default(now())
+
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+  pesanan        Pesanan  @relation(fields: [pesananId], references: [id])
+  dibatalkanOleh Pengguna @relation("PesananPembatalanDibatalkanOleh", fields: [dibatalkanOlehId], references: [id])
+
+  @@map("pesanan_pembatalan")
 }
 
 // =====================================================================================
@@ -2199,9 +2386,16 @@ enum StatusOutboxEvent {
 // publisher-nya dibangun:
 //   order.submitted, order.accepted, order.rejected, order.updated,
 //   order.cancelled, order.sent_to_kitchen, kitchen.started, kitchen.ready,
-//   order.served, payment.awaiting_confirmation, payment.confirmed,
+//   order.served, order.completed, order.returned,
+//   payment.awaiting_confirmation, payment.confirmed,
 //   stock.low, stock.adjusted, shift.opened, shift.closed,
 //   attendance.created
+//
+// ALT-DEF-005 (correction-loop lanjutan): `order.completed` (DISAJIKAN ->
+// SELESAI) dan `order.returned` (SELESAI -> DIRETUR) ditambahkan ke daftar
+// ini melengkapi state machine Pesanan 14-status penuh - lihat
+// docs/arsitektur/STATE-MACHINES.md bagian "Pesanan" untuk pemetaan lengkap
+// transisi -> auditEvent.
 model DomainOutboxEvent {
   id            String            @id
   tenantId      String

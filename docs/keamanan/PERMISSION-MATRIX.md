@@ -32,9 +32,9 @@ konkret per tenant, bukan payload Json.
 ## 1a. Katalog kode Izin starter (seed)
 
 Daftar kode `Izin.kode` berikut adalah starter set yang di-seed lewat
-`prisma/seed/izin.seed.ts` (33 kode, ditambah 1 kode baru `akun.reset-pin`
-pada batch ALT-DEF-003/ALT-DEF-013 - lihat catatan di bawah tabel),
-dikelompokkan per `domain`:
+`prisma/seed/izin.seed.ts` (33 kode dasar + `akun.reset-pin` pada batch
+ALT-DEF-003/ALT-DEF-013 + 9 kode `pesanan.*` baru pada batch ALT-DEF-005/
+ALT-DEF-016 - lihat catatan di bawah tabel), dikelompokkan per `domain`:
 
 | Domain | Kode Izin |
 |---|---|
@@ -53,6 +53,19 @@ dikelompokkan per `domain`:
 | audit | `audit.lihat` |
 | data | `data.ekspor` |
 | akun | `akun.reset-pin` |
+| pesanan | `pesanan.buat`, `pesanan.item.tambah`, `pesanan.ubah`, `pesanan.terima`, `pesanan.tolak`, `pesanan.status.ubah`, `pesanan.batalkan`, `pesanan.retur.kelola`, `pesanan.riwayat.lihat` |
+
+**Kode baru batch ALT-DEF-005/ALT-DEF-016 (`domain pesanan`):** `MASTER-CHECKLIST.md`
+sudah mereferensikan seluruh kode `pesanan.*` ini sejak sebelumnya
+(`ALT-PES-001` s.d. `ALT-PES-018`), tetapi belum pernah ditambahkan ke katalog
+`Izin`/seed literal - diperiksa dan dipastikan genuinely belum ada (tidak ada
+kode `transaksi.*`/lainnya yang sudah menaungi transisi status pesanan) sebelum
+ditambahkan sebagai 9 kode baru. `pesanan.terima`/`pesanan.tolak` sengaja
+dipisah dari `pesanan.status.ubah` (generik) karena keduanya adalah keputusan
+approval/rejection eksplisit atas pesanan pelanggan (kanal QR) yang secara
+bisnis berbeda dari transisi status internal biasa (kirim-dapur, tandai
+disajikan) - lihat tabel transisi lengkap di `docs/arsitektur/STATE-MACHINES.md`
+bagian "Pesanan" dan ADR-017 di `docs/engineering/DECISION-LOG.md`.
 
 **Kode baru batch ALT-DEF-003/ALT-DEF-013 (`domain akun`):** diperiksa dulu
 terhadap katalog yang sudah ada sebelum menambah - `karyawan.kelola` HANYA
@@ -126,9 +139,13 @@ Legenda: `M` = boleh (Miliki akses penuh), `B` = boleh dengan approval Bertingka
 | Kelola meja & area | M | M | B | L | M | - | - | - | - |
 | Kelola reservasi | M | M | M | L | M | - | - | - | - |
 | **Pesanan** |
-| Buat pesanan | M | M | M | M | M | - | - | - | - |
-| Ubah/batalkan pesanan (belum diproses dapur) | M | M | M | M | M | - | - | - | - |
-| Batalkan pesanan (sudah diproses dapur) | M | B | B | - | - | - | - | - | - |
+| Buat pesanan (`pesanan.buat`) | M | M | M | M | M | - | - | - | - |
+| Tambah/ubah item pesanan (`pesanan.item.tambah`, `pesanan.ubah`) | M | M | M | M | M | - | - | - | - |
+| Terima/tolak pesanan QR pelanggan (`pesanan.terima`, `pesanan.tolak`) | M | M | M | M | M | - | - | - | - |
+| Transisi status generik: konfirmasi/kirim-dapur/disajikan/selesai (`pesanan.status.ubah`) | M | M | M | M | M | - | - | - | - |
+| Batalkan pesanan (status DRAF s.d. MENUNGGU_PEMBAYARAN) | M | M | M | M | M | - | - | - | - |
+| Batalkan pesanan (status DIKONFIRMASI/DIKIRIM_KE_DAPUR/SEDANG_DISIAPKAN) | M | B | B | - | - | - | - | - | - |
+| Retur pesanan (SELESAI -> DIRETUR, `pesanan.retur.kelola`) | M | B | B | - | - | - | - | - | - |
 | **Dapur (KDS)** |
 | Kelola tiket dapur | M | M | L | - | L | M | - | - | - |
 | **Kasir & Pembayaran** |
@@ -162,8 +179,12 @@ Legenda: `M` = boleh (Miliki akses penuh), `B` = boleh dengan approval Bertingka
 
 - **Buka ulang giliran kasir** setelah `DITUTUP_MENUNGGU_VERIFIKASI`: wajib approval
   `SUPERVISOR` ke atas (lihat `docs/arsitektur/STATE-MACHINES.md` #3).
-- **Batalkan pesanan** yang statusnya sudah `DIPROSES_DAPUR`: wajib approval
-  `SUPERVISOR` ke atas (state machine Pesanan).
+- **Batalkan pesanan** yang statusnya sudah `DIKONFIRMASI`/`DIKIRIM_KE_DAPUR`/
+  `SEDANG_DISIAPKAN` (ALT-DEF-005 - state machine 14-status): wajib approval
+  `SUPERVISOR` ke atas - lihat tabel transisi lengkap di
+  `docs/arsitektur/STATE-MACHINES.md` bagian "Pesanan". Tidak dapat dibatalkan
+  sama sekali (butuh `DIRETUR` sebagai gantinya) begitu status mencapai
+  `SIAP`/`DISAJIKAN`/`SELESAI`.
 - **Refund pembayaran**: wajib approval `SUPERVISOR` ke atas, dicatat di
   `PembayaranRefund.disetujuiOlehId`.
 - **Batalkan sisa PO** setelah `DITERIMA_SEBAGIAN`: wajib approval `MANAJER` ke atas.

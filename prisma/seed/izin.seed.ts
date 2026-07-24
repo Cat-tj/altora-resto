@@ -88,6 +88,21 @@ export const IZIN_SEED: readonly IzinSeedEntry[] = [
 
   // akun (baru, ALT-DEF-003/ALT-DEF-013 - lihat docs/keamanan/PERMISSION-MATRIX.md bagian 1a)
   { kode: "akun.reset-pin", nama: "Reset PIN karyawan lain", domain: "akun", deskripsi: "Mereset PinOutlet milik KeanggotaanTenant lain (mis. oleh pemilik/manajer outlet saat staf lupa PIN)." },
+
+  // pesanan (baru, ALT-DEF-005/ALT-DEF-016 - lihat docs/keamanan/PERMISSION-MATRIX.md
+  // bagian 1a dan tabel transisi lengkap di docs/arsitektur/STATE-MACHINES.md
+  // bagian "Pesanan". MASTER-CHECKLIST.md sudah mereferensikan kode-kode ini
+  // sejak sebelumnya (ALT-PES-001 s.d. ALT-PES-018) tetapi belum pernah
+  // ditambahkan ke seed literal ini - genuinely hilang, bukan duplikat.
+  { kode: "pesanan.buat", nama: "Buat pesanan", domain: "pesanan", deskripsi: "Membuat pesanan baru (kanal KASIR/PELAYAN) atau mengirim ulang pesanan yang ditolak (DITOLAK -> DIKIRIM)." },
+  { kode: "pesanan.item.tambah", nama: "Tambah item pesanan", domain: "pesanan", deskripsi: "Menambahkan item/varian/modifier ke pesanan yang sedang berjalan." },
+  { kode: "pesanan.ubah", nama: "Ubah pesanan pasca-konfirmasi", domain: "pesanan", deskripsi: "Mengubah kuantitas/item pesanan yang sudah DIKONFIRMASI - tercatat sebagai baris PesananPerubahan, bukan overwrite." },
+  { kode: "pesanan.terima", nama: "Terima pesanan QR pelanggan", domain: "pesanan", deskripsi: "Menyetujui pesanan kanal QR_PELANGGAN yang berstatus MENUNGGU_PERSETUJUAN (MENUNGGU_PERSETUJUAN -> DITERIMA)." },
+  { kode: "pesanan.tolak", nama: "Tolak pesanan QR pelanggan", domain: "pesanan", deskripsi: "Menolak pesanan kanal QR_PELANGGAN yang berstatus MENUNGGU_PERSETUJUAN, wajib mengisi alasan (MENUNGGU_PERSETUJUAN -> DITOLAK)." },
+  { kode: "pesanan.status.ubah", nama: "Ubah status pesanan (generik)", domain: "pesanan", deskripsi: "Menjalankan transisi status pesanan generik (konfirmasi, kirim ke dapur, tandai disajikan, selesaikan) di luar transisi yang punya izin khusus (terima/tolak/batalkan)." },
+  { kode: "pesanan.batalkan", nama: "Batalkan pesanan", domain: "pesanan", deskripsi: "Membatalkan seluruh pesanan (menulis PesananPembatalan); butuh approval supervisor bila status sudah DIKONFIRMASI/DIKIRIM_KE_DAPUR/SEDANG_DISIAPKAN." },
+  { kode: "pesanan.retur.kelola", nama: "Kelola retur pesanan", domain: "pesanan", deskripsi: "Memproses retur pesanan yang sudah SELESAI (SELESAI -> DIRETUR); model detail retur adalah scope ALT-PES-018 batch berikutnya." },
+  { kode: "pesanan.riwayat.lihat", nama: "Lihat riwayat pesanan", domain: "pesanan", deskripsi: "Membaca daftar pesanan, riwayat status, dan riwayat perubahan (PesananRiwayatStatus/PesananPerubahan)." },
 ] as const;
 
 // Sanity check struktural sederhana - dipakai oleh

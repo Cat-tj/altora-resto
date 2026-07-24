@@ -660,9 +660,135 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
   pass-pass correction-loop sebelumnya. Status `ALT-DEF-017` diset
   `SIAP_DIVERIFIKASI` (bukan `DITUTUP`) karena alasan yang sama.
 
+## ADR-017: State machine Pesanan 14-status penuh dan snapshot ItemPesanan (ALT-DEF-005, ALT-DEF-016)
+
+- **Status:** DITERIMA
+- **Konteks:** `ALT-DEF-005` mencatat bahwa `StatusPesanan` lama (7 status:
+  BARU/DIKONFIRMASI/DIPROSES_DAPUR/SIAP_DISAJIKAN/DISAJIKAN/DIBAYAR/
+  DIBATALKAN) tidak bisa merepresentasikan alur multi-kanal (kasir langsung
+  vs pelayan vs QR pelanggan yang butuh approval kasir sebelum masuk dapur),
+  dan `PesananRiwayatStatus.statusSebelumnya/statusBaru` bertipe `String`
+  bebas (bukan type-safe). `ALT-DEF-016` mencatat `ItemPesanan`/
+  `ItemPesananModifier` tidak menyimpan snapshot nama/harga lengkap saat
+  pemesanan, sehingga histori transaksi bisa berubah tampilannya diam-diam
+  saat menu di-rename/harga modifier diubah di kemudian hari. Kedua defect
+  digabung dalam satu batch koreksi karena sama-sama berada di domain
+  Pesanan dan saling terkait (baris riwayat status yang lebih type-safe
+  butuh state machine yang benar dulu). **Cakupan yang SENGAJA TIDAK
+  disentuh:** kardinalitas `TiketDapur.pesananId` (masih 1:1 lewat
+  `@unique`) - itu scope `ALT-DEF-006`, batch routing dapur multi-stasiun
+  berikutnya; payment/promo/inventory/resep/membership/HR TIDAK disentuh.
+- **Keputusan 1 - 14 status penuh sesuai spesifikasi korektif, dengan guard
+  bercabang per `kanal` di titik-titik tertentu.** Alih-alih satu jalur
+  linear tunggal, transisi `DIKIRIM -> MENUNGGU_PERSETUJUAN` (butuh approval
+  kasir) HANYA berlaku untuk `kanal = QR_PELANGGAN`; untuk `kanal` KASIR/
+  PELAYAN, staf sendiri yang membuat pesanan sehingga `DIKIRIM -> DITERIMA`
+  terjadi otomatis (auto-accept, tanpa approval berlapis untuk aksi staf
+  sendiri). Serupa, `DITERIMA -> MENUNGGU_PEMBAYARAN` hanya berlaku bila
+  kebijakan tenant mewajibkan pembayaran-dimuka (umum untuk QR self-order
+  tanpa staf yang mengawasi); kanal KASIR/PELAYAN yang lazimnya membayar di
+  akhir (setelah makan) langsung `DITERIMA -> DIKONFIRMASI`. Tabel transisi
+  penuh (kolom `statusAsal`/`statusTujuan`/`aktorDiizinkan`/`guard`/
+  `sideEffect`/`auditEvent`/`testRequired`) ada di
+  `docs/arsitektur/STATE-MACHINES.md` bagian "Pesanan" (menggantikan
+  bagian lama).
+- **Keputusan 2 - `DITOLAK -> DIKIRIM` DIIZINKAN sebagai jalur retry, BUKAN
+  terminal.** Dipertimbangkan dua opsi: (a) `DITOLAK` adalah status
+  terminal (pesanan yang ditolak harus dibuat ulang sebagai pesanan baru);
+  (b) `DITOLAK -> DIKIRIM` diizinkan (pelanggan/pelayan mengedit pesanan
+  yang sama lalu mengirim ulang untuk approval kedua). **Dipilih (b)**
+  karena alasan penolakan QR self-order pada praktiknya sering bersifat
+  koreksi ringan (mis. "meja salah", "item X sedang habis, pilih lain") yang
+  wajar diperbaiki tanpa memaksa pelanggan mengulang seluruh sesi pemesanan
+  dari nol - membuat pesanan BARU untuk kasus ini akan mengaburkan
+  identitas pesanan (nomor pesanan berubah, riwayat terpecah dua baris
+  `Pesanan`) padahal secara bisnis ini masih "pesanan yang sama, coba lagi".
+  **Konsekuensi langsung ke desain `PesananPenolakan` (lihat Keputusan 3).**
+- **Keputusan 3 - `PesananPenolakan.pesananId` tetap `@unique` (SATU baris
+  per pesanan), MESKIPUN retry diizinkan (Keputusan 2).** Ini adalah
+  simplifikasi yang DIKETAHUI/DISENGAJA, bukan kelalaian: pada batch
+  schema-only ini (belum ada service-layer), skenario "pesanan yang sama
+  ditolak DUA KALI berturut-turut" butuh keputusan implementasi (hapus baris
+  penolakan lama sebelum menulis yang baru, ATAU ubah `PesananPenolakan`
+  jadi riwayat many-per-pesanan seperti `PesananPerubahan`) yang lebih tepat
+  diputuskan bersamaan dengan implementasi endpoint tolak/kirim-ulang nyata
+  di batch fitur berikutnya - BUKAN diputuskan secara spekulatif di batch
+  desain skema ini. **Ditandai eksplisit sebagai TODO batch berikutnya**,
+  didokumentasikan di komentar model `PesananPenolakan` di skema.
+- **Keputusan 4 - `PesananPembatalan.pesananId` @unique (SATU baris per
+  pesanan) karena `DIBATALKAN` adalah status TERMINAL.** Berbeda dari
+  `PesananPenolakan` (Keputusan 3), tidak ada jalur transisi APA PUN keluar
+  dari `DIBATALKAN` pada tabel transisi (lihat STATE-MACHINES.md) - satu
+  pesanan hanya bisa "dibatalkan seluruhnya" tepat sekali sepanjang
+  hidupnya, sehingga `@unique` di sini bukan simplifikasi melainkan
+  cerminan langsung aturan bisnis. **Dibedakan tegas dari pembatalan level
+  ITEM** (`ItemPesanan.status = DIBATALKAN`, yang sudah ada sejak awal dan
+  bisa terjadi berkali-kali untuk item berbeda dalam satu pesanan yang
+  MASIH AKTIF, tanpa membatalkan pesanan itu sendiri) - `PesananPembatalan`
+  HANYA untuk pembatalan seluruh order.
+- **Keputusan 5 - `DIBATALKAN` TIDAK bisa dicapai dari `SIAP`/`DISAJIKAN`/
+  `SELESAI`; `DIRETUR` HANYA bisa dicapai dari `SELESAI`.** Begitu makanan
+  sudah SIAP/DISAJIKAN, "membatalkan" seluruh pesanan bukan lagi operasi
+  yang masuk akal secara bisnis (bahan sudah dipakai/disajikan) - jalur
+  yang benar adalah `DIRETUR` (setelah `SELESAI`, lunas) atau pembatalan
+  ITEM tunggal (`ItemPesanan.status = DIBATALKAN`) untuk kasus mis. satu
+  piring cacat. Model detail retur (`PesananRetur`, alokasi refund
+  proporsional) adalah scope `ALT-PES-018`/`ALT-DEF-014` (batch domain
+  kasir berikutnya) - batch ini HANYA menambahkan nilai enum `DIRETUR` pada
+  `StatusPesanan` dan baris transisi di tabel state machine, TIDAK
+  membangun model `PesananRetur`.
+- **Keputusan 6 - `JenisPerubahanPesanan` sebagai ENUM (bukan String
+  bebas seperti `Izin.domain`/`PermintaanPersetujuan.jenisAksi`).**
+  Dipertimbangkan mengikuti pola String-bebas yang dipakai domain lain untuk
+  taksonomi yang "akan terus bertambah" - tetapi starter list
+  (`TAMBAH_ITEM`/`UBAH_KUANTITAS`/`HAPUS_ITEM`/`PINDAH_MEJA`/`SPLIT`/
+  `MERGE`/`LAINNYA`) dinilai cukup stabil untuk kebutuhan perubahan pesanan
+  (berbeda dari `Izin.domain` yang benar-benar terbuka untuk domain produk
+  baru apa pun). Nilai `LAINNYA` disediakan sebagai katup pelepas
+  (escape hatch) untuk kasus yang belum tercakup starter list, sehingga
+  enum tidak memblokir kebutuhan baru sebelum migrasi berikutnya sempat
+  dijalankan. Bila taksonomi ternyata tumbuh cepat pada implementasi nyata,
+  migrasi ke String bebas + dokumentasi naratif (pola `Izin.domain`) tetap
+  bisa dilakukan di batch berikutnya.
+- **Keputusan 7 - `hargaModifierSnapshot` dihitung dari
+  `sum(ItemPesananModifier.totalSnapshot)` pada saat item dibuat, disimpan
+  sebagai nilai TETAP di `ItemPesanan` (bukan dihitung ulang via agregasi
+  tiap kali baris `ItemPesanan` dibaca).** Konsisten dengan pola snapshot
+  lain di model ini (`hargaDasarSnapshot`, `hargaVarianSnapshot`, dst.) -
+  tujuannya sama: histori tidak boleh berubah nilai meski data master
+  berubah, DAN query baca cepat (baca satu kolom, bukan JOIN+SUM setiap
+  kali menampilkan struk). Trade-off yang diterima: bila ada bug penulisan
+  `ItemPesananModifier` setelah `ItemPesanan` dibuat (seharusnya tidak
+  pernah terjadi - modifier hanya ditulis sekali bersamaan dengan item
+  induknya), `hargaModifierSnapshot` bisa menyimpang dari SUM baris
+  modifier aktual; mitigasi ini adalah tanggung jawab service-layer
+  (transaksi tunggal saat membuat `ItemPesanan` + `ItemPesananModifier`
+  sekaligus), bukan constraint skema.
+- **Keputusan 8 - `ItemPesanan.resepVersiId` ditambahkan sebagai scalar
+  `String?` POLOS, TANPA relasi FK apa pun, pada batch ini.** Model
+  `VersiResep` (resep versioning, `ALT-DEF-007`/scope `ALT-RSP-002` dst.)
+  BELUM ADA di skema pada titik penulisan batch ini - itu scope
+  `ALT-DEF-008`-territory (batch resep-versioning terpisah). Membuat model
+  `VersiResep` placeholder hanya untuk menggantung FK ini akan mendahului
+  desain resep-versioning yang sebenarnya (yang punya keputusan sendiri
+  soal `ResepVarian`/`Subresep`/dst., lihat `ALT-DEF-007`) - berisiko FK
+  yang dibuat tergesa-gesa harus dirombak ulang begitu `VersiResep` nyata
+  dirancang. **Kolom ditambahkan SEKARANG (agar bentuk data `ItemPesanan`
+  tidak perlu migrasi tambahan lagi saat `VersiResep` akhirnya ada) tetapi
+  relasi FK-nya SENGAJA ditunda** - lihat TODO eksplisit di komentar model
+  `ItemPesanan` pada skema.
+- **Cakupan yang SENGAJA TIDAK dikerjakan di batch ini:** endpoint/handler
+  transisi status nyata, middleware guard kanal/kebijakan-prepaid nyata,
+  model `PesananRetur` (ALT-PES-018), perubahan kardinalitas `TiketDapur`
+  (ALT-DEF-006), publisher `DomainOutboxEvent` nyata di domain Pesanan,
+  migrasi Postgres nyata, dan test integrasi sungguhan - semuanya `BELUM
+  DIKERJAKAN`/`DIBLOKIR` (`ALT-DEF-029`), konsisten dengan pass-pass
+  correction-loop sebelumnya. Status `ALT-DEF-005` dan `ALT-DEF-016` diset
+  `SIAP_DIVERIFIKASI` (bukan `DITUTUP`) karena alasan yang sama.
+
 ## Status ringkas
 
 Semua ADR di atas berstatus **DITERIMA sebagai keputusan desain**, tetapi
 implementasinya di kode berstatus **BELUM DIKERJAKAN** kecuali skema Prisma awal
-(ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015, ADR-016
-sudah tercermin di `prisma/schema/schema.prisma`).
+(ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015, ADR-016,
+ADR-017 sudah tercermin di `prisma/schema/schema.prisma`).

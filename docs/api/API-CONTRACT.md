@@ -212,17 +212,31 @@ perancangan, bukan ditambahkan belakangan.
 
 ## 9. Pesanan (`packages/pesanan`, `packages/kasir`, `packages/pelayan`)
 
-| Metode | Path | Deskripsi |
-|---|---|---|
-| GET | `/api/v1/pesanan` | Daftar pesanan (filter status/outlet/tanggal/meja). |
-| POST | `/api/v1/pesanan` | Buat pesanan baru (kanal KASIR/PELAYAN/QR_PELANGGAN). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`) - mencakup dua kasus kritis dari master spec sekaligus: "checkout" (kanal KASIR/PELAYAN) dan "submit pesanan QR" (kanal QR_PELANGGAN), karena keduanya memakai endpoint pembuatan pesanan yang sama. |
-| GET | `/api/v1/pesanan/{id}` | Detail pesanan + item + riwayat status. |
-| POST | `/api/v1/pesanan/{id}/item` | Tambah item ke pesanan. |
-| PATCH | `/api/v1/pesanan/{id}/item/{itemPesananId}` | Ubah kuantitas/catatan item (sebelum dikirim dapur). |
-| POST | `/api/v1/pesanan/{id}/konfirmasi` | BARU -> DIKONFIRMASI (memicu pembuatan tiket dapur). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "accept pesanan" di master spec). |
-| POST | `/api/v1/pesanan/{id}/tandai-disajikan` | SIAP_DISAJIKAN -> DISAJIKAN. |
-| POST | `/api/v1/pesanan/{id}/batalkan` | Batalkan pesanan (butuh approval supervisor jika sudah DIPROSES_DAPUR). |
-| POST | `/api/v1/pesanan/{id}/promo` | Terapkan kode promo/kupon ke pesanan. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "penerapan promo" di master spec). |
+**ALT-DEF-005 (correction-loop lanjutan):** endpoint di bawah diperbarui
+mengikuti state machine 14-status penuh - lihat tabel transisi lengkap di
+`docs/arsitektur/STATE-MACHINES.md` bagian "Pesanan" untuk aktor/guard/
+side-effect/audit-event setiap transisi. `izin.kode` per baris mengacu ke
+`prisma/seed/izin.seed.ts`/`docs/keamanan/PERMISSION-MATRIX.md`.
+
+| Metode | Path | Deskripsi | izin.kode |
+|---|---|---|---|
+| GET | `/api/v1/pesanan` | Daftar pesanan (filter status/outlet/tanggal/meja). | `pesanan.riwayat.lihat` |
+| POST | `/api/v1/pesanan` | Buat pesanan baru sebagai `DRAF` lalu langsung `DIKIRIM` (kanal KASIR/PELAYAN/QR_PELANGGAN). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`) - mencakup dua kasus kritis dari master spec sekaligus: "checkout" (kanal KASIR/PELAYAN, transisi `DRAF -> DIKIRIM -> DITERIMA` otomatis) dan "submit pesanan QR" (kanal QR_PELANGGAN, transisi `DRAF -> DIKIRIM -> MENUNGGU_PERSETUJUAN` otomatis), karena keduanya memakai endpoint pembuatan pesanan yang sama - lihat guard per kanal di `STATE-MACHINES.md`. | `pesanan.buat` |
+| GET | `/api/v1/pesanan/{id}` | Detail pesanan + item (dengan kolom `*Snapshot`, `ALT-DEF-016`) + riwayat status (enum, `ALT-DEF-005`). | `pesanan.riwayat.lihat` |
+| POST | `/api/v1/pesanan/{id}/item` | Tambah item ke pesanan (mengisi seluruh kolom `*Snapshot` pada `ItemPesanan`/`ItemPesananModifier` saat itu juga, `ALT-DEF-016`). | `pesanan.item.tambah` |
+| PATCH | `/api/v1/pesanan/{id}/item/{itemPesananId}` | Ubah kuantitas/catatan item. Sebelum `DIKONFIRMASI`: mengubah baris langsung. Sesudah `DIKONFIRMASI`: WAJIB tercatat sebagai baris baru `PesananPerubahan` (`jenisPerubahan = UBAH_KUANTITAS`), tidak menimpa `ItemPesanan` secara diam-diam (`ALT-PES-010`). | `pesanan.ubah` |
+| POST | `/api/v1/pesanan/{id}/terima` | `MENUNGGU_PERSETUJUAN -> DITERIMA` (approval staf atas pesanan QR pelanggan). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "accept pesanan" di master spec). | `pesanan.terima` |
+| POST | `/api/v1/pesanan/{id}/tolak` | `MENUNGGU_PERSETUJUAN -> DITOLAK`, body wajib `{ "alasan": string }` - menulis 1 baris `PesananPenolakan`. Pesanan yang ditolak boleh diedit lalu dikirim ulang lewat `POST /api/v1/pesanan/{id}/kirim-ulang` (`DITOLAK -> DIKIRIM`, lihat ADR-017 Keputusan 2). | `pesanan.tolak` |
+| POST | `/api/v1/pesanan/{id}/kirim-ulang` | `DITOLAK -> DIKIRIM` - mengirim ulang pesanan yang sama (BUKAN pesanan baru) setelah dikoreksi. | `pesanan.buat` atau publik via token QR meja |
+| POST | `/api/v1/pesanan/{id}/konfirmasi` | `DITERIMA -> DIKONFIRMASI` (langsung) atau `MENUNGGU_PEMBAYARAN -> DIKONFIRMASI` (setelah verifikasi pembayaran dimuka) - memicu pembuatan tiket dapur di transisi berikutnya. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "accept pesanan" di master spec). | `pesanan.status.ubah` |
+| POST | `/api/v1/pesanan/{id}/kirim-dapur` | `DIKONFIRMASI -> DIKIRIM_KE_DAPUR` - membuat `TiketDapur` (kardinalitas 1:1 dipertahankan, `ALT-DEF-006` mengubah ini di batch berikutnya). | `pesanan.status.ubah` |
+| POST | `/api/v1/pesanan/{id}/tandai-disajikan` | `SIAP -> DISAJIKAN`. | `pesanan.status.ubah` |
+| POST | `/api/v1/pesanan/{id}/selesaikan` | `DISAJIKAN -> SELESAI`, guard: total `Pembayaran` yang `DIKONFIRMASI` `>= totalAkhir`. | `pesanan.status.ubah` |
+| POST | `/api/v1/pesanan/{id}/batalkan` | Batalkan pesanan - menulis 1 baris `PesananPembatalan` (`alasan` wajib). TIDAK BISA dipanggil dari status `SIAP`/`DISAJIKAN`/`SELESAI`/`DIBATALKAN`/`DIRETUR` (409 jika dicoba). Butuh approval supervisor jika status saat ini `DIKONFIRMASI`/`DIKIRIM_KE_DAPUR`/`SEDANG_DISIAPKAN` (lihat `PERMISSION-MATRIX.md`). | `pesanan.batalkan` |
+| POST | `/api/v1/pesanan/{id}/retur` | `SELESAI -> DIRETUR`. **Model detail retur (`PesananRetur`, alokasi refund) adalah scope `ALT-PES-018`/`ALT-DEF-014`, BELUM DIKERJAKAN pada batch ini** - endpoint didokumentasikan di sini hanya untuk melengkapi kontrak transisi status. | `pesanan.retur.kelola` |
+| GET | `/api/v1/pesanan/{id}/riwayat-status` | Riwayat transisi status (`PesananRiwayatStatus`, enum `StatusPesanan` di kedua kolom, `ALT-DEF-005`/`ALT-PES-009`). | `pesanan.riwayat.lihat` |
+| GET | `/api/v1/pesanan/{id}/perubahan` | Riwayat perubahan pasca-konfirmasi (`PesananPerubahan`, `ALT-PES-010`). | `pesanan.riwayat.lihat` |
+| POST | `/api/v1/pesanan/{id}/promo` | Terapkan kode promo/kupon ke pesanan. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "penerapan promo" di master spec). | `promo.kelola` (KASIR/PELAYAN, lihat `PERMISSION-MATRIX.md`) |
 
 Contoh request `POST /api/v1/pesanan`:
 
@@ -355,7 +369,7 @@ setiap baris tabel endpoint pada dokumen ini untuk detail per-endpoint):
 |---|---|
 | checkout | `POST /api/v1/pesanan` (kanal KASIR/PELAYAN) |
 | submit pesanan QR | `POST /api/v1/pesanan` (kanal QR_PELANGGAN) |
-| accept pesanan | `POST /api/v1/pesanan/{id}/konfirmasi` |
+| accept pesanan | `POST /api/v1/pesanan/{id}/terima` (`MENUNGGU_PERSETUJUAN -> DITERIMA`, ALT-DEF-005) dan `POST /api/v1/pesanan/{id}/konfirmasi` (`DITERIMA`/`MENUNGGU_PEMBAYARAN -> DIKONFIRMASI`) |
 | pembayaran | `POST /api/v1/pembayaran` |
 | konfirmasi QRIS | `POST /api/v1/pembayaran/{id}/konfirmasi-qris-manual` |
 | refund | `POST /api/v1/pembayaran/{id}/refund` |
