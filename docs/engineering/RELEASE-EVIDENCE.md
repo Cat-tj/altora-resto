@@ -1040,6 +1040,189 @@ integration test `pembayaran_invariant_*`. `PesananSplit` (split bill per item,
 `ALT-PES-014`) juga tetap terbuka. Karena itu status ALT-DEF-004, ALT-DEF-014,
 ALT-DEF-015, dan ALT-DEF-034 adalah `SIAP_DIVERIFIKASI`, BUKAN `DITUTUP`.
 
+## Pass correction-loop 2026-07-25 (lanjutan): perbaikan ALT-DEF-007
+
+Cakupan: `ALT-DEF-007` (versi resep, resep per varian, subresep/bahan setengah
+jadi, yield & penyusutan, modifier-yang-mengubah-resep, konversi satuan, proses
+produksi & batch) — lihat **ADR-022** di `docs/engineering/DECISION-LOG.md`.
+Requirement terkait: `ALT-RSP-001` s.d. `ALT-RSP-013`.
+
+### Commit
+
+| Commit | Judul |
+|---|---|
+| `df5457a` | `fix(recipe): tambahkan versi resep dan produksi` (schema + ADR-022 + ERD + kontrak API + permission matrix + seed izin + traceability + 2 file SQL manual) |
+| `80cfbba` | `test(architecture): tambah test versi resep dan produksi` (2 file test baru) |
+| (lihat `git log`) | `docs(engineering): perbarui status ALT-DEF-007` (ledger + bukti ini) |
+
+### Perubahan schema (ringkas)
+
+**Model BARU (7):** `KonversiSatuan`, `VersiResep`, `KomponenResep`,
+`KomponenResepModifier`, `ProsesProduksi`, `ProsesProduksiBaris`,
+`BatchProduksi`.
+**Enum BARU (5):** `JenisBahan`, `StatusVersiResep`, `AksiKomponenModifier`,
+`StatusProsesProduksi`, `StatusBatchProduksi`.
+**Model DIHAPUS (1):** `ResepBahan` (beserta tabel `resep_bahan`).
+**Model diubah:** `Bahan` (+`jenis`), `Satuan` (+`@@unique([tenantId, id])`),
+`Resep` (`itemMenuId @unique` dan `versi String` DIHAPUS; +`nama`,
++3 sasaran nullable, +`@@unique([tenantId, id])`), `ItemMenu`
+(`resep Resep?` -> `resep Resep[]`), `VarianMenu`/`ModifierOpsi`/`Tenant`/
+`Outlet`/`Pengguna` (back-relation), `ItemPesanan` (`resepVersiId` menjadi FK
+sungguhan).
+
+### Bukti command yang BENAR-BENAR dijalankan
+
+```
+$ npx prisma format --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 73ms 🚀
+
+$ DATABASE_URL="postgresql://u:p@localhost:5432/dummy" \
+    npx prisma validate --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+
+$ DATABASE_URL="postgresql://u:p@localhost:5432/dummy" \
+    npx prisma generate --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 815ms
+
+$ npx tsc --noEmit -p packages/test-support
+(tanpa output)  TSC_EXIT=0
+```
+
+Seluruh composite-FK yang dicoba di batch ini **berhasil** — tidak ada fallback
+ke scalar+guard yang diperlukan, termasuk composite-FK dengan komponen nullable
+(`Resep.itemMenu` memakai `[tenantId, itemMenuId]` dengan `itemMenuId String?`;
+`KomponenResepModifier.bahanPengganti` memakai `[tenantId, bahanPenggantiId]`
+dengan `bahanPenggantiId String?`). Prisma 5.20 menerima keduanya sebagai
+relasi opsional.
+
+### Bukti test arsitektur (nyata, `node --experimental-strip-types`)
+
+**Sebelum batch ini: 15 file test.** **Sesudah: 17 file** (2 file baru:
+`resep-versi-produksi-constraints.test.ts`,
+`prisma-client-shape-resep-produksi.test.ts`).
+
+Hasil re-run SELURUH 17 file setelah perubahan schema + `prisma format`:
+
+```
+dapur-kds-multi-stasiun.test.ts                            PASS
+idempotency-outbox-notification-constraints.test.ts        PASS
+keanggotaan-outlet-constraints.test.ts                     PASS
+pembayaran-alokasi-metode-constraints.test.ts              PASS
+pesanan-state-machine-snapshot-constraints.test.ts         PASS
+prisma-client-shape-auth-pin.test.ts                       PASS
+prisma-client-shape-dapur.test.ts                          PASS
+prisma-client-shape-pembayaran-qris.test.ts                PASS
+prisma-client-shape-pesanan.test.ts                        PASS
+prisma-client-shape-platform-infra.test.ts                 PASS
+prisma-client-shape-resep-produksi.test.ts                 PASS
+prisma-client-shape-tenant-outlet.test.ts                  PASS
+prisma-client-shape.test.ts                                PASS
+qris-konfigurasi-constraints.test.ts                       PASS
+resep-versi-produksi-constraints.test.ts                   PASS
+sesi-auth-pin-constraints.test.ts                          PASS
+tenant-outlet-composite-constraints.test.ts                PASS
+TOTAL: 17 file, PASS=17 FAIL=0
+```
+
+**Kegagalan yang muncul di run pertama dan bagaimana ia diklasifikasi.**
+Tepat SATU dari 15 file lama gagal setelah perubahan schema:
+`pesanan-state-machine-snapshot-constraints.test.ts`, pada assertion
+`assertNotContains(itemPesananBody, "\n  resepVersi VersiResep", ...)`.
+
+Ia **BUKAN false-positive formatting** (tidak ada satu pun false-positive
+formatting pada pass ini — matcher whitespace-robust `normalisasiSpasiHorizontal()`
+yang ditambahkan ALT-DEF-033 sudah dipakai di seluruh file yang menyentuh
+schema, dan `prisma format` kali ini tidak memicu satu pun kegagalan palsu).
+Ia juga **bukan regresi**. Ia adalah assertion yang **sengaja bersifat
+sementara**: ADR-017 Keputusan 8 menyatakan eksplisit "pada batch ini" karena
+model `VersiResep` belum ada, dan mencatat TODO di `schema.prisma` untuk
+menyambungkan FK-nya begitu model itu dibuat. Batch ini membuat model tersebut,
+sehingga assertion lama kini menegakkan keadaan yang justru SALAH. Ia **dibalik
+arahnya** menjadi assertion positif yang LEBIH KUAT (relasi WAJIB ada dan wajib
+menunjuk `VersiResep` lewat `resepVersiId`) — ini pemenuhan follow-up yang
+memang dijanjikan, bukan pelonggaran assertion.
+
+### Bukti non-vacuity (mutation test)
+
+Disiplin dari batch sebelumnya diterapkan: setiap mutasi **diverifikasi
+benar-benar mengubah file** (`diff` terhadap backup, jumlah baris berubah
+dicetak) SEBELUM hasil "test gagal" dipercaya. Tidak ada mutasi no-op pada pass
+ini. Schema dipulihkan dan diverifikasi `IDENTIK` terhadap backup setelah
+seluruh mutasi selesai.
+
+| # | Mutasi atas `schema.prisma` | Baris berubah | Hasil |
+|---|---|---|---|
+| M1 | `KomponenResep.versiResepId` -> `resepId` | 4 | GAGAL: "KomponenResep HARUS punya kolom `versiResepId`" |
+| M2 | Model `ResepBahan` dikembalikan | 10 | GAGAL: "model `ResepBahan` MASIH ADA di schema.prisma" |
+| M3 | `Resep.itemMenuId String?` -> `String @unique` | 2 | GAGAL: "Resep TIDAK boleh lagi punya `itemMenuId String @unique`" |
+| M4 | `VersiResep` diberi `@@unique([resepId, status])` | 1 | GAGAL: "constraint itu tidak menegakkan 'satu versi AKTIF per resep' dan justru SALAH" |
+| M5 | Relasi `ItemPesanan.resepVersi` dihapus | 2 | GAGAL: "ItemPesanan.resepVersi WAJIB berupa relasi FK sungguhan ke VersiResep" |
+| M6 | `VersiResep.snapshotBiaya Int?` -> `Decimal?` | 2 | GAGAL: "snapshotBiaya harus Int (rupiah bulat, ADR-005)" |
+| M7 | `ItemMenu.resep Resep[]` -> `Resep?` | 2 | GAGAL: "ItemMenu.resep harus berupa list `Resep[]`, BUKAN `Resep?`" |
+| M8 | `@@unique([tenantId, id])` dihapus dari `Satuan` | 2 | GAGAL: "Satuan harus punya @@unique([tenantId, id])" |
+
+**Mutasi atas lapis TIPE (bukan teks).** Relasi `ItemPesanan.resepVersi`
+dihapus dari schema, `prisma generate` dijalankan ulang, lalu
+`tsc --noEmit -p packages/test-support`:
+
+```
+prisma-client-shape-resep-produksi.test.ts(205,3): error TS2353: Object literal
+  may only specify known properties, and 'itemPesanan' does not exist in type
+  'VersiResepInclude<DefaultArgs>'.
+prisma-client-shape-resep-produksi.test.ts(210,3): error TS2353: Object literal
+  may only specify known properties, and 'resepVersi' does not exist in type
+  'ItemPesananInclude<DefaultArgs>'.
+```
+
+Setelah schema dipulihkan dan client di-generate ulang: `TSC_EXIT=0`. Ini
+membuktikan assertion tipe `satisfies Prisma.VersiResepInclude` /
+`Prisma.ItemPesananInclude` bukan formalitas — ia benar-benar mendeteksi FK yang
+tidak tersambung, yang persis merupakan keadaan sebelum batch ini.
+
+### KETERBATASAN YANG WAJIB DIBACA SEBELUM MENGANGGAP DEFECT INI SELESAI
+
+**Dua invariant utama domain ini TIDAK ditegakkan di level data saat ini.**
+Kedua file SQL di bawah **belum pernah dieksekusi terhadap Postgres mana pun**
+(tidak ada database di environment ini — `ALT-DEF-029`), sama seperti
+`001_konfigurasi_qris_partial_unique.sql` yang sudah ada sejak batch QRIS dan
+juga belum pernah dijalankan:
+
+1. `prisma/migrations/manual/002_resep_target_xor_check.sql` — CHECK constraint
+   "Resep menargetkan TEPAT SATU dari itemMenu/varianMenu/bahanHasil".
+2. `prisma/migrations/manual/003_versi_resep_satu_aktif.sql` — partial unique
+   index "satu `VersiResep` AKTIF per `Resep`".
+
+Konsekuensi konkret yang tidak boleh diabaikan: dua request
+`POST /api/v1/resep/{id}/aktifkan-versi` yang tiba bersamaan **dapat**
+menghasilkan dua versi `AKTIF` sekaligus; dan sebuah baris `Resep` dengan nol
+atau tiga sasaran terisi **dapat** tersimpan. `Idempotency-Key` pada endpoint
+aktivasi melindungi dari retry klien yang sama, **bukan** dari dua aktor
+berbeda yang bersamaan. Jangan menganggap kedua aturan ini terjamin sebelum
+kedua file SQL benar-benar dijalankan.
+
+### Kesimpulan status
+
+Schema untuk `ALT-DEF-007` sudah benar secara sintaks (`format` + `validate`),
+tipe yang dihasilkan sudah benar secara bentuk (`generate` +
+`tsc --noEmit`), seluruh model/field/enum/constraint yang diklaim ADR-022 sudah
+dibuktikan ada lewat test struktur DAN test tipe yang **keduanya terbukti
+non-vacuous** (8 mutasi teks + 1 mutasi tipe), dan tidak ada regresi pada 15
+test arsitektur sebelumnya (satu kegagalan yang muncul adalah assertion
+eksplisit-sementara dari ADR-017 Keputusan 8 yang batch ini memang bertugas
+membalikkannya — bukan regresi, bukan false-positive formatting).
+
+**Belum ada:** migrasi Postgres nyata, eksekusi kedua file SQL manual,
+perhitungan HPP nyata (`ALT-RSP-012` — kolom `snapshotBiaya` sudah ada, tetapi
+perhitungannya butuh model harga bahan terbaru yang BELUM ADA di skema),
+pemotongan & reversal stok dari resep (`ALT-RSP-011`/`ALT-RSP-013` — teritori
+`ALT-DEF-008`, seam didokumentasikan ADR-022 Keputusan 8), konversi satuan
+khusus-per-bahan, service/handler/endpoint resep & produksi nyata, dan
+penegakan runtime invariant XOR/satu-versi-aktif. Karena itu status
+`ALT-DEF-007` adalah `SIAP_DIVERIFIKASI`, **BUKAN** `DITUTUP`.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```
