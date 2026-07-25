@@ -144,15 +144,70 @@ Contoh response `GET /api/v1/item-menu/{itemMenuId}`:
 }
 ```
 
-## 5. Resep & Bahan (`packages/resep`)
+## 5. Resep, Versi Resep & Produksi (`packages/resep`)
+
+> **DIPERBARUI PADA BATCH ALT-DEF-007 (ADR-022).** Kontrak lama
+> `GET/PUT /api/v1/resep/{itemMenuId}` **DIHAPUS** dan diganti. Ia mengasumsikan
+> satu resep per item menu (`Resep.itemMenuId @unique`), constraint yang sudah
+> tidak ada lagi; `itemMenuId` bukan lagi identitas sebuah resep dan tidak bisa
+> dipakai sebagai path parameter. `PUT` yang menimpa komposisi juga bertentangan
+> langsung dengan seluruh tujuan versioning — mengubah resep sekarang berarti
+> **membuat versi baru**, bukan menimpa.
+>
+> **KOREKSI CATATAN SCOPE:** instruksi batch ini menyatakan endpoint
+> `/recipes`, `/recipes/{id}/versions`, `/recipes/{id}/activate-version`,
+> `/production-runs`, `/production-runs/{id}/complete` "sudah di-scaffold di
+> kontrak API awal". Itu **tidak benar** — verifikasi langsung atas file ini
+> sebelum batch: yang ada hanya lima baris di atas, seluruhnya berbahasa
+> Indonesia (`/api/v1/resep/...`), tidak ada satu pun endpoint versi/produksi.
+> Endpoint di bawah adalah **penambahan baru**, bukan pembaruan atas scaffold
+> yang sudah ada, dan memakai penamaan bahasa Indonesia agar konsisten dengan
+> seluruh kontrak ini (bukan `/recipes`/`/production-runs` berbahasa Inggris).
 
 | Metode | Path | Deskripsi |
 |---|---|---|
-| GET | `/api/v1/bahan` | Daftar bahan baku. |
-| POST | `/api/v1/bahan` | Buat bahan baku baru. |
+| GET | `/api/v1/bahan` | Daftar bahan baku. Filter `?jenis=` (`BAHAN_BAKU`/`BAHAN_SETENGAH_JADI`/`PRODUK_JADI`/`KEMASAN`/`BARANG_OPERASIONAL`). |
+| POST | `/api/v1/bahan` | Buat bahan baru. `jenis` wajib; `BAHAN_SETENGAH_JADI` adalah yang boleh menjadi `bahanHasil` sebuah subresep. |
 | GET | `/api/v1/satuan` | Daftar satuan (gram, ml, pcs, dst). |
-| GET | `/api/v1/resep/{itemMenuId}` | Ambil resep aktif untuk item menu. |
-| PUT | `/api/v1/resep/{itemMenuId}` | Set/ubah resep (daftar bahan + jumlah per porsi). |
+| GET | `/api/v1/konversi-satuan` | Daftar konversi satuan per tenant (`ALT-RSP-008`). |
+| POST | `/api/v1/konversi-satuan` | Tambah konversi `satuanDari -> satuanKe` dengan `faktor` (Decimal). |
+| GET | `/api/v1/resep` | Daftar kontainer resep. Filter `?itemMenuId=` / `?varianMenuId=` / `?bahanHasilId=` — **bukan lagi** path parameter, karena satu item menu boleh punya lebih dari satu resep. |
+| POST | `/api/v1/resep` | Buat kontainer resep. Body wajib memuat **tepat satu** dari `itemMenuId`/`varianMenuId`/`bahanHasilId` (invariant XOR, ADR-022 Keputusan 2). Melanggarnya -> `422 RESEP_SASARAN_TIDAK_VALID`. |
+| GET | `/api/v1/resep/{resepId}` | Detail satu resep beserta ringkasan seluruh versinya. |
+| GET | `/api/v1/resep/{resepId}/versi` | Daftar `VersiResep` (`ALT-RSP-002`), termasuk versi `NONAKTIF`/`ARSIP` — riwayat tidak pernah disembunyikan. |
+| POST | `/api/v1/resep/{resepId}/versi` | Buat versi BARU (status `DRAF`) beserta `KomponenResep`-nya. **Menggantikan `PUT /resep/{itemMenuId}` yang lama** — komposisi tidak pernah ditimpa. `nomorVersi` ditentukan server (`@@unique([resepId, nomorVersi])`). |
+| PUT | `/api/v1/versi-resep/{versiResepId}/komponen` | Ubah komponen versi. **Hanya sah saat versi berstatus `DRAF`.** Versi `AKTIF`/`NONAKTIF`/`ARSIP` -> `409 VERSI_RESEP_TERKUNCI`; ia sudah/mungkin dirujuk `ItemPesanan` historis. |
+| PUT | `/api/v1/versi-resep/{versiResepId}/modifier` | Atur `KomponenResepModifier` (`TAMBAH`/`KURANGI`/`GANTI`, `ALT-RSP-004`). Sama: hanya saat `DRAF`. |
+| POST | `/api/v1/resep/{resepId}/aktifkan-versi` | Aktifkan satu versi: nonaktifkan versi `AKTIF` lama + set versi target `AKTIF` + isi `snapshotBiaya` (HPP saat itu) **dalam satu transaksi**. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`) — retry klien tidak boleh menghasilkan dua kali pergantian versi. Lihat catatan race condition di bawah. |
+| GET | `/api/v1/resep/{resepId}/hpp` | HPP terhitung dari versi `AKTIF` + harga bahan terbaru (`ALT-RSP-012`). **Belum diimplementasikan** — model harga bahan terbaru belum ada. |
+| GET | `/api/v1/produksi` | Daftar `ProsesProduksi` per outlet (`ALT-RSP-009`). Filter `?status=`, `?tanggal=`. |
+| POST | `/api/v1/produksi` | Buat proses produksi (status `DRAF`) atas satu `versiResepId` dengan `jumlahTarget`. |
+| POST | `/api/v1/produksi/{id}/mulai` | `DRAF -> BERJALAN`, mengisi `dimulaiPada`. |
+| POST | `/api/v1/produksi/{id}/selesaikan` | `BERJALAN -> SELESAI`: mengisi `jumlahAktual`, `diselesaikanPada`, baris `ProsesProduksiBaris` (konsumsi aktual), dan membuat `BatchProduksi`. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`) — ini operasi yang (kelak) memposting mutasi stok ganda (`PRODUKSI_KELUAR` + `PRODUKSI_MASUK`); retry tanpa idempotency akan menggandakan stok. Pola sama dengan `POST /mutasi-stok/penyesuaian` dan `POST /stok-opname/{id}/selesaikan`. |
+| POST | `/api/v1/produksi/{id}/batalkan` | `DRAF|BERJALAN -> DIBATALKAN`, wajib alasan. Tidak menghapus baris apa pun (ADR-006). |
+| GET | `/api/v1/batch-produksi` | Daftar batch bahan setengah jadi. Filter `?bahanHasilId=`, `?status=`, `?kedaluwarsaSebelum=` (dasar FEFO batch berikutnya). |
+
+**Catatan invariant yang BELUM ditegakkan di level data.** Dua aturan di bawah
+saat ini HANYA dijaga guard level-aplikasi karena file SQL penegaknya **belum
+pernah dieksekusi** terhadap Postgres mana pun (`ALT-DEF-029`):
+
+1. XOR sasaran `Resep` — `prisma/migrations/manual/002_resep_target_xor_check.sql`.
+2. Satu `VersiResep` `AKTIF` per `Resep` —
+   `prisma/migrations/manual/003_versi_resep_satu_aktif.sql`.
+
+Konsekuensi konkret: dua request `POST /resep/{id}/aktifkan-versi` yang tiba
+bersamaan **dapat** menghasilkan dua versi `AKTIF` sekaligus. `Idempotency-Key`
+melindungi dari retry klien yang sama, **bukan** dari dua aktor berbeda yang
+bersamaan. Jangan menganggap aturan ini terjamin sebelum kedua file SQL benar-
+benar dijalankan.
+
+**Catatan gap - pemotongan & reversal stok (`ALT-RSP-011`/`ALT-RSP-013`):**
+tidak ada endpoint untuk keduanya di kontrak ini secara sengaja — pemotongan
+stok dipicu event internal saat pesanan selesai, dan reversal dipicu event
+pembatalan; keduanya adalah teritori batch `ALT-DEF-008` (persediaan). Yang
+sudah disiapkan batch ini adalah FK `ItemPesanan.resepVersiId -> VersiResep`,
+sehingga pemotongan/reversal wajib dihitung dari versi **yang tercatat di baris
+pesanan**, bukan dari versi aktif saat ini (ADR-022 Keputusan 8).
 
 ## 6. Persediaan (`packages/persediaan`)
 

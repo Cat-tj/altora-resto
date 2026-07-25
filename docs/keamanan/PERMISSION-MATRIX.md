@@ -60,6 +60,7 @@ tabel), dikelompokkan per `domain`:
 | dapur | `dapur.stasiun.kelola`, `dapur.routing.kelola`, `dapur.tiket.buat-otomatis`, `dapur.tiket.lihat`, `dapur.tiket.prioritas`, `dapur.tiket.tahan`, `dapur.baris.siap`, `dapur.tiket.siap`, `dapur.tiket.ambil`, `dapur.cetak`, `dapur.cetak-ulang` |
 | pembayaran | `pembayaran.buat`, `pembayaran.tahan`, `pembayaran.alokasi.kelola`, `pembayaran.qris.konfirmasi-manual`, `pembayaran.qris.koreksi`, `pembayaran.refund`, `pembayaran.struk.cetak`, `pembayaran.struk.cetak-ulang` |
 | kasir | `kasir.giliran.kelola`, `kasir.rekonsiliasi.lihat`, `kasir.giliran.verifikasi`, `kasir.giliran.buka-kembali` |
+| resep | `resep.kelola`, `resep.versi.kelola`, `resep.varian.kelola`, `resep.modifier.kelola`, `resep.subresep.kelola`, `resep.penyusutan.kelola`, `resep.konversi.kelola`, `resep.produksi.kelola`, `resep.hpp.lihat`, `resep.pemakaian.reversal` |
 
 **Kode baru batch ALT-DEF-004/ALT-DEF-014/ALT-DEF-015 (`domain pembayaran`,
 `kasir`, `qris`):** diperiksa dulu terhadap katalog yang sudah ada sebelum
@@ -93,6 +94,42 @@ ditambahkan, mengikuti disiplin batch-batch sebelumnya.
   enkripsi. Diusulkan agar kolom Permission `ALT-SEC-007` di
   `MASTER-CHECKLIST.md` diubah menjadi `-`; dicatat sebagai bagian dari
   **ALT-DEF-034**.
+
+**Kode baru batch ALT-DEF-007 (`domain resep`):** diperiksa dulu terhadap
+katalog yang sudah ada - **tidak satu pun** kode `resep.*` pernah ada di seed
+literal (`grep 'resep' prisma/seed/izin.seed.ts` sebelum perubahan hanya
+menemukan kata "resep" di dalam sebuah komentar, bukan sebagai `kode:`).
+Seluruh 10 kode di atas **genuinely direferensikan** `MASTER-CHECKLIST.md`
+`ALT-RSP-001` s.d. `ALT-RSP-013` - tidak ada satu pun yang diciptakan
+spekulatif untuk batch ini.
+
+- **`resep.pemakaian.otomatis` (`ALT-RSP-011`) SENGAJA TIDAK ditambahkan**
+  meskipun `MASTER-CHECKLIST.md` mencantumkannya di kolom Permission. Kolom
+  Aktor requirement tersebut adalah **"sistem"** dan endpoint-nya "internal
+  (event pesanan selesai)": pemotongan stok otomatis tidak pernah dipegang
+  seorang aktor manusia yang bisa diberi/dicabut izinnya. Menjadikannya kode
+  izin justru menyiratkan ada peran yang boleh menyelesaikan pesanan **tanpa**
+  memotong stok - yaitu jalur penyimpangan yang tidak boleh ada. Alasan yang
+  sama persis dengan `keamanan.qris.enkripsi` pada batch sebelumnya. Diusulkan
+  kolom Permission `ALT-RSP-011` diubah menjadi `-` (sistem); dicatat sebagai
+  tambahan **ALT-DEF-034**, bukan defect baru.
+- **`resep.pemakaian.reversal` (`ALT-RSP-013`) TETAP ditambahkan** meskipun
+  requirement-nya juga "internal (event pesanan dibatalkan)" - berbeda dari
+  poin di atas, membalik pemotongan stok adalah aksi yang di praktik memang
+  bisa dipicu manusia (pembatalan pesanan yang sudah diproses) dan yang wajib
+  dibatasi. Perbedaan ini disengaja, bukan inkonsistensi.
+- **Drift penamaan tambahan (masuk ALT-DEF-034, bukan defect baru):** tiga kode
+  yang direferensikan checklist mengasumsikan model yang **tidak dibuat**
+  batch ini - `resep.varian.kelola` (checklist mengasumsikan model
+  `ResepVarian`; ADR-022 Keputusan 2 memodelkannya sebagai `Resep` dengan
+  sasaran `varianMenuId`), `resep.subresep.kelola` (mengasumsikan model
+  `Subresep`; ADR-022 Keputusan 1 memodelkannya sebagai `Bahan` berjenis
+  `BAHAN_SETENGAH_JADI`), dan `resep.penyusutan.kelola` (mengasumsikan model
+  `FaktorPenyusutan`; kini kolom `VersiResep.penyusutanPersen`). Ketiganya
+  **tetap ditambahkan dengan nama checklist** karena requirement yang
+  merujuknya nyata dan aksinya nyata - hanya entitas penyimpannya yang
+  berbeda dari asumsi checklist. Kolom "Entitas" `ALT-RSP-003`/`005`/`007`
+  di `MASTER-CHECKLIST.md` yang perlu dikoreksi, bukan kode izinnya.
 
 **Kode baru batch ALT-DEF-006 (`domain dapur`):** diperiksa dulu terhadap
 katalog yang sudah ada - **tidak satu pun** kode `dapur.*` pernah ada di seed
@@ -184,6 +221,8 @@ Legenda: `M` = boleh (Miliki akses penuh), `B` = boleh dengan approval Bertingka
 | Kelola kategori/item menu | M | M | L | L | L | L | - | - | - |
 | Kelola harga per outlet | M | B | - | - | - | - | - | - | - |
 | Kelola resep (BOM) | M | M | L | - | - | L | L | - | - |
+| Kelola versi resep & aktivasi (ALT-DEF-007) | M | M | - | - | - | L | - | - | - |
+| Jalankan proses produksi & batch (ALT-DEF-007) | M | M | L | - | - | L | L | - | - |
 | **Persediaan** |
 | Lihat stok bahan | M | M | M | - | - | L | M | M | - |
 | Catat mutasi stok manual | M | M | B | - | - | - | M | - | - |

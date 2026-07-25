@@ -1161,10 +1161,238 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
   terpisah pada desain ini); rotasi kunci; eksekusi SQL partial index; migrasi
   Postgres nyata (`ALT-DEF-029`).
 
+## ADR-022: Versi resep, subresep, modifier-yang-mengubah-resep, dan proses produksi (ALT-DEF-007)
+
+- **Status:** DITERIMA
+- **Konteks:** `ALT-DEF-007` mencatat bahwa `Resep` adalah 1:1 sederhana dengan
+  `ItemMenu` (`itemMenuId String @unique`) dengan satu kolom `versi String`
+  bebas dan satu tabel baris `ResepBahan(resepId, bahanId, jumlah, satuanId)`.
+  Akibatnya empat kebutuhan nyata TIDAK MUNGKIN diimplementasikan sama sekali:
+  (a) `ALT-RSP-002` versi resep — mengubah komposisi menimpa satu-satunya baris
+  yang ada, sehingga HPP seluruh transaksi lampau ikut berubah surut;
+  (b) `ALT-RSP-003` resep per varian — tidak ada tempat menaruh komposisi
+  berbeda untuk "porsi jumbo"; (c) `ALT-RSP-005`/`ALT-RSP-006` subresep dan
+  yield — `Resep` hanya bisa menargetkan `ItemMenu`, tidak pernah sebuah bahan
+  setengah jadi; (d) `ALT-RSP-004` modifier yang mengubah komposisi bahan —
+  tidak ada model apa pun. Kolom `versi String` yang ada bersifat kosmetik:
+  ia label, bukan entitas, dan tidak ada satu pun baris data yang menggantung
+  padanya.
+
+- **Keputusan 1 — `Bahan.jenis` sebagai diskriminator (`JenisBahan`).**
+  `BAHAN_BAKU` / `BAHAN_SETENGAH_JADI` / `PRODUK_JADI` / `KEMASAN` /
+  `BARANG_OPERASIONAL`, `@default(BAHAN_BAKU)` (seluruh baris yang ada sebelum
+  batch ini adalah bahan baku beli). **Inilah yang membuat subresep mungkin
+  tanpa model `Subresep` terpisah:** sebuah `BAHAN_SETENGAH_JADI` adalah HASIL
+  satu resep (`Resep.bahanHasilId`) sekaligus INPUT resep lain
+  (`KomponenResep.bahanId`) — dua peran atas satu baris `Bahan` yang sama, jadi
+  tidak ada tabel jembatan yang perlu ditambahkan.
+  Alternatif model `Subresep` terpisah (yang disebut rencana koreksi asli di
+  `DEFECT-LEDGER.md`) DITOLAK: ia akan menduplikasi seluruh permukaan `Bahan`
+  (SKU, satuan dasar, stok minimum, stok, mutasi, opname) untuk entitas yang
+  secara persediaan berperilaku identik dengan bahan biasa, dan memaksa
+  `KomponenResep` bercabang dua (`bahanId?` XOR `subresepId?`) — memindahkan
+  masalah XOR ke tabel yang jauh lebih ramai, bukan menghilangkannya.
+
+- **Keputusan 2 — `Resep` menjadi kontainer bernama dengan sasaran XOR tiga
+  arah; penegakan CHECK constraint, bukan constraint Prisma palsu.**
+  `itemMenuId String @unique` dan `versi String` DIHAPUS. `Resep` kini
+  `(id, tenantId, nama, itemMenuId?, varianMenuId?, bahanHasilId?, status,
+  createdAt)` dan menargetkan TEPAT SATU dari ketiganya.
+  Prisma tidak dapat mengekspresikan XOR di DSL sama sekali. Penegak
+  sebenarnya adalah CHECK constraint Postgres di
+  `prisma/migrations/manual/002_resep_target_xor_check.sql`.
+  **Yang ditolak dan alasannya:**
+  - Tiga model terpisah (`ResepItemMenu`/`ResepVarian`/`ResepSubresep`) —
+    XOR menjadi terjamin struktural, TAPI `VersiResep`, `KomponenResep`,
+    `ProsesProduksi`, dan `ItemPesanan.resepVersiId` semuanya harus bercabang
+    tiga kali. XOR-nya cuma pindah satu lapis ke bawah dan menjadi tiga kali
+    lebih banyak.
+  - Diskriminator `jenisSasaran` + satu kolom `sasaranId` polimorfik — DITOLAK
+    karena membuang FK sungguhan (tidak ada referential integrity ke tabel mana
+    pun sama sekali), pelanggaran yang lebih berat daripada XOR tak tertegakkan.
+  - Meniru pola `@@unique` apa pun untuk "memalsukan" XOR — tidak ada bentuk
+    `@@unique` yang mengekspresikan "tepat satu dari tiga kolom non-null";
+    menuliskan sesuatu yang tampak menegakkannya lebih berbahaya daripada tidak
+    ada (prinsip yang sama dengan ADR-021 Keputusan 3).
+  - **KEJUJURAN YANG WAJIB DINYATAKAN:** file SQL manual di repo ini **belum
+    pernah dieksekusi terhadap Postgres mana pun** — tidak ada database di
+    environment correction-loop (`ALT-DEF-029`), sama seperti
+    `001_konfigurasi_qris_partial_unique.sql` yang sudah ada sejak batch QRIS.
+    Sampai migrasi nyata dijalankan, invariant XOR **HANYA** dijaga guard
+    level-aplikasi dan TIDAK terjamin di level data.
+
+- **Keputusan 3 — `VersiResep` sebagai entitas, dan "satu versi AKTIF per
+  resep" ditegakkan partial unique index, bukan `@@unique([resepId, status])`.**
+  `VersiResep(id, tenantId, resepId, nomorVersi, berlakuSejak, berlakuSampai?,
+  jumlahHasil, satuanHasilId, penyusutanPersen, snapshotBiaya?, status,
+  createdAt)` dengan `@@unique([resepId, nomorVersi])` dan enum
+  `StatusVersiResep` (`DRAF`/`AKTIF`/`NONAKTIF`/`ARSIP`).
+  - `jumlahHasil` + `satuanHasilId` = yield satu batch (`ALT-RSP-006`).
+  - `penyusutanPersen` = susut wajar produksi (`ALT-RSP-007`), `Decimal` karena
+    persen pecahan.
+  - `snapshotBiaya` = HPP terhitung saat versi DIAKTIFKAN (`ALT-RSP-012`),
+    `Int` rupiah bulat per ADR-005, nullable karena versi `DRAF` belum pernah
+    diaktifkan sehingga belum punya biaya terhitung. Ia SNAPSHOT, bukan
+    kolom turunan yang dihitung ulang tiap baca — kalau dihitung ulang, harga
+    bahan hari ini akan menulis ulang HPP transaksi tahun lalu, yaitu persis
+    defect yang sedang diperbaiki.
+  - **Satu versi AKTIF per resep:** persoalan yang IDENTIK dengan "satu
+    `KonfigurasiQris` AKTIF per outlet" (ADR-021 Keputusan 3) dan ditangani
+    dengan cara yang sama persis: partial unique index Postgres di
+    `prisma/migrations/manual/003_versi_resep_satu_aktif.sql`
+    (`... ON versi_resep ("resepId") WHERE status = 'AKTIF'`), PLUS guard
+    transaksi level-aplikasi. `@@unique([resepId, status])` DITOLAK TEGAS: ia
+    akan melarang satu resep punya lebih dari satu versi `NONAKTIF`/`ARSIP`,
+    padahal riwayat versi lama yang menumpuk **adalah seluruh alasan
+    keberadaan model ini**. Constraint yang tampak menegakkan aturan padahal
+    tidak, mematikan kewaspadaan reviewer berikutnya.
+  - **Keterbatasan jujur:** file SQL tersebut, sekali lagi, **belum pernah
+    dijalankan**. Aturan satu-AKTIF saat ini tidak aman terhadap race condition
+    dua request `activate-version` bersamaan.
+  - `berlakuSejak`/`berlakuSampai` SENGAJA tidak dipakai sebagai penentu versi
+    aktif (itu tugas `status` + index parsial); ia dipakai untuk audit dan
+    untuk menjawab "resep mana yang berlaku pada tanggal X" secara historis.
+    Dua sumber kebenaran untuk "aktif" akan saling bertentangan.
+
+- **Keputusan 4 — `KomponenResep` menggantikan `ResepBahan` SEPENUHNYA, dan
+  menggantung pada `versiResepId` BUKAN `resepId`.**
+  `KomponenResep(id, tenantId, versiResepId, bahanId, jumlah, satuanId,
+  opsional, createdAt)`, `@@unique([versiResepId, bahanId])` (dua baris untuk
+  bahan yang sama membuat HPP dan pemotongan stok ambigu).
+  **`versiResepId`, bukan `resepId`, adalah seluruh inti perbaikan defect ini.**
+  Kalau komposisi tetap menggantung pada `Resep`, membuat `VersiResep` tidak
+  mengubah apa pun secara fungsional: mengubah komposisi tetap akan menulis
+  ulang HPP seluruh transaksi lampau, dan `VersiResep` hanya menjadi tabel
+  metadata dekoratif. Versioning yang komponennya tidak ikut ter-versi adalah
+  versioning palsu.
+  `opsional` menandai komponen yang boleh dilewati (garnish) tanpa membuat
+  resep dianggap tidak lengkap.
+  **`ResepBahan` DIHAPUS, bukan di-deprecate.** Tidak ada satu pun model lain
+  di skema yang merujuknya (dicek: hanya `Bahan`, `Satuan`, `Resep` yang punya
+  back-relation ke sana, ketiganya diperbarui di batch ini), belum ada kode
+  aplikasi, belum ada migrasi yang pernah dijalankan, dan karena itu belum ada
+  satu baris data pun. Membiarkannya berdampingan dengan `KomponenResep` akan
+  menciptakan dua sumber kebenaran untuk komposisi resep — persis kelas defect
+  yang sedang diperbaiki. `docs/database/03-resep-bahan.md` diperbarui.
+
+- **Keputusan 5 — modifier mengubah resep lewat `KomponenResepModifier` dengan
+  aksi TAMBAH/KURANGI/GANTI, menggantung pada versi.**
+  `KomponenResepModifier(id, tenantId, versiResepId, modifierOpsiId, aksi,
+  bahanId, bahanPenggantiId?, jumlah, satuanId, createdAt)` +
+  enum `AksiKomponenModifier`, `@@unique([versiResepId, modifierOpsiId, bahanId])`.
+  Menggantung pada `versiResepId` dengan alasan yang sama seperti Keputusan 4:
+  efek modifier ikut ter-snapshot bersama versinya, sehingga "extra cheese"
+  yang dulu +20g dan sekarang +30g tidak menulis ulang pesanan lampau.
+  - **Mengapa tidak ada nilai enum `HAPUS` terpisah:** "no onion" dimodelkan
+    sebagai `KURANGI` dengan `jumlah` sebesar jumlah komponen tersebut. Nilai
+    `HAPUS` terpisah akan menciptakan dua jalur kode untuk operasi aritmetika
+    yang sama (kurangi sebagian vs kurangi seluruhnya) dan membuat kolom
+    `jumlah` bermakna-ganda/diabaikan pada satu nilai enum saja. Konsekuensi
+    yang diterima sadar: menghapus komponen memerlukan aplikasi membaca jumlah
+    komponen dasar terlebih dulu; ini dinilai lebih murah daripada percabangan
+    enum permanen.
+  - `bahanPenggantiId` nullable dan HANYA bermakna saat `aksi = GANTI`. Ini
+    invariant level-aplikasi lain yang tidak bisa diekspresikan Prisma; TIDAK
+    ditambahkan CHECK constraint terpisah untuknya pada batch ini karena
+    konsekuensi pelanggarannya adalah kolom yang diabaikan, bukan data
+    finansial yang salah — dicatat di sini agar tidak terlihat sebagai
+    kelalaian.
+  - Alternatif "resep terpisah per kombinasi modifier" DITOLAK: jumlah
+    kombinasi tumbuh kombinatorial (n opsi -> 2^n resep) untuk informasi yang
+    sepenuhnya turunan.
+
+- **Keputusan 6 — `ProsesProduksi`/`ProsesProduksiBaris`/`BatchProduksi` dan
+  `KonversiSatuan`.**
+  - `ProsesProduksi(id, tenantId, outletId, versiResepId, jumlahTarget,
+    jumlahAktual?, status, dimulaiPada?, diselesaikanPada?, dibuatOlehId,
+    createdAt)` + enum `StatusProsesProduksi`
+    (`DRAF`/`BERJALAN`/`SELESAI`/`DIBATALKAN`). Composite-FK ke `Outlet` dan
+    `VersiResep` per ADR-013; relasi ke `Pengguna` sengaja TIDAK di-composite
+    (ADR-013 poin 5). `jumlahAktual` nullable karena hanya terisi saat SELESAI
+    — selisih target vs aktual adalah realisasi vs rencana (`ALT-RSP-009`).
+    Ini menggantikan `RencanaProduksiHarian` yang disebut rencana koreksi asli:
+    rencana dan realisasi digabung dalam SATU baris ber-state-machine, bukan
+    dua tabel yang harus direkonsiliasi (dan yang tanpa FK di antara keduanya
+    akan menjadi sumber ketidakcocokan diam-diam).
+  - `ProsesProduksiBaris(id, tenantId, prosesProduksiId, bahanId,
+    jumlahDipakai, satuanId)` — konsumsi AKTUAL, sengaja terpisah dari
+    `KomponenResep` (yang hanya rencana per satuan hasil). Tanpa baris aktual,
+    susut nyata tidak pernah bisa dibandingkan dengan `penyusutanPersen` yang
+    diasumsikan, dan `ALT-RSP-007` menjadi angka yang tidak pernah divalidasi.
+  - `BatchProduksi(id, tenantId, outletId, prosesProduksiId, bahanHasilId,
+    nomorBatch, jumlah, satuanId, tanggalProduksi, tanggalKedaluwarsa?, status,
+    createdAt)` + enum `StatusBatchProduksi`
+    (`TERSEDIA`/`HABIS`/`KEDALUWARSA`/`DIBUANG`), `@@unique([tenantId, nomorBatch])`
+    dan `@@unique([tenantId, id])` (yang terakhir disiapkan agar model
+    persediaan/FEFO batch berikutnya bisa memakai composite-FK ke sini).
+    `KEDALUWARSA` dipisahkan dari `DIBUANG` karena berbeda konsekuensi
+    akuntansi: yang satu konsekuensi tanggal, yang satu keputusan manusia
+    beralasan.
+  - `KonversiSatuan(id, tenantId, satuanDariId, satuanKeId, faktor, createdAt)`,
+    `@@unique([tenantId, satuanDariId, satuanKeId])` (`ALT-RSP-008`). `faktor`
+    `Decimal` karena ADR-005 mewajibkan `Int` HANYA untuk nilai uang rupiah;
+    faktor konversi butuh pecahan (ons -> gram = 28.3495). Konversi disimpan
+    per TENANT, bukan per bahan seperti bunyi `ALT-RSP-008` ("per bahan"):
+    gram->kg bernilai 1000 untuk semua bahan, sehingga menyimpannya per bahan
+    berarti menduplikasi baris yang identik sebanyak jumlah bahan dan
+    mengundang inkonsistensi antar-baris. Konversi khusus-bahan (mis. 1 butir
+    telur = 55 gram, yang memang bergantung bahan) TIDAK dimodelkan di batch
+    ini — dicatat sebagai keterbatasan sadar, bukan kelalaian.
+  - `Satuan` mendapat `@@unique([tenantId, id])` baru agar seluruh model di
+    atas dapat memakai composite-FK `(tenantId, satuanId)` per ADR-013.
+
+- **Keputusan 7 — `ItemPesanan.resepVersiId` disambungkan menjadi FK
+  sungguhan (utang ADR-017 Keputusan 8 dilunasi).**
+  ADR-017 Keputusan 8 menambahkan kolom `resepVersiId String?` sebagai scalar
+  POLOS tanpa relasi apa pun, dengan alasan eksplisit bahwa `VersiResep` belum
+  ada, dan mencatat TODO untuk menyambungkannya. Batch ini membuat model
+  tersebut dan menambahkan
+  `resepVersi VersiResep? @relation(fields: [resepVersiId], references: [id])`.
+  Inilah yang membuat satu baris pesanan permanen menunjuk versi resep PERSIS
+  yang dipakai saat transaksi — melengkapi kolom `*Snapshot` dari ALT-DEF-016
+  (yang menjaga tampilan struk) dengan penjagaan sisi BIAYA (HPP). Tetap
+  nullable: item menu tanpa resep (mis. minuman botol) sah tidak punya versi
+  resep. FK ID tunggal, bukan composite — `ItemPesanan` tidak membawa
+  `tenantId` sendiri (baris di bawah `Pesanan`, lihat ADR-013), konsisten
+  dengan relasi `itemMenu`/`varianMenu` di model yang sama.
+  Assertion negatif di
+  `packages/test-support/src/architecture/pesanan-state-machine-snapshot-constraints.test.ts`
+  yang melarang relasi `resepVersi` DIBALIK menjadi assertion positif yang
+  mewajibkannya — ini pemenuhan follow-up, bukan pelonggaran.
+
+- **Keputusan 8 — SEAM ke ALT-DEF-008 (persediaan): batch ini TIDAK menulis
+  mutasi stok apa pun.** Reversal pemakaian bahan (`ALT-RSP-013`) dan
+  pemotongan stok otomatis (`ALT-RSP-011`) adalah teritori batch berikutnya.
+  Yang disiapkan di sini dan menjadi kontrak serah-terima:
+  1. `ProsesProduksiBaris` akan menjadi sumber `MutasiStok` `PRODUKSI_KELUAR`
+     (bahan terpakai) dan `BatchProduksi` sumber `PRODUKSI_MASUK` (hasil).
+  2. `KomponenResep` (lewat `ItemPesanan.resepVersi`) akan menjadi sumber
+     `KELUAR_PEMAKAIAN_RESEP` saat pesanan selesai. Karena `resepVersiId` kini
+     FK sungguhan, pemotongan itu dihitung dari versi YANG TERCATAT di baris
+     pesanan, bukan dari versi aktif saat ini — perbedaan yang menentukan
+     apakah reversal pesanan lama membalik jumlah yang benar.
+  3. Reversal WAJIB berupa baris mutasi PEMBALIK baru (ADR-006, no
+     hard-delete), tidak pernah menghapus/mengubah mutasi asal, dan besarannya
+     dihitung dari `resepVersiId` baris pesanan tersebut — bukan dari resep
+     aktif. Ini satu-satunya cara reversal pesanan berumur dua minggu
+     mengembalikan jumlah bahan yang benar setelah resep berubah.
+  4. `BatchProduksi.tanggalKedaluwarsa` dan `@@unique([tenantId, id])` sudah
+     tersedia untuk FEFO batch berikutnya.
+  Tidak ada model persediaan yang disentuh di batch ini.
+
+- **Cakupan yang SENGAJA TIDAK dikerjakan:** perhitungan HPP nyata
+  (`ALT-RSP-012` — itu kode, dan butuh model harga bahan terbaru yang belum
+  ada; `snapshotBiaya` hanya menyediakan kolomnya), pemotongan/reversal stok
+  (`ALT-RSP-011`/`ALT-RSP-013`, ALT-DEF-008), eksekusi kedua file SQL manual,
+  migrasi Postgres nyata (`ALT-DEF-029`), konversi satuan khusus-per-bahan,
+  service/handler resep & produksi, dan tenant-safety `VarianMenu`/
+  `ModifierOpsi` (dicatat sebagai `ALT-DEF-035`, bukan diperbaiki diam-diam di
+  sini karena itu domain menu).
+
 ## Status ringkas
 
 Semua ADR di atas berstatus **DITERIMA sebagai keputusan desain**, tetapi
 implementasinya di kode berstatus **BELUM DIKERJAKAN** kecuali skema Prisma awal
 (ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015, ADR-016,
-ADR-017, ADR-018, ADR-019, ADR-020, ADR-021 sudah tercermin di
+ADR-017, ADR-018, ADR-019, ADR-020, ADR-021, ADR-022 sudah tercermin di
 `prisma/schema/schema.prisma`).

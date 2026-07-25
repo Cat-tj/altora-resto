@@ -109,6 +109,31 @@ export const IZIN_SEED: readonly IzinSeedEntry[] = [
   { kode: "kasir.giliran.verifikasi", nama: "Verifikasi selisih kas giliran", domain: "kasir", deskripsi: "Supervisor memverifikasi/menandatangani selisih kas sebelum giliran final (ALT-KSR-012)." },
   { kode: "kasir.giliran.buka-kembali", nama: "Buka ulang giliran kasir", domain: "kasir", deskripsi: "Membuka kembali giliran yang sudah ditutup untuk koreksi (ALT-KSR-013) - wajib approval SUPERVISOR ke atas dan tercatat di audit log." },
 
+  // resep & produksi (baru, ALT-DEF-007 - lihat ADR-022 di
+  // docs/engineering/DECISION-LOG.md dan docs/keamanan/PERMISSION-MATRIX.md
+  // bagian 1a. MASTER-CHECKLIST.md sudah mereferensikan SELURUH kode di bawah
+  // sejak sebelumnya (ALT-RSP-001 s.d. ALT-RSP-013) tetapi tidak satu pun
+  // pernah ada di seed literal ini - genuinely hilang, bukan spekulatif.
+  //
+  // SENGAJA TIDAK DITAMBAHKAN: `resep.pemakaian.otomatis` (ALT-RSP-011).
+  // Kolom Aktor requirement itu adalah "sistem" dan pemicunya event internal
+  // pesanan-selesai; tidak ada aktor manusia yang bisa diberi/dicabut izinnya.
+  // Menjadikannya kode izin justru menyiratkan ada peran yang boleh
+  // menyelesaikan pesanan TANPA memotong stok - jalur penyimpangan yang tidak
+  // boleh ada. Alasan yang sama dengan `keamanan.qris.enkripsi` pada batch
+  // ALT-DEF-015. Diusulkan kolom Permission ALT-RSP-011 diubah jadi `-`;
+  // dicatat sebagai tambahan ALT-DEF-034.
+  { kode: "resep.kelola", nama: "Kelola resep", domain: "resep", deskripsi: "Membuat/mengubah kontainer Resep beserta sasarannya - tepat satu dari ItemMenu, VarianMenu, atau Bahan setengah jadi (ALT-RSP-001, invariant XOR ADR-022 Keputusan 2)." },
+  { kode: "resep.versi.kelola", nama: "Kelola versi resep", domain: "resep", deskripsi: "Membuat VersiResep baru beserta KomponenResep-nya dan MENGAKTIFKAN satu versi (ALT-RSP-002). Komposisi versi AKTIF/NONAKTIF/ARSIP tidak pernah bisa ditimpa - ia dirujuk ItemPesanan historis lewat ItemPesanan.resepVersiId (ADR-022 Keputusan 7)." },
+  { kode: "resep.varian.kelola", nama: "Kelola resep per varian", domain: "resep", deskripsi: "Mengatur resep khusus satu VarianMenu, mis. porsi jumbo memakai bahan lebih banyak (ALT-RSP-003). CATATAN: MASTER-CHECKLIST menyebut entitas `ResepVarian`; ADR-022 Keputusan 2 memodelkannya sebagai Resep dengan sasaran varianMenuId - aksinya sama, entitas penyimpannya berbeda (ALT-DEF-034)." },
+  { kode: "resep.modifier.kelola", nama: "Kelola efek modifier pada resep", domain: "resep", deskripsi: "Mengatur KomponenResepModifier: aksi TAMBAH/KURANGI/GANTI satu ModifierOpsi terhadap komposisi bahan sebuah versi resep, mis. 'extra cheese' +20g atau 'tanpa bawang' (ALT-RSP-004, ADR-022 Keputusan 5)." },
+  { kode: "resep.subresep.kelola", nama: "Kelola subresep", domain: "resep", deskripsi: "Mengatur resep yang menghasilkan Bahan berjenis BAHAN_SETENGAH_JADI beserta yield-nya (ALT-RSP-005/ALT-RSP-006). CATATAN: MASTER-CHECKLIST menyebut entitas `Subresep`; ADR-022 Keputusan 1 memodelkannya sebagai Bahan ber-jenis + Resep.bahanHasilId (ALT-DEF-034)." },
+  { kode: "resep.penyusutan.kelola", nama: "Kelola faktor penyusutan", domain: "resep", deskripsi: "Menetapkan persentase susut wajar produksi, mis. sayur dikupas berkurang 10% (ALT-RSP-007). CATATAN: MASTER-CHECKLIST menyebut entitas `FaktorPenyusutan`; kini kolom VersiResep.penyusutanPersen sehingga ikut ter-versi bersama resepnya (ALT-DEF-034)." },
+  { kode: "resep.konversi.kelola", nama: "Kelola konversi satuan", domain: "resep", deskripsi: "Mengatur KonversiSatuan antar satuan per tenant, mis. kg->gram = 1000 (ALT-RSP-008). Disimpan per tenant, bukan per bahan - lihat ADR-022 Keputusan 6." },
+  { kode: "resep.produksi.kelola", nama: "Kelola proses produksi", domain: "resep", deskripsi: "Membuat/memulai/menyelesaikan/membatalkan ProsesProduksi beserta BatchProduksi hasilnya (ALT-RSP-009/ALT-RSP-010). Penyelesaian produksi wajib Idempotency-Key - ia (kelak) memposting mutasi stok ganda PRODUKSI_KELUAR + PRODUKSI_MASUK." },
+  { kode: "resep.hpp.lihat", nama: "Lihat HPP resep", domain: "resep", deskripsi: "Membaca estimasi harga pokok penjualan sebuah resep dari harga bahan terbaru (ALT-RSP-012). Nilai yang TERSIMPAN di VersiResep.snapshotBiaya adalah HPP saat versi diaktifkan dan tidak pernah dihitung ulang." },
+  { kode: "resep.pemakaian.reversal", nama: "Balik pemakaian bahan resep", domain: "resep", deskripsi: "Membalik pemotongan stok resep saat pesanan/item dibatalkan setelah diproses (ALT-RSP-013). Selalu berupa mutasi PEMBALIK baru (ADR-006), dan besarannya dihitung dari ItemPesanan.resepVersiId - versi yang TERCATAT di baris pesanan, bukan versi aktif saat ini (ADR-022 Keputusan 8). Implementasi mutasinya adalah scope ALT-DEF-008." },
+
   // pengaturan
   { kode: "pengaturan.kelola", nama: "Kelola pengaturan", domain: "pengaturan", deskripsi: "Mengubah pengaturan tenant/outlet." },
 

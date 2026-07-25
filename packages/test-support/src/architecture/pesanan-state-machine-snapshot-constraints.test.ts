@@ -170,17 +170,26 @@ export function jalankanSemuaAssertion(): void {
   ]) {
     assertContains(itemPesananBody, kolom, `ItemPesanan harus punya kolom snapshot ${kolom} (ALT-DEF-016).`);
   }
-  // resepVersiId harus scalar polos String? (forward-ref tanpa FK, ADR-017 Keputusan 8) -
-  // dicek sebagai deklarasi FIELD sungguhan (awal baris, bukan sekadar disebut di komentar).
+  // DIBALIK PADA BATCH ALT-DEF-007 (ADR-022 Keputusan 7) - INI BUKAN
+  // PELONGGARAN ASSERTION, MELAINKAN PEMENUHAN FOLLOW-UP YANG MEMANG DIJANJIKAN.
+  //
+  // ADR-017 Keputusan 8 mendeklarasikan `resepVersiId` sebagai scalar POLOS
+  // "pada batch ini" secara eksplisit-sementara, karena model `VersiResep`
+  // belum ada dan Prisma tidak bisa merujuk model yang tidak eksis. Utang itu
+  // dicatat sebagai TODO di schema.prisma. Batch ALT-DEF-007 membuat
+  // `VersiResep` dan MENYAMBUNG FK-nya, sehingga assertion lama (`resepVersi`
+  // TIDAK boleh ada) kini menegakkan keadaan yang justru SALAH. Ia diganti
+  // dengan assertion yang berlawanan arah dan LEBIH KUAT: relasi itu wajib ADA
+  // dan wajib menunjuk `VersiResep` lewat `resepVersiId`.
   assertContains(
     itemPesananBody,
     "\n  resepVersiId          String?",
-    "ItemPesanan.resepVersiId harus dideklarasikan sebagai scalar String? polos (forward-ref tanpa FK, ADR-017 Keputusan 8).",
+    "ItemPesanan.resepVersiId harus tetap dideklarasikan sebagai scalar String? (nullable - item menu tanpa resep sah tidak punya versi resep).",
   );
-  assertNotContains(
+  assertContains(
     itemPesananBody,
-    "\n  resepVersi VersiResep",
-    "ItemPesanan TIDAK boleh punya field relasi Prisma sungguhan bernama resepVersi pada batch ini (model VersiResep belum ada, ADR-017 Keputusan 8).",
+    "resepVersi VersiResep? @relation(fields: [resepVersiId], references: [id])",
+    "ItemPesanan.resepVersi WAJIB kini menjadi relasi FK sungguhan ke VersiResep (bukan lagi scalar polos) - inilah yang membuat satu baris pesanan permanen menunjuk versi resep PERSIS yang dipakai saat transaksi, sehingga perubahan resep tidak pernah menulis ulang HPP/histori (ALT-DEF-007, ADR-022 Keputusan 7; utang yang dijanjikan ADR-017 Keputusan 8).",
   );
 
   // --- ALT-DEF-016: ItemPesananModifier snapshot fields ---

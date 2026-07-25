@@ -87,6 +87,14 @@ model Tenant {
   satuan                  Satuan[]
   bahan                   Bahan[]
   resep                   Resep[]
+  // ALT-DEF-007: model baru domain resep & produksi (ADR-022).
+  konversiSatuan          KonversiSatuan[]
+  versiResep              VersiResep[]
+  komponenResep           KomponenResep[]
+  komponenResepModifier   KomponenResepModifier[]
+  prosesProduksi          ProsesProduksi[]
+  prosesProduksiBaris     ProsesProduksiBaris[]
+  batchProduksi           BatchProduksi[]
   modifierGrup            ModifierGrup[]
   itemMenu                ItemMenu[]
   supplier                Supplier[]
@@ -165,6 +173,10 @@ model Outlet {
   tiketDapur              TiketDapur[]
   giliranKasir            GiliranKasir[]
   pembayaran              Pembayaran[]
+  // ALT-DEF-007: produksi bahan setengah jadi berjalan PER OUTLET (dapur
+  // outlet A tidak boleh mengklaim batch milik outlet B).
+  prosesProduksi          ProsesProduksi[]
+  batchProduksi           BatchProduksi[]
   // ALT-DEF-015: konfigurasi QRIS statis per outlet + audit perubahannya.
   konfigurasiQris         KonfigurasiQris[]
   riwayatKonfigurasiQris  RiwayatKonfigurasiQris[]
@@ -245,6 +257,8 @@ model Pengguna {
   pesananPenolakanDitolak         PesananPenolakan[]        @relation("PesananPenolakanDitolakOleh")
   pesananPembatalanDibatalkan     PesananPembatalan[]       @relation("PesananPembatalanDibatalkanOleh")
   pembayaranDikonfirmasi          Pembayaran[]              @relation("PembayaranDikonfirmasiOleh")
+  // ALT-DEF-007/ALT-RSP-009: pembuat proses produksi.
+  prosesProduksiDibuat            ProsesProduksi[]          @relation("ProsesProduksiDibuatOleh")
   qrisKonfirmasiDiverifikasi      QrisKonfirmasiManual[]    @relation("QrisDiverifikasiOleh")
   pembayaranRefundDisetujui       PembayaranRefund[]        @relation("RefundDisetujuiOleh")
   // ALT-DEF-014/ALT-DEF-015: aktor koreksi pembayaran dan konfigurasi QRIS.
@@ -770,7 +784,9 @@ model ItemMenu {
   varian                VarianMenu[]
   modifierGrup          ItemModifierGrup[]
   hargaOutlet           HargaItemOutlet[]       @relation("HargaItemOutletItemMenu")
-  resep                 Resep?
+  // ALT-DEF-007: BUKAN LAGI `Resep?` - `Resep.itemMenuId @unique` dihapus,
+  // satu item menu boleh punya lebih dari satu kontainer resep (ADR-022).
+  resep                 Resep[]
   itemPesanan           ItemPesanan[]
   rmPenjualanItemHarian RmPenjualanItemHarian[]
   aturanRoutingDapur    AturanRoutingDapur[]
@@ -788,6 +804,8 @@ model VarianMenu {
 
   itemMenu    ItemMenu      @relation(fields: [itemMenuId], references: [id])
   itemPesanan ItemPesanan[]
+  // ALT-DEF-007/ALT-RSP-003: resep khusus per varian (mis. porsi jumbo).
+  resep       Resep[]
 
   @@map("varian_menu")
 }
@@ -827,8 +845,10 @@ model ModifierOpsi {
   hargaTambahan  Int                 @default(0)
   status         StatusAktifNonaktif @default(AKTIF)
 
-  modifierGrup        ModifierGrup          @relation(fields: [modifierGrupId], references: [id])
-  itemPesananModifier ItemPesananModifier[]
+  modifierGrup          ModifierGrup            @relation(fields: [modifierGrupId], references: [id])
+  itemPesananModifier   ItemPesananModifier[]
+  // ALT-DEF-007/ALT-RSP-004: efek modifier ini terhadap komposisi bahan.
+  komponenResepModifier KomponenResepModifier[]
 
   @@map("modifier_opsi")
 }
@@ -855,24 +875,50 @@ model HargaItemOutlet {
 // 3. RESEP & BAHAN / BOM (docs/database/03-resep-bahan.md)
 // =====================================================================================
 
+// ALT-DEF-007/ALT-RSP-005 (ADR-022 Keputusan 1): diskriminator jenis item
+// persediaan. Inilah yang membuat SUBRESEP mungkin - sebuah
+// BAHAN_SETENGAH_JADI adalah HASIL dari satu resep (`Resep.bahanHasilId`)
+// sekaligus INPUT bagi resep lain (`KomponenResep.bahanId`). Tanpa
+// diskriminator ini tidak ada cara membedakan "tepung terigu" (dibeli dari
+// supplier) dari "adonan roti" (diproduksi internal lewat ProsesProduksi),
+// padahal keduanya dikonsumsi resep induk dengan cara yang sama.
+enum JenisBahan {
+  BAHAN_BAKU
+  BAHAN_SETENGAH_JADI
+  PRODUK_JADI
+  KEMASAN
+  BARANG_OPERASIONAL
+}
+
 model Bahan {
   id            String              @id
   tenantId      String
   nama          String
   kodeSku       String
   satuanDasarId String
+  // ALT-DEF-007: lihat enum JenisBahan di atas. Default BAHAN_BAKU karena
+  // seluruh baris yang sudah ada sebelum batch ini adalah bahan baku beli.
+  jenis         JenisBahan          @default(BAHAN_BAKU)
   stokMinimum   Int                 @default(0)
   status        StatusAktifNonaktif @default(AKTIF)
 
-  tenant          Tenant                  @relation(fields: [tenantId], references: [id])
-  satuanDasar     Satuan                  @relation(fields: [satuanDasarId], references: [id])
-  resepBahan      ResepBahan[]
-  stokBahan       StokBahan[]             @relation("StokBahanBahan")
-  poBaris         PurchaseOrderBaris[]
-  penerimaanBaris PenerimaanBarangBaris[]
-  mutasiStok      MutasiStok[]
-  opnameBaris     StokOpnameBaris[]
-  rmStokKritis    RmStokKritis[]
+  tenant                     Tenant                  @relation(fields: [tenantId], references: [id])
+  satuanDasar                Satuan                  @relation(fields: [satuanDasarId], references: [id])
+  // ALT-DEF-007: `resepBahan ResepBahan[]` DIHAPUS - model ResepBahan
+  // dibuang seluruhnya dan digantikan KomponenResep yang menggantung pada
+  // VersiResep (ADR-022 Keputusan 4).
+  komponenResep              KomponenResep[]
+  komponenResepModifier      KomponenResepModifier[] @relation("KomponenResepModifierBahan")
+  komponenResepModifierGanti KomponenResepModifier[] @relation("KomponenResepModifierBahanPengganti")
+  resepHasil                 Resep[]                 @relation("ResepBahanHasil")
+  prosesProduksiBaris        ProsesProduksiBaris[]
+  batchProduksi              BatchProduksi[]         @relation("BatchProduksiBahanHasil")
+  stokBahan                  StokBahan[]             @relation("StokBahanBahan")
+  poBaris                    PurchaseOrderBaris[]
+  penerimaanBaris            PenerimaanBarangBaris[]
+  mutasiStok                 MutasiStok[]
+  opnameBaris                StokOpnameBaris[]
+  rmStokKritis               RmStokKritis[]
 
   @@unique([tenantId, kodeSku])
   // ALT-DEF-010: agar StokBahan/MutasiStok/RmStokKritis bisa memakai
@@ -887,11 +933,45 @@ model Satuan {
   nama     String
   simbol   String
 
-  tenant     Tenant       @relation(fields: [tenantId], references: [id])
-  bahan      Bahan[]
-  resepBahan ResepBahan[]
+  tenant                Tenant                  @relation(fields: [tenantId], references: [id])
+  bahan                 Bahan[]
+  // ALT-DEF-007: `resepBahan ResepBahan[]` DIHAPUS bersama model ResepBahan.
+  konversiDari          KonversiSatuan[]        @relation("KonversiSatuanDari")
+  konversiKe            KonversiSatuan[]        @relation("KonversiSatuanKe")
+  versiResepHasil       VersiResep[]            @relation("VersiResepSatuanHasil")
+  komponenResep         KomponenResep[]
+  komponenResepModifier KomponenResepModifier[]
+  prosesProduksiBaris   ProsesProduksiBaris[]
+  batchProduksi         BatchProduksi[]
 
+  // ALT-DEF-007/ADR-013: agar KonversiSatuan/VersiResep/KomponenResep/
+  // ProsesProduksiBaris/BatchProduksi (yang semuanya membawa tenantId
+  // sendiri) bisa memakai composite-FK (tenantId, satuanId) -> Satuan(tenantId, id).
+  @@unique([tenantId, id])
   @@map("satuan")
+}
+
+// ALT-DEF-007/ALT-RSP-008 (ADR-022 Keputusan 6): tabel konversi antar satuan
+// per tenant. `faktor` adalah pengali dari `satuanDari` ke `satuanKe`
+// (1 satuanDari = faktor satuanKe), mis. kg -> gram = 1000.
+// Decimal, BUKAN Int - ADR-005 mewajibkan Int hanya untuk NILAI UANG rupiah;
+// faktor konversi butuh presisi pecahan (mis. lusin -> pcs = 12, tetapi
+// ons -> gram = 28.3495).
+model KonversiSatuan {
+  id           String   @id
+  tenantId     String
+  satuanDariId String
+  satuanKeId   String
+  faktor       Decimal
+  createdAt    DateTime @default(now())
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id])
+  // ADR-013: composite-FK (tenantId, satuanXId) -> Satuan(tenantId, id).
+  satuanDari Satuan @relation("KonversiSatuanDari", fields: [tenantId, satuanDariId], references: [tenantId, id])
+  satuanKe   Satuan @relation("KonversiSatuanKe", fields: [tenantId, satuanKeId], references: [tenantId, id])
+
+  @@unique([tenantId, satuanDariId, satuanKeId])
+  @@map("konversi_satuan")
 }
 
 enum StatusResep {
@@ -899,33 +979,291 @@ enum StatusResep {
   NONAKTIF
 }
 
+// ALT-DEF-007/ALT-RSP-002 (ADR-022 Keputusan 3): status satu VERSI resep.
+// Terpisah dari StatusResep (status kontainer resep) secara sengaja - sebuah
+// Resep AKTIF dapat memiliki banyak versi NONAKTIF/ARSIP sekaligus tepat satu
+// versi AKTIF. ARSIP dipisahkan dari NONAKTIF karena keduanya berbeda makna:
+// NONAKTIF = versi lama yang digantikan tapi masih relevan untuk dibaca,
+// ARSIP = versi yang sengaja disingkirkan dari daftar kerja. Tidak ada nilai
+// DIHAPUS - versi resep TIDAK PERNAH dihapus karena ItemPesanan historis
+// mereferensikannya (ADR-006, ADR-022 Keputusan 7).
+enum StatusVersiResep {
+  DRAF
+  AKTIF
+  NONAKTIF
+  ARSIP
+}
+
+// ALT-DEF-007 (ADR-022 Keputusan 2): `Resep` BUKAN LAGI 1:1 dengan ItemMenu.
+// Kolom `itemMenuId String @unique` dan `versi String` DIHAPUS. Resep kini
+// adalah KONTAINER bernama yang menargetkan TEPAT SATU dari tiga sasaran:
+//   - `itemMenuId`   -> resep dasar item menu           (ALT-RSP-001)
+//   - `varianMenuId` -> resep khusus satu varian/porsi  (ALT-RSP-003)
+//   - `bahanHasilId` -> SUBRESEP: hasilnya sebuah Bahan berjenis
+//                       BAHAN_SETENGAH_JADI               (ALT-RSP-005)
+//
+// INVARIANT XOR: TEPAT SATU dari ketiga kolom di atas boleh non-null. Prisma
+// TIDAK dapat mengekspresikan ini di DSL sama sekali. Penegakan sebenarnya
+// adalah CHECK constraint Postgres di
+// `prisma/migrations/manual/002_resep_target_xor_check.sql` - yang **belum
+// pernah dijalankan** terhadap database nyata (ALT-DEF-029). Sampai saat itu
+// invariant ini HANYA dijaga guard level-aplikasi. Jangan menganggapnya
+// terjamin. Lihat ADR-022 Keputusan 2 untuk alternatif yang ditolak.
 model Resep {
-  id         String      @id
-  tenantId   String
-  itemMenuId String      @unique
-  versi      String
-  status     StatusResep @default(AKTIF)
-  createdAt  DateTime    @default(now())
+  id           String      @id
+  tenantId     String
+  nama         String
+  itemMenuId   String?
+  varianMenuId String?
+  bahanHasilId String?
+  status       StatusResep @default(AKTIF)
+  createdAt    DateTime    @default(now())
 
-  tenant     Tenant       @relation(fields: [tenantId], references: [id])
-  itemMenu   ItemMenu     @relation(fields: [itemMenuId], references: [id])
-  resepBahan ResepBahan[]
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+  // ADR-013: composite-FK ke ItemMenu/Bahan (keduanya punya @@unique([tenantId, id])).
+  itemMenu   ItemMenu?   @relation(fields: [tenantId, itemMenuId], references: [tenantId, id])
+  // CATATAN TENANT-SAFETY (ALT-DEF-035): VarianMenu tidak membawa `tenantId`
+  // sama sekali (ia tidak termasuk model yang diaudit ADR-013), sehingga
+  // relasi ini TERPAKSA memakai FK ID tunggal - satu-satunya relasi di model
+  // ini yang tidak composite. Dicatat sebagai defect terpisah, bukan
+  // dilewati diam-diam.
+  varianMenu VarianMenu? @relation(fields: [varianMenuId], references: [id])
+  bahanHasil Bahan?      @relation("ResepBahanHasil", fields: [tenantId, bahanHasilId], references: [tenantId, id])
 
+  versi VersiResep[]
+
+  // Agar VersiResep bisa memakai composite-FK (tenantId, resepId).
+  @@unique([tenantId, id])
   @@map("resep")
 }
 
-model ResepBahan {
-  id       String  @id
-  resepId  String
-  bahanId  String
-  jumlah   Decimal
-  satuanId String
+// ALT-DEF-007/ALT-RSP-002/ALT-RSP-006/ALT-RSP-007 (ADR-022 Keputusan 3):
+// INTI perbaikan defect ini. Komposisi bahan TIDAK LAGI menggantung pada
+// `Resep` melainkan pada satu VERSI resep, sehingga mengubah resep berarti
+// membuat versi BARU - bukan menimpa komposisi lama yang masih dirujuk
+// ItemPesanan historis (`ItemPesanan.resepVersiId`).
+//
+// - `jumlahHasil` + `satuanHasilId` = YIELD satu batch versi ini
+//   (ALT-RSP-006, mis. 1 batch adonan = 5 kg).
+// - `penyusutanPersen` = susut wajar saat produksi (ALT-RSP-007, mis. sayur
+//   dikupas berkurang 10%). Decimal, bukan Int - ini persen pecahan.
+// - `snapshotBiaya` = HPP terhitung (ALT-RSP-012) pada saat versi ini
+//   DIAKTIFKAN, dalam RUPIAH BULAT -> Int per ADR-005. Nullable karena versi
+//   DRAF belum pernah diaktifkan sehingga belum punya biaya terhitung.
+//
+// SATU VERSI AKTIF PER RESEP: sama persis dengan masalah "satu KonfigurasiQris
+// AKTIF per outlet" (ADR-021 Keputusan 3) - butuh PARTIAL UNIQUE INDEX yang
+// tidak dapat diekspresikan DSL Prisma. `@@unique([resepId, status])` DITOLAK
+// TEGAS karena ia akan melarang satu resep punya lebih dari satu versi
+// NONAKTIF, padahal riwayat versi lama justru WAJIB menumpuk (ADR-006).
+// Penegak sebenarnya: `prisma/migrations/manual/003_versi_resep_satu_aktif.sql`
+// (BELUM PERNAH DIJALANKAN, ALT-DEF-029) + guard transaksi level-aplikasi.
+model VersiResep {
+  id               String           @id
+  tenantId         String
+  resepId          String
+  nomorVersi       Int
+  berlakuSejak     DateTime
+  berlakuSampai    DateTime?
+  jumlahHasil      Decimal
+  satuanHasilId    String
+  penyusutanPersen Decimal          @default(0)
+  snapshotBiaya    Int?
+  status           StatusVersiResep @default(DRAF)
+  createdAt        DateTime         @default(now())
 
-  resep  Resep  @relation(fields: [resepId], references: [id])
-  bahan  Bahan  @relation(fields: [bahanId], references: [id])
-  satuan Satuan @relation(fields: [satuanId], references: [id])
+  tenant      Tenant @relation(fields: [tenantId], references: [id])
+  resep       Resep  @relation(fields: [tenantId, resepId], references: [tenantId, id])
+  satuanHasil Satuan @relation("VersiResepSatuanHasil", fields: [tenantId, satuanHasilId], references: [tenantId, id])
 
-  @@map("resep_bahan")
+  komponen         KomponenResep[]
+  komponenModifier KomponenResepModifier[]
+  prosesProduksi   ProsesProduksi[]
+  itemPesanan      ItemPesanan[]
+
+  @@unique([resepId, nomorVersi])
+  @@unique([tenantId, id])
+  @@map("versi_resep")
+}
+
+// ALT-DEF-007/ALT-RSP-001 (ADR-022 Keputusan 4): MENGGANTIKAN `ResepBahan`
+// yang dihapus. Perbedaan yang menjadi seluruh inti perbaikan:
+// `versiResepId`, BUKAN `resepId`. Baris komposisi milik satu VERSI; kalau ia
+// tetap menggantung pada Resep, mengubah komposisi akan diam-diam menulis
+// ulang HPP seluruh transaksi lampau yang memakai resep tersebut.
+//
+// `opsional` menandai komponen yang boleh tidak dipakai (mis. garnish) -
+// pemotongan stok melewatinya bila outlet tidak menyediakannya, tanpa
+// membuat resep dianggap tidak lengkap.
+model KomponenResep {
+  id           String   @id
+  tenantId     String
+  versiResepId String
+  bahanId      String
+  jumlah       Decimal
+  satuanId     String
+  opsional     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  versiResep VersiResep @relation(fields: [tenantId, versiResepId], references: [tenantId, id])
+  bahan      Bahan      @relation(fields: [tenantId, bahanId], references: [tenantId, id])
+  satuan     Satuan     @relation(fields: [tenantId, satuanId], references: [tenantId, id])
+
+  // Satu bahan hanya boleh muncul sekali dalam satu versi resep - dua baris
+  // untuk bahan yang sama membuat perhitungan HPP dan pemotongan stok ambigu.
+  @@unique([versiResepId, bahanId])
+  @@map("komponen_resep")
+}
+
+// ALT-DEF-007/ALT-RSP-004 (ADR-022 Keputusan 5): aksi yang dilakukan sebuah
+// ModifierOpsi terhadap komposisi bahan versi resep.
+//   TAMBAH  - menambah `jumlah` dari `bahanId`      (mis. "extra cheese" +20g)
+//   KURANGI - mengurangi `jumlah` dari `bahanId`; menghilangkan seluruhnya
+//             dimodelkan sebagai KURANGI dengan jumlah = jumlah komponen
+//             ("no onion"). Tidak ada nilai HAPUS terpisah - lihat ADR-022
+//             Keputusan 5 untuk alasannya.
+//   GANTI   - `bahanId` diganti `bahanPenggantiId` sebanyak `jumlah`
+//             (mis. "pakai susu oat" menggantikan susu sapi).
+enum AksiKomponenModifier {
+  TAMBAH
+  KURANGI
+  GANTI
+}
+
+// ALT-DEF-007/ALT-RSP-004: efek satu ModifierOpsi terhadap satu bahan pada
+// satu VERSI resep. Menggantung pada `versiResepId` (bukan `resepId`) dengan
+// alasan yang sama seperti KomponenResep - efek modifier ikut ter-snapshot
+// bersama versinya.
+//
+// CATATAN TENANT-SAFETY (ALT-DEF-035): `modifierOpsiId` memakai FK ID
+// tunggal karena `ModifierOpsi` tidak membawa `tenantId` (tidak diaudit
+// ADR-013), sama seperti `Resep.varianMenu` di atas.
+model KomponenResepModifier {
+  id               String               @id
+  tenantId         String
+  versiResepId     String
+  modifierOpsiId   String
+  aksi             AksiKomponenModifier
+  bahanId          String
+  bahanPenggantiId String?
+  jumlah           Decimal
+  satuanId         String
+  createdAt        DateTime             @default(now())
+
+  tenant         Tenant       @relation(fields: [tenantId], references: [id])
+  versiResep     VersiResep   @relation(fields: [tenantId, versiResepId], references: [tenantId, id])
+  modifierOpsi   ModifierOpsi @relation(fields: [modifierOpsiId], references: [id])
+  bahan          Bahan        @relation("KomponenResepModifierBahan", fields: [tenantId, bahanId], references: [tenantId, id])
+  bahanPengganti Bahan?       @relation("KomponenResepModifierBahanPengganti", fields: [tenantId, bahanPenggantiId], references: [tenantId, id])
+  satuan         Satuan       @relation(fields: [tenantId, satuanId], references: [tenantId, id])
+
+  @@unique([versiResepId, modifierOpsiId, bahanId])
+  @@map("komponen_resep_modifier")
+}
+
+// ALT-DEF-007/ALT-RSP-009/ALT-RSP-010 (ADR-022 Keputusan 6).
+enum StatusProsesProduksi {
+  DRAF
+  BERJALAN
+  SELESAI
+  DIBATALKAN
+}
+
+// ALT-DEF-007/ALT-RSP-009: satu eksekusi produksi nyata di satu outlet -
+// "hari ini kita membuat 20 liter kaldu". `jumlahTarget` diisi saat
+// direncanakan, `jumlahAktual` baru terisi saat SELESAI (karena itu nullable);
+// selisih keduanya adalah realisasi vs rencana (ALT-RSP-009).
+model ProsesProduksi {
+  id               String               @id
+  tenantId         String
+  outletId         String
+  versiResepId     String
+  jumlahTarget     Decimal
+  jumlahAktual     Decimal?
+  status           StatusProsesProduksi @default(DRAF)
+  dimulaiPada      DateTime?
+  diselesaikanPada DateTime?
+  dibuatOlehId     String
+  createdAt        DateTime             @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  outlet     Outlet     @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  versiResep VersiResep @relation(fields: [tenantId, versiResepId], references: [tenantId, id])
+  // ADR-013 poin 5: relasi ke Pengguna TIDAK PERNAH di-composite-kan ke tenant.
+  dibuatOleh Pengguna   @relation("ProsesProduksiDibuatOleh", fields: [dibuatOlehId], references: [id])
+
+  baris ProsesProduksiBaris[]
+  batch BatchProduksi[]
+
+  @@unique([tenantId, id])
+  @@map("proses_produksi")
+}
+
+// ALT-DEF-007/ALT-RSP-010: konsumsi bahan AKTUAL per proses produksi -
+// sengaja dicatat terpisah dari KomponenResep (yang hanya rencana per satuan
+// hasil). Tanpa baris aktual, susut nyata tidak pernah bisa dibandingkan
+// dengan `VersiResep.penyusutanPersen` yang diasumsikan.
+//
+// SEAM KE ALT-DEF-008 (persediaan): baris inilah yang akan menjadi sumber
+// MutasiStok PRODUKSI_KELUAR; `BatchProduksi` di bawah menjadi sumber
+// PRODUKSI_MASUK. Batch ini TIDAK membuat mutasi stok apa pun - lihat
+// ADR-022 Keputusan 8 (serah-terima).
+model ProsesProduksiBaris {
+  id               String  @id
+  tenantId         String
+  prosesProduksiId String
+  bahanId          String
+  jumlahDipakai    Decimal
+  satuanId         String
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id])
+  prosesProduksi ProsesProduksi @relation(fields: [tenantId, prosesProduksiId], references: [tenantId, id])
+  bahan          Bahan          @relation(fields: [tenantId, bahanId], references: [tenantId, id])
+  satuan         Satuan         @relation(fields: [tenantId, satuanId], references: [tenantId, id])
+
+  @@map("proses_produksi_baris")
+}
+
+// ALT-DEF-007/ALT-RSP-010: status satu batch hasil produksi. `KEDALUWARSA`
+// dan `DIBUANG` dipisahkan karena berbeda konsekuensi akuntansi (yang satu
+// otomatis dari tanggal, yang satu keputusan manusia dengan alasan).
+enum StatusBatchProduksi {
+  TERSEDIA
+  HABIS
+  KEDALUWARSA
+  DIBUANG
+}
+
+// ALT-DEF-007/ALT-RSP-010: batch bahan setengah jadi hasil satu proses
+// produksi. `tanggalKedaluwarsa` adalah kolom yang akan dipakai FEFO oleh
+// batch persediaan berikutnya (ALT-DEF-008) - nullable karena tidak semua
+// hasil produksi punya masa kedaluwarsa yang dicatat.
+model BatchProduksi {
+  id                 String              @id
+  tenantId           String
+  outletId           String
+  prosesProduksiId   String
+  bahanHasilId       String
+  nomorBatch         String
+  jumlah             Decimal
+  satuanId           String
+  tanggalProduksi    DateTime
+  tanggalKedaluwarsa DateTime?
+  status             StatusBatchProduksi @default(TERSEDIA)
+  createdAt          DateTime            @default(now())
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id])
+  outlet         Outlet         @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  prosesProduksi ProsesProduksi @relation(fields: [tenantId, prosesProduksiId], references: [tenantId, id])
+  bahanHasil     Bahan          @relation("BatchProduksiBahanHasil", fields: [tenantId, bahanHasilId], references: [tenantId, id])
+  satuan         Satuan         @relation(fields: [tenantId, satuanId], references: [tenantId, id])
+
+  @@unique([tenantId, nomorBatch])
+  // Agar model persediaan/FEFO batch berikutnya (ALT-DEF-008) bisa memakai
+  // composite-FK (tenantId, batchProduksiId) -> BatchProduksi(tenantId, id).
+  @@unique([tenantId, id])
+  @@map("batch_produksi")
 }
 
 // =====================================================================================
@@ -1455,16 +1793,23 @@ model ItemPesanan {
   pajakSnapshot         Int     @default(0)
   serviceChargeSnapshot Int     @default(0)
   totalBarisSnapshot    Int
-  // Forward-reference ke VersiResep (model BELUM ADA - scope ALT-DEF-008,
-  // batch resep-versioning berikutnya). Sengaja scalar String? POLOS tanpa
-  // relasi FK apa pun pada batch ini - lihat ADR-017 Keputusan 3. TODO(batch
-  // ALT-DEF-008/resep-versioning): tambahkan `resepVersi VersiResep? @relation(...)`
-  // begitu model VersiResep ada, dan migrasikan kolom ini jadi FK sungguhan.
+  // ALT-DEF-007 (ADR-022 Keputusan 7): TIDAK LAGI scalar polos. Kolom ini
+  // ditambahkan batch ALT-DEF-005/ADR-017 Keputusan 3 sebagai
+  // forward-reference tanpa FK karena model `VersiResep` belum ada; batch
+  // ALT-DEF-007 membuat model tersebut dan MENYAMBUNG FK-nya di bawah -
+  // itulah yang membuat satu baris pesanan permanen menunjuk versi resep
+  // PERSIS yang dipakai saat transaksi, sehingga perubahan resep tidak
+  // pernah menulis ulang HPP/histori. Tetap nullable: item menu tanpa resep
+  // (mis. minuman botol) sah tidak punya versi resep.
   resepVersiId          String?
 
   pesanan    Pesanan     @relation(fields: [pesananId], references: [id])
   itemMenu   ItemMenu    @relation(fields: [itemMenuId], references: [id])
   varianMenu VarianMenu? @relation(fields: [varianMenuId], references: [id])
+  // ItemPesanan tidak membawa `tenantId` sendiri (baris di bawah Pesanan,
+  // lihat ADR-013) sehingga FK ini ID tunggal, konsisten dengan itemMenu/
+  // varianMenu di atas.
+  resepVersi VersiResep? @relation(fields: [resepVersiId], references: [id])
 
   modifier        ItemPesananModifier[]
   tiketDapurBaris TiketDapurBaris?

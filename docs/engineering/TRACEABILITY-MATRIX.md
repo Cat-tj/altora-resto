@@ -26,6 +26,18 @@ verifikasi selisih kas (itu `ALT-KSR-012`) DIKOREKSI. Domain Kasir
 kini lengkap dan terverifikasi baris-per-baris terhadap `MASTER-CHECKLIST.md`.
 Domain lain masih belum disinkronkan (`ALT-DEF-020`).
 
+**Diperbaiki pada batch ALT-DEF-007 (Resep & Produksi):** baris `ALT-RSP-002`
+sebelumnya **salah petakan** — ia diisi `MutasiStok` (jenis `KELUAR_PENJUALAN`)
+dengan aktor "sistem", padahal `ALT-RSP-002` di `MASTER-CHECKLIST.md` adalah
+**"Versi resep (VersiResep)"**; isi yang tercantum sesungguhnya milik
+`ALT-RSP-011` (pemotongan stok otomatis). Dikoreksi, dan seluruh 13 requirement
+`ALT-RSP-001` s.d. `ALT-RSP-013` kini lengkap serta terverifikasi baris-per-baris
+terhadap `MASTER-CHECKLIST.md`. Kolom "Entitas ERD" beberapa baris **sengaja
+berbeda** dari kolom Entitas di `MASTER-CHECKLIST.md` (`ResepVarian`,
+`Subresep`, `FaktorPenyusutan`, `RencanaProduksiHarian` — model yang ADR-022
+putuskan untuk TIDAK dibuat); yang perlu dikoreksi adalah checklist-nya, dicatat
+sebagai bagian `ALT-DEF-034`.
+
 | Requirement ID | Entitas ERD | Endpoint API | Rute UI | Permission | Status | Bukti Uji |
 |---|---|---|---|---|---|---|
 | ALT-PLT-001 | `Tenant`, `Pengguna`, `KeanggotaanTenant` | `POST /api/v1/tenant` (belum ada di kontrak v1, TODO tambah) | `/register` (belum ada di ROUTE-MAP, TODO tambah) | OWNER (pembuat) | BELUM DIKERJAKAN | - |
@@ -44,8 +56,19 @@ Domain lain masih belum disinkronkan (`ALT-DEF-020`).
 | ALT-MNU-002 | `VarianMenu` | `POST /api/v1/item-menu/{id}/varian` | `/resto/{outletSlug}/menu` | MANAJER | BELUM DIKERJAKAN | - |
 | ALT-MNU-003 | `ModifierGrup`, `ModifierOpsi`, `ItemModifierGrup` | `GET/POST /api/v1/modifier-grup` | `/resto/{outletSlug}/menu` | MANAJER | BELUM DIKERJAKAN | - |
 | ALT-MNU-004 | `HargaItemOutlet` | `POST /api/v1/item-menu/{id}/harga-outlet` | `/resto/{outletSlug}/menu` | MANAJER | BELUM DIKERJAKAN | - |
-| ALT-RSP-001 | `Resep`, `ResepBahan`, `Bahan`, `Satuan` | `GET/PUT /api/v1/resep/{itemMenuId}` | `/resto/{outletSlug}/menu/{id}/resep` | MANAJER | BELUM DIKERJAKAN | - |
-| ALT-RSP-002 | `MutasiStok` (jenis `KELUAR_PENJUALAN`) | dipicu internal saat `PATCH` status pesanan | - | sistem | BELUM DIKERJAKAN | - |
+| ALT-RSP-001 | `Resep` (kontainer bersasaran XOR), `VersiResep`, `KomponenResep`, `Bahan`, `Satuan` | `GET/POST /api/v1/resep`, `GET /api/v1/resep/{resepId}` | `/resto/{outletSlug}/menu/{id}/resep` | `resep.kelola` | BELUM DIKERJAKAN (schema+ADR SIAP, ALT-DEF-007) | `docs/engineering/RELEASE-EVIDENCE.md` (batch ALT-DEF-007) |
+| ALT-RSP-002 | `VersiResep`, `ItemPesanan.resepVersiId` (FK sungguhan sejak ALT-DEF-007) | `GET/POST /api/v1/resep/{resepId}/versi`, `POST /api/v1/resep/{resepId}/aktifkan-versi` | `/resto/{outletSlug}/menu/{id}/resep` | `resep.versi.kelola` | BELUM DIKERJAKAN (schema+ADR SIAP, ALT-DEF-007) | `docs/engineering/RELEASE-EVIDENCE.md` (batch ALT-DEF-007) |
+| ALT-RSP-003 | `Resep` dengan sasaran `varianMenuId` (BUKAN model `ResepVarian` - lihat ADR-022 Keputusan 2) | `POST /api/v1/resep` (body `varianMenuId`) | `/resto/{outletSlug}/menu/{id}/resep` | `resep.varian.kelola` | BELUM DIKERJAKAN (schema+ADR SIAP, ALT-DEF-007) | `docs/engineering/RELEASE-EVIDENCE.md` (batch ALT-DEF-007) |
+| ALT-RSP-004 | `KomponenResepModifier`, enum `AksiKomponenModifier` | `PUT /api/v1/versi-resep/{versiResepId}/modifier` | `/resto/{outletSlug}/menu/{id}/resep` | `resep.modifier.kelola` | BELUM DIKERJAKAN (schema+ADR SIAP, ALT-DEF-007) | `docs/engineering/RELEASE-EVIDENCE.md` (batch ALT-DEF-007) |
+| ALT-RSP-005 | `Bahan.jenis = BAHAN_SETENGAH_JADI` + `Resep.bahanHasilId` (BUKAN model `Subresep` - lihat ADR-022 Keputusan 1) | `POST /api/v1/resep` (body `bahanHasilId`), `GET /api/v1/bahan?jenis=` | `/resto/{outletSlug}/resep/subresep` | `resep.subresep.kelola` | BELUM DIKERJAKAN (schema+ADR SIAP, ALT-DEF-007) | `docs/engineering/RELEASE-EVIDENCE.md` (batch ALT-DEF-007) |
+| ALT-RSP-006 | `VersiResep.jumlahHasil`, `VersiResep.satuanHasilId` | `POST /api/v1/resep/{resepId}/versi` | `/resto/{outletSlug}/resep/subresep` | `resep.subresep.kelola` | BELUM DIKERJAKAN (schema+ADR SIAP, ALT-DEF-007) | `docs/engineering/RELEASE-EVIDENCE.md` (batch ALT-DEF-007) |
+| ALT-RSP-007 | `VersiResep.penyusutanPersen` (BUKAN model `FaktorPenyusutan`; ikut ter-versi bersama resepnya) | `POST /api/v1/resep/{resepId}/versi` | `/resto/{outletSlug}/resep/subresep` | `resep.penyusutan.kelola` | BELUM DIKERJAKAN (schema+ADR SIAP, ALT-DEF-007) | `docs/engineering/RELEASE-EVIDENCE.md` (batch ALT-DEF-007) |
+| ALT-RSP-008 | `KonversiSatuan` | `GET/POST /api/v1/konversi-satuan` | `/resto/{outletSlug}/resep/satuan` | `resep.konversi.kelola` | BELUM DIKERJAKAN (schema+ADR SIAP, ALT-DEF-007) | `docs/engineering/RELEASE-EVIDENCE.md` (batch ALT-DEF-007) |
+| ALT-RSP-009 | `ProsesProduksi` (rencana+realisasi dalam SATU baris ber-state-machine, menggantikan `RencanaProduksiHarian`) | `GET/POST /api/v1/produksi`, `POST /api/v1/produksi/{id}/mulai` | `/resto/{outletSlug}/resep/produksi` | `resep.produksi.kelola` | BELUM DIKERJAKAN (schema+ADR SIAP, ALT-DEF-007) | `docs/engineering/RELEASE-EVIDENCE.md` (batch ALT-DEF-007) |
+| ALT-RSP-010 | `ProsesProduksiBaris`, `BatchProduksi` | `POST /api/v1/produksi/{id}/selesaikan` (wajib `Idempotency-Key`), `GET /api/v1/batch-produksi` | `/resto/{outletSlug}/resep/produksi` | `resep.produksi.kelola` | BELUM DIKERJAKAN (schema+ADR SIAP, ALT-DEF-007) | `docs/engineering/RELEASE-EVIDENCE.md` (batch ALT-DEF-007) |
+| ALT-RSP-011 | `MutasiStok` (jenis pemakaian resep) dihitung dari `KomponenResep` versi yang tercatat di `ItemPesanan.resepVersiId` | internal (event pesanan selesai) | - | sistem (SENGAJA tanpa kode izin - lihat PERMISSION-MATRIX 1a) | BELUM DIKERJAKAN - scope `ALT-DEF-008` (persediaan), seam didokumentasikan ADR-022 Keputusan 8 | - |
+| ALT-RSP-012 | `VersiResep.snapshotBiaya` (Int rupiah, snapshot saat versi diaktifkan) | `GET /api/v1/resep/{resepId}/hpp` | `/resto/{outletSlug}/menu/{id}/resep` | `resep.hpp.lihat` | BELUM DIKERJAKAN - kolom sudah ada, perhitungannya butuh model harga bahan terbaru yang BELUM ADA | - |
+| ALT-RSP-013 | `MutasiStok` pembalik (ADR-006), besaran dihitung dari `ItemPesanan.resepVersiId` | internal (event pesanan dibatalkan) | - | `resep.pemakaian.reversal` | BELUM DIKERJAKAN - scope `ALT-DEF-008`, seam didokumentasikan ADR-022 Keputusan 8 | - |
 | ALT-PSD-001 | `StokBahan` | `GET /api/v1/stok-bahan` | `/resto/{outletSlug}/persediaan` | GUDANG | BELUM DIKERJAKAN | - |
 | ALT-PSD-002 | `MutasiStok` | `GET /api/v1/mutasi-stok`, `POST .../balik` | `/resto/{outletSlug}/persediaan/mutasi` | GUDANG | BELUM DIKERJAKAN | - |
 | ALT-PSD-003 | `StokOpname`, `StokOpnameBaris` | `POST /api/v1/stok-opname/*` | `/resto/{outletSlug}/persediaan/opname` | GUDANG | BELUM DIKERJAKAN | - |
