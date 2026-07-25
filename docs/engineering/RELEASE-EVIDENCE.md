@@ -1223,6 +1223,236 @@ khusus-per-bahan, service/handler/endpoint resep & produksi nyata, dan
 penegakan runtime invariant XOR/satu-versi-aktif. Karena itu status
 `ALT-DEF-007` adalah `SIAP_DIVERIFIKASI`, **BUKAN** `DITUTUP`.
 
+## Pass correction-loop 2026-07-25 (lanjutan): perbaikan ALT-DEF-008
+
+Cakupan: `ALT-DEF-008` (model persediaan tidak lengkap) — ledger stok sebagai
+sumber kebenaran tunggal, `LokasiStok`, `BatchStok` + seam ke `BatchProduksi`,
+`ReservasiStok`, `PenyesuaianStok`, `TransferStok`(+baris), `CatatanWaste`/
+`AlasanWaste`, `KebijakanPemesananUlang`, `PengaturanPersediaanOutlet`, dan
+state machine opname penuh. Lihat ADR-023/ADR-024/ADR-025 di
+`docs/engineering/DECISION-LOG.md`. Sekaligus menutup gap `ALT-DEF-032`
+(endpoint transfer stok tidak pernah ada di kontrak API).
+
+Commit: `37f4998` (schema+dokumen), `ef5ee1c` (test), dan commit dokumen
+status yang memuat entri ini.
+
+### 1. Toolchain Prisma (nyata, output disalin apa adanya)
+
+```
+$ npx prisma format --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 85ms 🚀
+
+$ DATABASE_URL="postgresql://u:p@localhost:5432/db" npx prisma validate --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+
+$ DATABASE_URL="postgresql://u:p@localhost:5432/db" npx prisma generate --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 1.16s
+
+$ npx tsc --noEmit -p packages/test-support
+(tanpa output)  TSC_EXIT=0
+
+$ git status --short          # setelah `prisma format` dijalankan ulang
+(tanpa output — format idempoten, tidak ada drift tersisa)
+```
+
+`DATABASE_URL` di atas adalah **string dummy**; tidak ada Postgres yang
+dihubungi. `validate`/`generate` memang tidak memerlukan koneksi — lihat
+`ALT-DEF-029`.
+
+**Seluruh composite-FK yang dicoba di batch ini berhasil**, termasuk dua pola
+yang baru dipakai pertama kali di sini:
+
+1. **Dua composite-FK outlet-level pada SATU model.** `TransferStok` memakai
+   `(outletAsalId, gudangAsalId) -> Gudang(outletId, id)` DAN
+   `(outletTujuanId, gudangTujuanId) -> Gudang(outletId, id)` sekaligus.
+   Prisma 5.20 menerimanya setelah `Gudang` diberi `@@unique([outletId, id])`
+   baru. Inilah yang menjamin di level database bahwa gudang asal benar-benar
+   milik outlet asal — pada operasi yang justru menyeberangi outlet.
+2. **Composite-FK 1:1 dengan komponen nullable.** `BatchStok.batchProduksi`
+   memakai `[tenantId, batchProduksiId]` dengan `batchProduksiId String?`,
+   didukung `@@unique([tenantId, batchProduksiId])`. Inilah seam yang
+   dijanjikan ADR-022 Keputusan 8 poin 4.
+
+Tidak ada fallback ke scalar+guard aplikasi yang diperlukan untuk composite-FK
+mana pun di batch ini. Fallback yang ADA di batch ini seluruhnya untuk
+invariant yang memang di luar jangkauan DSL Prisma — lihat bagian 4.
+
+### 2. Bukti test arsitektur (nyata, `node --experimental-strip-types`, Node v25.5.0)
+
+**Sebelum batch ini: 17 file test. Sesudah: 19 file** (2 file baru:
+`persediaan-ledger-reservasi-constraints.test.ts`,
+`prisma-client-shape-persediaan.test.ts`).
+
+Suite 17 file lama dijalankan **sebelum** perubahan apa pun (baseline: 17/17
+PASS) dan **sesudah** perubahan schema + `prisma format` (tetap 17/17 PASS).
+Karena itu 17 -> 19 adalah penambahan murni.
+
+```
+$ for f in packages/test-support/src/architecture/*.test.ts; do node --experimental-strip-types "$f"; done
+
+dapur-kds-multi-stasiun.test.ts                                PASS
+idempotency-outbox-notification-constraints.test.ts            PASS
+keanggotaan-outlet-constraints.test.ts                         PASS
+pembayaran-alokasi-metode-constraints.test.ts                  PASS
+persediaan-ledger-reservasi-constraints.test.ts                PASS
+pesanan-state-machine-snapshot-constraints.test.ts             PASS
+prisma-client-shape-auth-pin.test.ts                           PASS
+prisma-client-shape-dapur.test.ts                              PASS
+prisma-client-shape-pembayaran-qris.test.ts                    PASS
+prisma-client-shape-persediaan.test.ts                         PASS
+prisma-client-shape-pesanan.test.ts                            PASS
+prisma-client-shape-platform-infra.test.ts                     PASS
+prisma-client-shape-resep-produksi.test.ts                     PASS
+prisma-client-shape-tenant-outlet.test.ts                      PASS
+prisma-client-shape.test.ts                                    PASS
+qris-konfigurasi-constraints.test.ts                           PASS
+resep-versi-produksi-constraints.test.ts                       PASS
+sesi-auth-pin-constraints.test.ts                              PASS
+tenant-outlet-composite-constraints.test.ts                    PASS
+TOTAL: 19 file, PASS=19 FAIL=0
+```
+
+**Tidak ada regresi DAN tidak ada false-positive formatting pada batch ini.**
+Ini dinyatakan eksplisit karena batch sebelumnya (`ALT-DEF-033`) mengalami
+kegagalan palsu akibat `prisma format` menyelaraskan ulang lebar kolom
+antar-field. Sebab hal itu tidak terjadi di sini: seluruh assertion berbasis
+teks — baik 17 file lama maupun file baru — memakai helper
+`normalisasiSpasiHorizontal()`. Tidak ada satu pun needle assertion lama yang
+perlu disesuaikan di batch ini.
+
+### 3. Mutation testing (14 mutasi, setiap diff diverifikasi)
+
+Setiap mutasi menjalani DUA pemeriksaan sebelum hasilnya dipercaya:
+**(1) diff harus non-kosong** — batch sebelumnya pernah menemukan mutasi no-op
+yang menghasilkan "gagal dengan benar" palsu — dan **(2) test harus gagal.**
+
+```
+=== BASELINE (harus LULUS) ===
+✅ baseline lulus
+
+=== MUTASI ===
+✅ M1  ledger append-only: tambah updatedAt ke MutasiStok      diff 1 baris, test GAGAL dengan benar
+✅ M2  enum lama dihidupkan kembali (KELUAR_PENJUALAN)         diff 1 baris, test GAGAL dengan benar
+✅ M3  status opname lama dihidupkan (BERLANGSUNG)             diff 1 baris, test GAGAL dengan benar
+✅ M4  kuantitasFisik dijadikan non-null lagi                  diff 2 baris, test GAGAL dengan benar
+✅ M5  seam BatchProduksi diputus (@@unique dihapus)           diff 2 baris, test GAGAL dengan benar
+✅ M6  BatchStok diberi kolom cache sisa                       diff 1 baris, test GAGAL dengan benar
+✅ M7  ReservasiStok digantung pada Pesanan, bukan baris       diff 2 baris, test GAGAL dengan benar
+✅ M8  CatatanWaste.alasanWasteId dijadikan nullable           diff 2 baris, test GAGAL dengan benar
+✅ M9  stok negatif diizinkan secara default                   diff 2 baris, test GAGAL dengan benar
+✅ M10 composite-FK transfer diturunkan ke tenant-level        diff 2 baris, test GAGAL dengan benar
+✅ M11 indeks FEFO dihapus                                     diff 2 baris, test GAGAL dengan benar
+✅ M12 kode izin koarse lama dihidupkan kembali                diff 1 baris, test GAGAL dengan benar
+✅ M13 izin sistem spekulatif ditambahkan                      diff 1 baris, test GAGAL dengan benar
+✅ M14 partial index NULL-semantics kehilangan klausa WHERE    diff 2 baris, test GAGAL dengan benar
+
+=== VERIFIKASI PEMULIHAN (harus LULUS lagi) ===
+✅ pulih, lulus
+```
+
+**M14 menemukan assertion VACUOUS yang nyata pada run pertama** — dicatat di
+sini karena inilah nilai sesungguhnya mutation testing pada batch ini. Versi
+awal test memeriksa `"ON stok_bahan"` dan `'WHERE "lokasiStokId" IS NULL'`
+sebagai DUA needle terpisah. File SQL 004 memuat **dua** partial index yang
+keduanya berklausa `WHERE "lokasiStokId" IS NULL` (satu untuk `stok_bahan`,
+satu untuk `stok_opname_baris`), sehingga menghapus klausa `WHERE` dari index
+PERTAMA tetap LOLOS — needle-nya dipenuhi index KEDUA. Output run pertama:
+
+```
+❌ M14 partial index NULL-semantics kehilangan klausa WHERE: diff 2 baris DITERAPKAN, tetapi test tetap LULUS -> ASSERTION VACUOUS
+```
+
+Perbaikan: setiap index kini diperiksa sebagai SATU pernyataan utuh
+(`ON stok_bahan ("gudangId", "bahanId") WHERE "lokasiStokId" IS NULL;`),
+bukan potongan-potongan yang bisa saling menutupi. Setelah perbaikan 14/14
+mutasi tertangkap. Tanpa langkah verifikasi-diff + mutasi ini, test akan tampak
+lulus sambil sesungguhnya **tidak menjaga sama sekali** satu-satunya penegak
+level-data untuk keunikan baris saldo agregat.
+
+Verifikasi tidak ada residu mutasi yang tertinggal di working tree:
+
+```
+$ git status --short
+?? packages/test-support/src/architecture/persediaan-ledger-reservasi-constraints.test.ts
+?? packages/test-support/src/architecture/prisma-client-shape-persediaan.test.ts
+```
+
+(hanya dua file test baru — tidak ada modifikasi tak terduga pada
+schema/seed/SQL.)
+
+### 4. KETERBATASAN YANG WAJIB DINYATAKAN — invariant yang TIDAK dijamin database
+
+Ini bagian terpenting dari entri ini. Domain persediaan punya invariant
+level-aplikasi jauh lebih banyak daripada domain mana pun sebelumnya, dan
+**tidak satu pun dari daftar di bawah dijamin database pada saat ini.**
+
+Dua file SQL manual **baru** ditambahkan dan, seperti tiga file sebelumnya,
+**BELUM PERNAH DIEKSEKUSI terhadap Postgres mana pun** (`ALT-DEF-029`):
+
+1. `prisma/migrations/manual/004_stok_bahan_agregat_gudang_unik.sql` — dua
+   partial unique index yang menutup celah NULL-semantics pada `stok_bahan`
+   dan `stok_opname_baris`.
+2. `prisma/migrations/manual/005_mutasi_stok_append_only_dan_pembalik.sql` —
+   trigger append-only (`BEFORE UPDATE OR DELETE`) dan trigger kesepadanan
+   mutasi pembalik.
+
+| # | Invariant | Penegak yang direncanakan | Status |
+|---|---|---|---|
+| 1 | `mutasi_stok` append-only | trigger, SQL manual `005` | BELUM DIJALANKAN |
+| 2 | Pembalik berlawanan tanda & sepadan (tenant/gudang/bahan) | trigger, SQL manual `005` | BELUM DIJALANKAN |
+| 3 | Satu baris `StokBahan` agregat per (gudang, bahan) | partial unique index, SQL manual `004` | BELUM DIJALANKAN |
+| 4 | Satu baris opname agregat per (opname, bahan) | partial unique index, SQL manual `004` | BELUM DIJALANKAN |
+| 5 | `StokBahan.kuantitas == SUM(MutasiStok.jumlah)` | job rekonsiliasi (kode, belum ditulis) | **TIDAK PERNAH DB-ENFORCED** |
+| 6 | `SUM(ReservasiStok AKTIF) <= saldo fisik` | guard transaksi + `SELECT ... FOR UPDATE` | **TIDAK PERNAH DB-ENFORCED** |
+| 7 | Stok tidak negatif (bila `izinkanStokNegatif = false`) | guard transaksi + `SELECT ... FOR UPDATE` | **TIDAK PERNAH DB-ENFORCED** |
+| 8 | Setiap `BatchProduksi` bahan setengah jadi melahirkan satu `BatchStok` | guard transaksi produksi | **TIDAK PERNAH DB-ENFORCED** |
+| 9 | `lokasiSumber`/`lokasiTujuan` wajib sesuai jenis mutasi | validasi service-layer | TIDAK DITEGAKKAN |
+| 10 | `gudangAsal != gudangTujuan`; `diterima <= dikirim <= diminta` | validasi service-layer | UTANG CHECK constraint |
+| 11 | `penghitungId != penyetujuId` pada opname | validasi service-layer | UTANG CHECK constraint |
+
+**Baris 5–9 TIDAK akan menjadi DB-enforced meski SELURUH lima file SQL manual
+dijalankan.** Ia invariant agregat (`SUM` lintas-baris) atau kondisional
+per-nilai-enum, yang memang berada di luar jangkauan constraint deklaratif
+Postgres maupun DSL Prisma. Dinyatakan eksplisit agar "jalankan migrasi" tidak
+disalahartikan sebagai penutup seluruh daftar ini.
+
+Konsekuensi konkret yang tidak boleh diabaikan:
+
+- Satu `UPDATE` langsung lewat `psql` — atau satu bug service layer — **dapat**
+  menulis ulang sejarah stok tanpa jejak apa pun. Append-only saat ini adalah
+  disiplin level-aplikasi semata.
+- Dua request pemakaian stok yang tiba bersamaan **dapat** membuat saldo
+  menjadi negatif meski `izinkanStokNegatif = false`, karena guard-nya adalah
+  baca-lalu-tulis tanpa penguncian yang terjamin di level data.
+- Sebuah mutasi "pembalik" dengan tanda yang SAMA (bukan berlawanan) **dapat**
+  tersimpan, dan ia akan MENGGANDAKAN pengurangan stok alih-alih
+  membatalkannya.
+
+Yang **DIJAMIN DB** pada integritas reversal hanyalah kardinalitasnya: satu
+mutasi dibalik paling banyak sekali (kolom `dibalikOlehId` tunggal, tidak ada
+tempat untuk pembalik kedua), dan satu pembalik membalik paling banyak satu
+mutasi asal (`@unique`). **Besaran dan tandanya tidak dijamin sama sekali.**
+
+### 5. Kesimpulan status
+
+Schema untuk `ALT-DEF-008` sudah benar secara sintaks (`format` + `validate`),
+tipe yang dihasilkan sudah benar secara bentuk (`generate` + `tsc --noEmit`),
+seluruh model/field/enum/constraint yang diklaim ADR-023/024/025 sudah
+dibuktikan ada lewat test struktur DAN test tipe yang **terbukti non-vacuous**
+(14 mutasi, satu di antaranya menemukan assertion vacuous nyata yang kemudian
+diperbaiki), dan **tidak ada regresi** pada 17 test arsitektur sebelumnya.
+
+**Belum ada:** migrasi Postgres nyata, eksekusi kelima file SQL manual, job
+rekonsiliasi cache-dari-ledger, algoritma alokasi FEFO/FIFO (skema sudah
+membawa seluruh kolom yang dibutuhkan — diverifikasi kolom per kolom di
+ADR-025 Keputusan 3 — tetapi algoritmanya adalah kode), service/handler/
+endpoint persediaan nyata, dan penegakan runtime seluruh invariant di tabel
+bagian 4. Karena itu status `ALT-DEF-008` adalah `SIAP_DIVERIFIKASI`,
+**BUKAN** `DITUTUP`.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```
