@@ -55,7 +55,8 @@ erDiagram
         string jenis "PEROLEHAN|PENUKARAN|PENYESUAIAN|PEMBALIKAN|KADALUARSA"
         int jumlah "positif=masuk, negatif=keluar"
         datetime kadaluarsaPada "nullable, hanya baris PEROLEHAN"
-        string dibalikOlehId FK "nullable, UK - reversal, pola MutasiStok"
+        string alasan "WAJIB (ADR-032)"
+        string membalikMutasiId FK "nullable UK - di baris PEMBALIK, ADR-032 (dulu dibalikOlehId)"
         string dicatatOlehId FK "nullable - null untuk baris sistem"
         string catatan "nullable"
         datetime createdAt
@@ -77,7 +78,8 @@ erDiagram
         int jumlah
         string pesananId FK "nullable"
         string hadiahStempelId FK "nullable, hanya baris PENUKARAN"
-        string dibalikOlehId FK "nullable, UK - reversal"
+        string alasan "WAJIB (ADR-032)"
+        string membalikMutasiId FK "nullable UK - di baris PEMBALIK, ADR-032"
         string dicatatOlehId FK "nullable"
         string catatan "nullable"
         datetime createdAt
@@ -90,7 +92,8 @@ erDiagram
         int jumlah "rupiah, positif=masuk, negatif=keluar"
         string pesananId FK "nullable"
         string pembayaranId FK "nullable - terisi bila dihasilkan oleh Pembayaran metode SALDO_TOKO"
-        string dibalikOlehId FK "nullable, UK - reversal"
+        string alasan "WAJIB (ADR-032)"
+        string membalikMutasiId FK "nullable UK - di baris PEMBALIK, ADR-032"
         string dicatatOlehId FK "nullable"
         string catatan "nullable"
         datetime createdAt
@@ -124,13 +127,18 @@ Catatan:
   `poinKumulatif` dan `PELANGGAN.saldoTokoCache` adalah **cache terdokumentasi**,
   bukan sumber kebenaran - pola identik `StokBahan`/`MutasiStok` (ADR-023).
   Bila cache dan ledger berbeda, ledger yang benar.
-- `POIN_RIWAYAT`/`LEDGER_STEMPEL`/`LEDGER_SALDO_TOKO` bersifat append-only
-  (no hard-delete, ADR-006); koreksi selalu berupa baris **PEMBALIK** baru
-  yang mereferensikan baris asal lewat `dibalikOlehId` (kolom tunggal +
-  unique = satu baris dibalik paling banyak sekali), pola identik
-  `MutasiStok.dibalikOlehId` (ADR-023 Keputusan 5). **Kejujuran wajib
-  dinyatakan:** "append-only" TIDAK ditegakkan database pada batch ini
-  (ALT-DEF-029, tidak ada Postgres nyata) - disiplin level-aplikasi semata.
+- `POIN_RIWAYAT`/`LEDGER_STEMPEL`/`LEDGER_SALDO_TOKO` bersifat append-only,
+  UNKONDISIONAL (no hard-delete, ADR-006); koreksi selalu berupa baris
+  **PEMBALIK** baru (dibuat lewat INSERT, tidak pernah UPDATE) yang
+  mereferensikan baris asal lewat `membalikMutasiId` (kolom di sisi
+  PEMBALIK, arah TERBALIK dari desain lama `dibalikOlehId` - lihat ADR-032,
+  redesain dari ADR-023 Keputusan 5/ADR-027). **DITEGAKKAN DATABASE dan
+  DIUJI NYATA** sejak batch ADR-032 (menutup ALT-DEF-043 - trigger
+  `ledger_tolak_ubah()`/`ledger_validasi_pembalik()`, fungsi GENERIK yang
+  sama dipakai `MutasiStok` juga, dipasang ke ketiga tabel ini di migrasi
+  `redesign_ledger_reversal_membalik_pattern` dan diverifikasi lewat
+  `ledger-reversal-membalik-invariants.test.ts`) - bukan lagi disiplin
+  level-aplikasi semata.
 - Kenaikan tier dievaluasi dari `poinKumulatif` terhadap
   `TIER_KEANGGOTAAN.minPoinKumulatif`, dijalankan sebagai proses terpisah
   (bukan trigger DB implisit) agar bisa diaudit.

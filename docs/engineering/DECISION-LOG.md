@@ -2724,3 +2724,204 @@ ditolak).
 teruji), tapi defect umbrella `ALT-DEF-044` sendiri TETAP TIDAK DITUTUP -
 checklist penutupan defect eksplisit meminta "concurrency test lulus" yang
 BELUM ditulis pada batch ini (scope batch berikutnya).
+
+## ADR-032: Redesain pola reversal ledger dari `dibalikOlehId` ke `membalikMutasiId`, trigger append-only generik, penutupan ALT-DEF-043
+
+**Konteks.** ADR-023 Keputusan 5 (dan ADR-027 yang mereplikasi bentuknya ke
+ledger keanggotaan) mendesain reversal lewat `dibalikOlehId String? @unique`
+di baris ASAL, menunjuk MAJU ke baris pembaliknya. Menandai "sudah dibalik"
+berarti meng-UPDATE baris asal - trigger append-only (`mutasi_stok_tolak_ubah`,
+ADR-031) karena itu harus punya SATU pengecualian eksplisit ("UPDATE hanya
+sah untuk mengisi `dibalikOlehId` dari NULL"). Instruksi batch ini eksplisit:
+desain ulang supaya baris asal **tidak pernah** di-UPDATE untuk alasan apa
+pun - append-only nol pengecualian. Sekaligus menutup `ALT-DEF-043`
+(`PoinRiwayat`/`LedgerStempel`/`LedgerSaldoToko` punya kolom `dibalikOlehId`
+tapi TIDAK PERNAH punya trigger yang menegakkannya - gap desain, bukan cuma
+"belum dijalankan").
+
+**Keputusan 1 - Pointer dipindah ke baris PEMBALIK (`membalikMutasiId`),
+menunjuk MUNDUR ke baris asal; `@unique` tetap di kolom ini, tapi maknanya
+berpindah sisi.** Dengan `dibalikOlehId` (lama), `@unique` ada di baris ASAL
+dan menjamin "satu baris asal dibalik paling banyak sekali" (baris asal
+adalah sisi tunggal). Dengan `membalikMutasiId` (baru), kolom - dan
+`@unique`-nya - pindah ke baris PEMBALIK. Ini BUKAN sekadar rename kosmetik:
+constraint `@unique` pada FK di sisi anak (baris pembalik) menegakkan aturan
+yang secara struktural BERBEDA dari "unique pada FK sembarang trivially
+true" - constraint ini secara aktif menolak INSERT baris pembalik KEDUA yang
+membawa nilai `membalikMutasiId` SAMA dengan baris pembalik pertama, yaitu
+"paling banyak SATU baris pembalik per baris asal". Dibuktikan bukan hanya
+diklaim: test `ledger-reversal-membalik-invariants.test.ts` meng-INSERT dua
+baris pembalik berbeda yang sama-sama menunjuk baris asal yang sama dan
+memverifikasi INSERT kedua gagal dengan error unique index, untuk KEEMPAT
+tabel ledger. "Sudah dibalik atau belum" untuk sebuah baris asal kini QUERY
+TURUNAN (`SELECT 1 FROM <table> WHERE "membalikMutasiId" = <id>`), bukan lagi
+kolom yang dibaca langsung - trade-off yang disengaja: satu index lookup
+tambahan saat query, ditukar dengan baris asal yang benar-benar tidak pernah
+tersentuh sejak dibuat.
+
+**Keputusan 2 - Trigger append-only menjadi REJECT-ALL tanpa pengecualian,
+dan menjadi SATU fungsi generik (`ledger_tolak_ubah()`) dipakai ULANG di
+KEEMPAT tabel ledger, bukan satu fungsi per tabel.** Ini konsekuensi
+langsung Keputusan 1: karena baris pembalik sekarang selalu dibuat lewat
+INSERT (bukan lagi UPDATE terhadap baris asal), tidak ada lagi UPDATE yang
+SAH untuk alasan apa pun - trigger append-only tidak perlu tahu APA PUN
+tentang daftar kolom tabel manapun (beda dari `mutasi_stok_tolak_ubah()`
+lama yang harus men-diff SETIAP kolom untuk mendeteksi "apakah ini UPDATE
+yang dikecualikan atau bukan"). Genericity di sini karena itu TRIVIAL DAN
+SEMPURNA sekaligus: fungsi menolak SEMUA UPDATE dan SEMUA DELETE tanpa
+syarat, apapun nama tabelnya (`TG_TABLE_NAME`/`OLD.id` dipakai murni untuk
+pesan error yang tetap spesifik per tabel). Satu fungsi, dipasang sebagai
+trigger `BEFORE UPDATE OR DELETE` di `mutasi_stok`, `poin_riwayat`,
+`ledger_stempel`, `ledger_saldo_toko` tanpa modifikasi maupun parameter -
+nol duplikasi logika, sekaligus desain yang secara struktural LEBIH KUAT
+(nol permukaan untuk kelas bug "pengecualian yang salah diperiksa", persis
+kelas bug yang diperbaiki ADR-031 Keputusan 3 untuk rantai
+pembalik-dari-pembalik pada versi lama).
+
+**Keputusan 3 - Trigger validasi-pembalik JUGA generik, lewat kombinasi
+`to_jsonb`/dynamic SQL untuk bagian yang sama di semua ledger + `TG_ARGV`
+untuk bagian domain-spesifik per tabel - opsi "100% dynamic diff seluruh
+kolom" DIPERTIMBANGKAN dan DITOLAK.** Desain (fungsi `ledger_validasi_pembalik()`,
+lihat migrasi untuk isi lengkap):
+- Bagian yang SELALU sama di keempat ledger (baris asal ditemukan, baris
+  asal bukan pembalik itu sendiri/larangan rantai, tenant sama, tanda
+  `jumlah` berlawanan, `alasan` wajib) di-hardcode SEKALI di badan fungsi -
+  ini aman digeneralisasi karena nama kolomnya (`tenantId`, `jumlah`,
+  `alasan`, `membalikMutasiId`) SAMA PERSIS di keempat tabel, bukan
+  kebetulan (mengikuti pola kolom yang sudah identik sejak ADR-023/ADR-027).
+  Dibaca lewat `to_jsonb(NEW)`/`to_jsonb(<baris asal>)` + `EXECUTE
+  format('SELECT to_jsonb(t) FROM %I t WHERE id = $1', TG_TABLE_NAME)` -
+  satu fungsi, tidak hardcode nama tabel.
+- Bagian yang BEDA per domain (`MutasiStok` butuh gudang/bahan/satuan/batch/
+  hargaPerolehan/lokasiSumber/lokasiTujuan sama; ledger keanggotaan hanya
+  butuh keanggotaanId atau pelangganId sama) diteruskan sebagai DAFTAR NAMA
+  KOLOM lewat `TG_ARGV` saat `CREATE TRIGGER` per tabel, dibandingkan dalam
+  satu loop generik di badan fungsi (`IS NOT DISTINCT FROM`, menangani
+  NULL=NULL dengan benar untuk kolom seperti `satuanId`/`batchStokId`/lokasi
+  yang memang boleh NULL pada jenis mutasi tertentu).
+
+  Opsi lain yang dipertimbangkan: mendiff SELURUH kolom secara otomatis
+  (mis. lewat `hstore`/`jsonb` diff tanpa daftar eksplisit) - DITOLAK karena
+  SALAH secara semantik, bukan cuma lebih rumit. Kolom seperti `id`,
+  `createdAt`, `dicatatOlehId`/`dibuatOlehId`, `catatan` MEMANG BOLEH (dan
+  HARUS) berbeda antara baris asal dan baris pembaliknya - itulah maksudnya
+  dua baris yang berbeda. "Kolom mana yang WAJIB sama untuk sebuah baris
+  dianggap pembalik yang valid" tetap domain knowledge yang harus dinyatakan
+  eksplisit per tabel; `TG_ARGV` adalah cara paling jelas menyatakannya
+  tanpa menduplikasi LOGIKA perbandingannya (badan fungsi/loop tetap satu,
+  hanya daftar argumennya yang beda per `CREATE TRIGGER`).
+
+**Keputusan 4 - Item #10 checklist (lokasi dibalik dengan benar): lokasi
+harus IDENTIK antara baris asal dan pembalik, BUKAN tertukar sumber<->tujuan.**
+Dipertimbangkan eksplisit: bila `MutasiStok` asal adalah `TRANSFER_KELUAR`
+dari lokasi A ke B, apakah baris pembalik yang benar punya
+`lokasiSumberId=B, lokasiTujuanId=A` (tertukar - "mengembalikan barang balik
+jalan") atau `lokasiSumberId=A, lokasiTujuanId=B` (identik - "membatalkan
+CATATAN transfer yang salah")? **Keputusan: IDENTIK.** Rasional: baris
+pembalik dalam desain ini adalah KOREKSI atas baris asal yang salah/perlu
+dibatalkan - ia menyatakan "baris asal ini, dengan lokasi PERSIS SAMA,
+sebenarnya tidak semestinya terjadi (atau perlu dikurangi) sebesar `jumlah`
+yang berlawanan tanda". ini BEDA secara bisnis dari "transfer balik" yang
+SAH (mis. barang yang sudah dipindah ke outlet B benar-benar dikirim balik
+secara fisik ke outlet A) - transfer balik yang sah adalah PERISTIWA BARU
+dengan `jenis=TRANSFER_KELUAR/TRANSFER_MASUK` dan dokumen `TransferStok` baru
+sendiri, BUKAN baris `membalikMutasiId` dari transfer sebelumnya. Menukar
+source<->dest pada baris pembalik akan salah menggambarkannya sebagai
+"pergerakan fisik baru ke arah berlawanan", padahal semantiknya adalah
+"catatan ini dibatalkan/dikoreksi", peristiwa yang tidak selalu melibatkan
+barang berpindah secara fisik lagi. Konsekuensi teknis: keputusan ini
+otomatis tercakup oleh loop equality generik Keputusan 3 (`lokasiSumberId`,
+`lokasiTujuanId` masuk daftar `TG_ARGV` untuk `mutasi_stok` sebagai kolom
+yang harus SAMA) - tidak butuh special-case terpisah. Dibuktikan dengan test
+eksplisit (`testMutasiStokReversalRejections`, kasus "Pembalik dengan lokasi
+sumber/tujuan TERTUKAR") yang meng-INSERT baris pembalik dengan lokasi
+tertukar dan memverifikasi DITOLAK, plus kasus positif dengan lokasi identik
+yang DITERIMA.
+
+**Keputusan 5 - `alasan String` (WAJIB, bukan nullable) ditambahkan ke
+KEEMPAT tabel ledger, untuk SETIAP baris (bukan hanya baris pembalik).**
+Instruksi eksplisit "reference dan alasan wajib" difokuskan pada baris
+pembalik, tapi diputuskan diperluas ke SEMUA baris ledger (termasuk baris
+"asal"/perolehan pertama) untuk konsistensi auditabilitas - tidak masuk akal
+mewajibkan justifikasi tertulis hanya untuk koreksi tapi tidak untuk
+transaksi normal, dan skema dua-tingkat (`alasan` wajib di satu jenis baris,
+opsional di jenis lain) akan menambah cabang validasi tanpa manfaat jelas.
+`catatan` (sudah ada sebelumnya, tetap opsional) DIPERTAHANKAN terpisah
+sebagai catatan bebas TAMBAHAN - `alasan` adalah justifikasi wajib
+ringkas/terstruktur, `catatan` adalah ruang bebas opsional untuk detail
+lain. Ditegakkan di dua level: kolom `NOT NULL` (mencegah NULL) DAN
+pemeriksaan `btrim(alasan) = ''` di trigger `ledger_validasi_pembalik` untuk
+baris pembalik SECARA SPESIFIK (mencegah string kosong/whitespace-only lolos
+lewat NOT NULL polos) - baris NON-pembalik hanya ditegakkan oleh `NOT NULL`
+kolom (trigger pembalik tidak dieksekusi untuk baris yang `membalikMutasiId`-nya
+NULL).
+
+Item "referensi wajib" (bagian lain dari instruksi yang sama) SENGAJA TIDAK
+diperluas menjadi kolom `referensiJenis`/`referensiId` generik baru di
+`PoinRiwayat`/`LedgerStempel`/`LedgerSaldoToko` - ketiganya sudah punya
+referensi domain-spesifik opsional (`pesananId`, `hadiahStempelId`,
+`pembayaranId`) yang TIDAK selalu terisi (mis. penyesuaian manual tanpa
+pesanan), dan mendesain sistem referensi generik baru untuk ketiganya adalah
+redesain struktural domain keanggotaan/pembayaran yang di luar scope batch
+ini (schema+trigger reversal murni, bukan redesain referensi ledger). Untuk
+`MutasiStok`, `referensiJenis`/`referensiId` SUDAH `NOT NULL` sejak ADR-023
+Keputusan 2 - "referensi wajib" untuk model itu sudah tertegakkan struktural
+sebelum batch ini, tidak butuh perubahan. Dicatat eksplisit sebagai gap
+diketahui (bukan diselesaikan diam-diam) - lihat `INVARIAN-BELUM-DITEGAKKAN.md`.
+
+**Keputusan 6 - `PembayaranRefund`/`KoreksiPembayaran` TIDAK diberi pola
+`membalikMutasiId`.** Dievaluasi eksplisit per instruksi ("evaluasi dan
+putuskan, jangan diterapkan membabi-buta"). Kedua model ini STRUKTURAL
+BERBEDA dari keempat ledger di atas: keduanya TIDAK PERNAH punya kolom
+`dibalikOlehId`/pola self-relation reversal sama sekali sejak awal (bukan
+"lupa ditambahkan" - lihat definisi model, keduanya sudah lengkap sebagai
+catatan SATU ARAH yang menunjuk KE `Pembayaran`, bukan sesama baris di tabel
+yang sama). `PembayaranRefund` ITU SENDIRI sudah berperan sebagai "baris
+koreksi" terhadap `Pembayaran` (bukan ledger simetris yang perlu dibalik
+lagi) - refund tidak pernah "dibalik" dalam desain saat ini, ia SATU
+PERISTIWA per approval supervisor (ALT-KSR-007), dan pembatalan sebuah
+refund yang salah dicatat adalah keputusan proses bisnis (mis.
+"refund-kedua-untuk-membatalkan-refund-pertama") yang di luar scope
+schema-only batch ini. `KoreksiPembayaran` bahkan secara desain SUDAH
+menyimpan `jumlahSebelum`/`jumlahSesudah` sebagai representasi eksplisit
+"apa yang berubah", pola yang secara struktural BEDA dari ledger
+signed-amount append-only (`jumlah` tunggal bertanda) - memaksakan
+`membalikMutasiId` ke sini berarti mendesain ulang bentuk datanya, bukan
+menambah satu kolom. **Kesimpulan: TIDAK disentuh** - didokumentasikan di
+sini secara eksplisit sebagai keputusan sadar (dievaluasi, bukan diabaikan),
+bukan cakupan "diam-diam dilewati".
+
+**Keputusan 7 - Migrasi dibuat manual (folder + `migration.sql` ditulis
+tangan) karena `prisma migrate dev --create-only` diblokir non-interaktif di
+lingkungan ini, BUKAN lewat alur normal seperti ADR-031.** `prisma migrate
+dev` (dengan atau tanpa `--create-only`) mengembalikan "Prisma Migrate has
+detected that the environment is non-interactive" secara keras di sesi ini
+(beda dari batch ADR-031 yang berhasil menjalankannya). Jalan keluar: bagian
+ALTER TABLE/index/FK murni dihasilkan lewat `prisma migrate diff
+--from-schema-datasource --to-schema-datamodel --script` (perintah
+non-interaktif, membandingkan `altora_resto_dev` LIVE terhadap
+`schema.prisma` target) - aman karena hasil diff dikonfirmasi HANYA berisi
+DROP+ADD kolom (bukan destructive lain) DAN keempat tabel ledger dikonfirmasi
+kosong (`SELECT count(*) = 0`) sebelum migrasi ditulis, jadi tidak ada
+DROP+ADD yang benar-benar membuang data. Folder migrasi
+(`20260726090000_redesign_ledger_reversal_membalik_pattern/`) dibuat manual
+dengan timestamp setelah migrasi terakhir, isi digabung dari hasil diff
+tsb + trigger SQL tulisan tangan (bagian generik Keputusan 2/3), diterapkan
+langsung lewat `psql -f ... -v ON_ERROR_STOP=1`, lalu dicatat resmi ke
+riwayat Prisma lewat `prisma migrate resolve --applied` (perintah ini
+non-interaktif, tidak diblokir). Diverifikasi identik dengan alur normal:
+`prisma migrate status` melaporkan "Database schema is up to date!" dan
+`prisma migrate deploy` dari `DROP DATABASE`+`CREATE DATABASE` kosong
+menerapkan ketiga migrasi (baseline, harden_manual_invariants, migrasi baru
+ini) berurutan tanpa error, menghasilkan 134 tabel yang sama seperti
+sebelumnya (lihat `RELEASE-EVIDENCE.md` untuk transkrip lengkap).
+
+**Status ALT-DEF-043 setelah batch ini: DITUTUP.** Ketiga ledger keanggotaan
+(`PoinRiwayat`, `LedgerStempel`, `LedgerSaldoToko`) sekarang punya trigger
+append-only + validasi-pembalik SETARA `MutasiStok` (fungsi generik yang
+SAMA, `ledger_tolak_ubah`/`ledger_validasi_pembalik`, bukan cuma "setara
+desainnya" tapi LITERAL fungsi yang sama dipakai ulang) - asimetri yang
+dicatat ALT-DEF-043 (kolom ada, trigger tidak ada) sudah tidak ada lagi.
+Dibuktikan test database-integration nyata (bukan cuma klaim desain) untuk
+KEEMPAT tabel, lihat `DEFECT-LEDGER.md` untuk detail closure-checklist
+lengkap.

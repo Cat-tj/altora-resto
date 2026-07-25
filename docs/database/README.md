@@ -6,7 +6,7 @@ ERD dipecah per domain agar mudah dibaca. Semua entitas mengikuti aturan umum (l
 - Setiap tabel transaksional/tenant-scoped membawa `tenantId` dan (jika relevan) `outletId`.
 - Uang disimpan sebagai **Int** dalam rupiah (bukan Decimal/Float), no floating point.
 - Timestamp disimpan **UTC** (`createdAt`, `updatedAt`, dan timestamp event spesifik seperti `paidAt`, `voidedAt`).
-- **Tidak ada hard-delete** pada data finansial, stok, dan audit - penghapusan dimodelkan lewat kolom status (`status`, `dibatalkanPada`, `dibalikOlehId`, dsb), bukan `DELETE` fisik.
+- **Tidak ada hard-delete** pada data finansial, stok, dan audit - penghapusan dimodelkan lewat kolom status (`status`, `dibatalkanPada`, `membalikMutasiId`, dsb), bukan `DELETE` fisik. Pola reversal ledger (`MutasiStok`/`PoinRiwayat`/`LedgerStempel`/`LedgerSaldoToko`) memakai `membalikMutasiId` di baris PEMBALIK menunjuk mundur ke baris asal (ADR-032) - baris asal tidak pernah di-UPDATE.
 
 ## Daftar dokumen ERD per domain
 

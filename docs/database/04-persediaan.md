@@ -98,8 +98,9 @@ erDiagram
         string lokasiTujuanId FK "nullable"
         string batchStokId FK "nullable, hasil alokasi FEFO/FIFO"
         int hargaPerolehan "nullable, rupiah bulat (ADR-005)"
+        string alasan "WAJIB (ADR-032) - justifikasi setiap baris"
         string catatan "nullable"
-        string dibalikOlehId FK "nullable @unique, self-relasi ke mutasi pembalik"
+        string membalikMutasiId FK "nullable @unique, ADR-032: di baris PEMBALIK, menunjuk MUNDUR ke baris asal"
         string dibuatOlehId FK
         datetime createdAt
     }
@@ -351,31 +352,35 @@ menurunkan stok **TERSEDIA** di bawah nol ditolak `409 STOK_TIDAK_CUKUP`.
 Bila `true`, operasi tetap diposting, saldo boleh negatif, dan mutasinya wajib
 memicu notifikasi ke peran GUDANG/MANAJER (tidak pernah senyap).
 
-## Integritas reversal (ADR-023 Keputusan 5)
+## Integritas reversal (ADR-032, redesain dari ADR-023 Keputusan 5)
 
-`MUTASI_STOK.dibalikOlehId String? @unique` - **diverifikasi ulang** di batch
-ini, bukan diasumsikan benar.
+`MUTASI_STOK.membalikMutasiId String? @unique` - kolom ada di baris PEMBALIK,
+menunjuk MUNDUR ke baris asal (arah TERBALIK dari desain lama
+`dibalikOlehId`). **Dijalankan dan diverifikasi NYATA** terhadap
+`altora_resto_dev` (migrasi `redesign_ledger_reversal_membalik_pattern`),
+bukan diasumsikan benar - lihat `ledger-reversal-membalik-invariants.test.ts`.
 
 | # | Aturan | Dijamin? |
 |---|---|---|
-| 1 | Satu mutasi dibalik paling banyak sekali | **YA, DB** - `dibalikOlehId` kolom TUNGGAL; tidak ada tempat untuk pembalik kedua. |
-| 2 | Satu pembalik membalik paling banyak satu asal | **YA, DB** - `@unique`. |
-| 3 | `jumlah` pembalik berlawanan tanda tepat | TIDAK - trigger di SQL manual 005, belum dijalankan. |
-| 4 | Pembalik di tenant/gudang/bahan yang sama | TIDAK - idem. |
-| 5 | Larangan rantai pembalik-dari-pembalik | TIDAK - idem. |
+| 1 | Satu baris asal dibalik paling banyak sekali | **YA, DB** - unique index `mutasi_stok_membalikMutasiId_key`: dua baris pembalik berbeda tidak boleh menunjuk baris asal yang sama. |
+| 2 | Satu baris pembalik menunjuk paling banyak satu asal | **YA, DB** - kolom `membalikMutasiId` tunggal (bukan list). |
+| 3 | `jumlah` pembalik berlawanan tanda tepat | **YA, DB** - trigger `ledger_validasi_pembalik()`. |
+| 4 | Pembalik di tenant/gudang/bahan/satuan/batch/harga/lokasi yang sama (lokasi IDENTIK, bukan tertukar - lihat ADR-032 Keputusan 4) | **YA, DB** - trigger sama, kolom domain diteruskan via `TG_ARGV`. |
+| 5 | Larangan rantai pembalik-dari-pembalik | **YA, DB** - trigger sama. |
+| 6 | `alasan` wajib pada baris pembalik | **YA, DB** - trigger sama + kolom `NOT NULL`. |
 
-Aturan 3-5 adalah invariant **lintas-baris**; CHECK constraint Postgres
-dilarang membaca baris lain, sehingga satu-satunya penegak level-data yang
-mungkin adalah trigger.
+Aturan 3-6 adalah invariant **lintas-baris**; CHECK constraint Postgres
+dilarang membaca baris lain, jadi penegaknya trigger (`ledger_validasi_pembalik`,
+dipakai bersama seluruh ledger - lihat ADR-032 Keputusan 2/3).
 
-## Invariant level-aplikasi (tidak ada satu pun yang dijamin database saat ini)
+## Invariant level-aplikasi (status per ADR-032, batch deep-correction-loop)
 
-| # | Invariant | Penegak yang direncanakan | Status |
+| # | Invariant | Penegak | Status |
 |---|---|---|---|
-| 1 | `mutasi_stok` append-only | trigger, SQL manual `005` | BELUM DIJALANKAN |
-| 2 | Pembalik berlawanan tanda & sepadan | trigger, SQL manual `005` | BELUM DIJALANKAN |
-| 3 | Satu baris `STOK_BAHAN` agregat per (gudang, bahan) | partial unique index, SQL manual `004` | BELUM DIJALANKAN |
-| 4 | Satu baris opname agregat per (opname, bahan) | partial unique index, SQL manual `004` | BELUM DIJALANKAN |
+| 1 | `mutasi_stok` append-only, UNKONDISIONAL | trigger `ledger_tolak_ubah()`, migrasi resmi | **DB-ENFORCED, TERUJI** |
+| 2 | Pembalik berlawanan tanda & sepadan (lihat tabel di atas) | trigger `ledger_validasi_pembalik()`, migrasi resmi | **DB-ENFORCED, TERUJI** |
+| 3 | Satu baris `STOK_BAHAN` agregat per (gudang, bahan) | partial unique index, migrasi resmi | **DB-ENFORCED, TERUJI** |
+| 4 | Satu baris opname agregat per (opname, bahan) | partial unique index, migrasi resmi | **DB-ENFORCED, TERUJI** |
 | 5 | `kuantitas == SUM(MUTASI_STOK.jumlah)` | job rekonsiliasi (kode, belum ditulis) | **TIDAK PERNAH DB-ENFORCED** |
 | 6 | `SUM(RESERVASI_STOK AKTIF) <= saldo fisik` | guard transaksi + `FOR UPDATE` | **TIDAK PERNAH DB-ENFORCED** |
 | 7 | Stok tidak negatif (bila kebijakan melarang) | guard transaksi + `FOR UPDATE` | **TIDAK PERNAH DB-ENFORCED** |
@@ -384,16 +389,20 @@ mungkin adalah trigger.
 | 10 | `gudangAsal != gudangTujuan`; `diterima <= dikirim <= diminta` | validasi service-layer | UTANG CHECK constraint |
 | 11 | `penghitungId != penyetujuId` pada opname | validasi service-layer | UTANG CHECK constraint |
 
-Baris 5-9 **tidak akan menjadi DB-enforced meski seluruh file SQL manual
-dijalankan** - ia invariant agregat/kondisional yang berada di luar jangkauan
-constraint deklaratif. Dinyatakan agar "jalankan migrasi" tidak disalahartikan
-sebagai penutup seluruh daftar ini.
+Baris 5-9 **tidak akan pernah menjadi DB-enforced** - ia invariant
+agregat/kondisional yang berada di luar jangkauan constraint deklaratif.
+Item 14 checklist ADR-032 (atomisitas INSERT baris pembalik + aksi bisnis
+pemicunya dalam satu transaksi) juga TIDAK DB-enforceable - itu tanggung
+jawab service-layer sekali handler-nya ditulis (di luar scope schema+trigger
+batch ini), dicatat eksplisit di ADR-032 agar tidak hilang.
 
 ## Catatan lain (no hard-delete)
 
-- `MUTASI_STOK` bersifat append-only. Koreksi kesalahan input dilakukan dengan
-  menambah baris mutasi pembalik baru yang menunjuk lewat `dibalikOlehId`,
-  bukan menghapus/mengubah baris lama.
+- `MUTASI_STOK` bersifat append-only, UNKONDISIONAL (ADR-032) - baris asal
+  TIDAK PERNAH di-UPDATE untuk alasan apa pun. Koreksi kesalahan input
+  dilakukan dengan menambah baris mutasi pembalik BARU (lewat INSERT) yang
+  menunjuk balik ke baris asal lewat `membalikMutasiId`, bukan
+  menghapus/mengubah baris lama.
 - Alur status `STOK_OPNAME` dan `TRANSFER_STOK` mengikuti state machine di
   `docs/arsitektur/STATE-MACHINES.md` bagian 7 dan 8.
 - `ALASAN_WASTE` dinonaktifkan lewat `status`, tidak pernah dihapus - histori

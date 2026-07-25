@@ -2530,6 +2530,220 @@ individual (`INV-001` s.d. `INV-007`) sudah pindah ke kategori A di
 pada concurrency test untuk klaim dasarnya (constraint ada + menolak
 pelanggaran single-connection).
 
+## Pass correction-loop 2026-07-26: redesain pola reversal ledger `dibalikOlehId` -> `membalikMutasiId`, trigger generik, ALT-DEF-043 (ADR-032)
+
+Konteks: instruksi eksplisit redesain pola reversal untuk `MutasiStok`,
+`PoinRiwayat`, `LedgerStempel`, `LedgerSaldoToko` (`PembayaranRefund`/
+`KoreksiPembayaran` DIEVALUASI dan SENGAJA TIDAK diikutkan - lihat ADR-032
+Keputusan 6), plus trigger append-only generik dan penutupan `ALT-DEF-043`.
+
+### 1. Verifikasi keempat tabel kosong sebelum migrasi ditulis
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -c "SELECT count(*) FROM mutasi_stok" \
+    -c "SELECT count(*) FROM poin_riwayat" -c "SELECT count(*) FROM ledger_stempel" \
+    -c "SELECT count(*) FROM ledger_saldo_toko"
+ count
+-------
+     0
+(masing-masing keempat query)
+```
+
+Ini yang mengizinkan `ALTER TABLE ... DROP COLUMN "dibalikOlehId" ADD COLUMN
+"membalikMutasiId"` aman dijalankan langsung tanpa backfill/migrasi data.
+
+### 2. `prisma migrate dev --create-only` DIBLOKIR non-interaktif (beda dari ADR-031)
+
+```
+$ npx prisma migrate dev --schema=prisma/schema/schema.prisma --create-only \
+    --name redesign_ledger_reversal_membalik_pattern
+...
+Error: Prisma Migrate has detected that the environment is non-interactive, which is not supported.
+```
+
+Dicoba juga dengan `yes |` di depan perintah - tetap diblokir sama. Jalan
+keluar (lihat ADR-032 Keputusan 7): bagian ALTER TABLE murni dihasilkan lewat
+`prisma migrate diff` (non-interaktif), sisanya (trigger) ditulis tangan,
+diterapkan lewat `psql`, dicatat ke riwayat resmi lewat `prisma migrate
+resolve --applied` (juga non-interaktif).
+
+```
+$ npx prisma migrate diff --from-schema-datasource prisma/schema/schema.prisma \
+    --to-schema-datamodel prisma/schema/schema.prisma --script
+-- DropForeignKey
+ALTER TABLE "ledger_saldo_toko" DROP CONSTRAINT "ledger_saldo_toko_dibalikOlehId_fkey";
+... (68 baris total - DROP FK/index lama, ALTER TABLE rename kolom+alasan,
+     CREATE UNIQUE INDEX baru, ADD FK baru untuk keempat tabel)
+```
+
+### 3. Migrasi diterapkan langsung lewat `psql`, lalu dicatat resmi
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -v ON_ERROR_STOP=1 \
+    -f "prisma/schema/migrations/20260726090000_redesign_ledger_reversal_membalik_pattern/migration.sql"
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+DROP INDEX
+DROP INDEX
+DROP INDEX
+DROP INDEX
+ALTER TABLE   (x4, tambah kolom alasan+membalikMutasiId)
+CREATE INDEX  (x4, unique index membalikMutasiId)
+ALTER TABLE   (x4, FK membalikMutasiId)
+DROP TRIGGER
+DROP TRIGGER
+DROP FUNCTION
+DROP FUNCTION
+CREATE FUNCTION   (ledger_tolak_ubah)
+CREATE TRIGGER    (x4 - satu per tabel ledger)
+CREATE FUNCTION   (ledger_validasi_pembalik)
+CREATE TRIGGER    (x4 - satu per tabel ledger)
+
+$ npx prisma migrate resolve --schema=prisma/schema/schema.prisma --applied \
+    20260726090000_redesign_ledger_reversal_membalik_pattern
+Migration 20260726090000_redesign_ledger_reversal_membalik_pattern marked as applied.
+
+$ npx prisma migrate deploy --schema=prisma/schema/schema.prisma
+3 migrations found in prisma/migrations
+No pending migrations to apply.
+
+$ npx prisma migrate status --schema=prisma/schema/schema.prisma
+3 migrations found in prisma/migrations
+Database schema is up to date!
+```
+
+### 4. Verifikasi objek via katalog sistem Postgres
+
+```
+$ psql ... -c "SELECT t.tgname, c.relname, p.proname FROM pg_trigger t
+  JOIN pg_class c ON t.tgrelid = c.oid JOIN pg_proc p ON t.tgfoid = p.oid
+  WHERE c.relname IN ('mutasi_stok','poin_riwayat','ledger_stempel','ledger_saldo_toko')
+  AND NOT t.tgisinternal ORDER BY c.relname, t.tgname;"
+                 tgname                  |      relname      |         proname
+-----------------------------------------+--------------------+---------------------------
+ trg_ledger_saldo_toko_append_only       | ledger_saldo_toko  | ledger_tolak_ubah
+ trg_ledger_saldo_toko_validasi_pembalik | ledger_saldo_toko  | ledger_validasi_pembalik
+ trg_ledger_stempel_append_only          | ledger_stempel     | ledger_tolak_ubah
+ trg_ledger_stempel_validasi_pembalik    | ledger_stempel     | ledger_validasi_pembalik
+ trg_mutasi_stok_append_only             | mutasi_stok        | ledger_tolak_ubah
+ trg_mutasi_stok_validasi_pembalik       | mutasi_stok        | ledger_validasi_pembalik
+ trg_poin_riwayat_append_only            | poin_riwayat       | ledger_tolak_ubah
+ trg_poin_riwayat_validasi_pembalik      | poin_riwayat       | ledger_validasi_pembalik
+(8 rows)
+```
+
+8 trigger, 4 tabel, HANYA 2 fungsi distinct (`ledger_tolak_ubah`,
+`ledger_validasi_pembalik`) - bukti genericity nyata, bukan klaim.
+
+### 5. Test database-integration BARU: `ledger-reversal-membalik-invariants.test.ts`
+
+```
+$ npx tsx packages/test-support/src/database-integration/ledger-reversal-membalik-invariants.test.ts
+OK: database-integration ADR-032 (redesain membalikMutasiId, generic
+ledger_tolak_ubah/ledger_validasi_pembalik) lulus untuk mutasi_stok,
+poin_riwayat, ledger_stempel, ledger_saldo_toko - menutup ALT-DEF-043.
+```
+
+Cakupan test (semua PASS, satu jalur `main()` sekuensial tanpa runner
+terpisah - pola sama batch sebelumnya): existence (2 fungsi generik + 8
+trigger + kolom baru ada/kolom lama hilang di keempat tabel + 4 unique
+index), lalu untuk `mutasi_stok`: append-only unkondisional (UPDATE kolom
+`jumlah`/`catatan`/`alasan` ditolak, DELETE ditolak, **UPDATE
+`membalikMutasiId` - pola LAMA yang dulu diizinkan - SEKARANG JUGA
+ditolak**), reversal valid diterima + query turunan "sudah dibalik" benar,
+tujuh rejection case (membalik diri sendiri, baris asal tidak ada, jumlah
+tidak berlawanan tanda, alasan NULL, alasan whitespace-only, tenant beda,
+bahan beda, **lokasi TERTUKAR ditolak/lokasi IDENTIK diterima** - bukti
+langsung Keputusan 4 ADR-032), **pembalik kedua ke baris asal yang sama
+ditolak (unique index)**, **rantai pembalik-dari-pembalik ditolak**; lalu
+pola yang SAMA diulang penuh untuk `poin_riwayat`, `ledger_stempel` (fungsi
+generik `testKeanggotaanLedger()` dipakai untuk keduanya), dan
+`ledger_saldo_toko` (kolom domain `pelangganId`, bukan `keanggotaanId`).
+
+### 6. Re-run seluruh test database-integration LAMA - regresi NOL
+
+```
+$ npx tsx packages/test-support/src/database-integration/persediaan-stok-invariants.test.ts
+OK: database-integration ALT-PSD-004 (stok agregat unik per gudang).
+Append-only/pembalik mutasi_stok kini diuji di
+ledger-reversal-membalik-invariants.test.ts (ADR-032).
+
+$ npx tsx packages/test-support/src/database-integration/qris-konfigurasi-invariant.test.ts
+OK: database-integration ALT-QRS-001/ADR-021 (konfigurasi QRIS satu aktif per outlet) lulus.
+
+$ npx tsx packages/test-support/src/database-integration/resep-versi-invariants.test.ts
+OK: database-integration ALT-RSP-001/002/003/005 (resep XOR + versi_resep satu aktif) lulus.
+```
+
+`persediaan-stok-invariants.test.ts` DIREVISI (assertion mutasi_stok lama
+dipindah/diperluas ke file baru, lihat ADR-032) - tetap 100% lulus, murni
+menghindari duplikasi test terhadap desain yang sudah tidak ada, bukan
+regresi.
+
+Test arsitektur juga diverifikasi ulang:
+
+```
+$ npx tsx packages/test-support/src/architecture/persediaan-ledger-reservasi-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-008 (ledger stok/reservasi/transfer/opname) lulus.
+
+$ npx tsx packages/test-support/src/architecture/keanggotaan-ledger-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-018/ALT-DEF-023/ALT-DEF-039 (ledger keanggotaan) lulus.
+```
+
+**Hasil: 5/5 file database-integration PASS, 2/2 file arsitektur terdampak
+PASS.**
+
+### 7. Fresh-database redeploy verification: `DROP DATABASE` + `CREATE DATABASE` + `migrate deploy` dari nol
+
+```
+$ psql -U icat -h localhost -d postgres -c "DROP DATABASE altora_resto_dev;"
+DROP DATABASE
+$ psql -U icat -h localhost -d postgres -c "CREATE DATABASE altora_resto_dev;"
+CREATE DATABASE
+
+$ npx prisma migrate deploy --schema=prisma/schema/schema.prisma
+3 migrations found in prisma/migrations
+Applying migration `20260725154045_baseline_correction_loop`
+Applying migration `20260725154310_harden_manual_invariants`
+Applying migration `20260726090000_redesign_ledger_reversal_membalik_pattern`
+All migrations have been successfully applied.
+
+$ psql ... -c "SELECT count(*) AS tables FROM information_schema.tables WHERE table_schema='public';"
+ tables
+--------
+    134
+(1 row)
+```
+
+134 tabel - IDENTIK dengan hitungan sebelum drop (ADR-031 Keputusan 2/7).
+Ketiga migrasi diterapkan berurutan sesuai prefix timestamp tanpa error, dari
+kondisi kosong total.
+
+Seluruh 5 file test database-integration dijalankan ULANG terhadap database
+yang baru di-redeploy ini dan **LULUS 5/5 kedua kalinya** (output identik
+dengan bagian 5-6 di atas, tidak diulang di sini) - membuktikan migrasi
+reproducible dari kondisi kosong, bukan kebetulan berhasil karena state
+database yang sempat "dipanaskan" manual sebelumnya.
+
+### 8. Checklist penutupan `ALT-DEF-043`
+
+| Item checklist | Status | Bukti |
+|---|---|---|
+| Migrasi resmi lulus (termasuk dari nol) | LULUS | Bagian 3, 7 di atas |
+| SQL trigger benar-benar terpasang | LULUS | Bagian 4 di atas |
+| Integration test PostgreSQL lulus | LULUS (5/5, dua kali) | Bagian 5, 6, 7 di atas |
+| Test arsitektur diperbarui dan lulus | LULUS | Bagian 6 di atas |
+| Traceability diperbarui | LULUS | `INVARIAN-BELUM-DITEGAKKAN.md` INV-012/013/014 -> kategori A |
+| Bukti command aktual tersedia | LULUS | Dokumen ini |
+
+**Kesimpulan: `ALT-DEF-043` DITUTUP.** Ketiga ledger keanggotaan sekarang
+punya trigger append-only/pembalik LITERAL SAMA (fungsi generik yang sama)
+dengan `MutasiStok` - asimetri yang dicatat defect ini tidak ada lagi. Lihat
+ADR-032 untuk rasional desain lengkap dan `DEFECT-LEDGER.md` untuk closure
+penuh.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```
