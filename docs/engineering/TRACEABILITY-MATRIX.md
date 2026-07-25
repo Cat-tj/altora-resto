@@ -183,9 +183,37 @@ kanal diimplementasikan sebagai `PromoKondisi.jenisSyarat = KANAL_TERTENTU`
 | ALT-PRM-015 | `PromoSimulasi` | `POST /api/v1/promo/simulasi` | `/kasir/pesanan/{id}` | promo.validasi | BELUM DIKERJAKAN | - |
 | ALT-PRM-016 | `PromoPemakaian`, `PromoSnapshot` | `POST /api/v1/pesanan/{id}/promo` | `/kasir/pesanan/{id}` | promo.terapkan | BELUM DIKERJAKAN | - |
 | ALT-PRM-017 | `PromoPemakaian` (`status = DIRETUR`) | internal (event retur pesanan) | - | - (aktor sistem, ALT-DEF-034) | BELUM DIKERJAKAN | - |
-| ALT-PLG-001 | `Pelanggan` | `GET/POST /api/v1/pelanggan` | `/resto/{outletSlug}/pelanggan` | PELAYAN | BELUM DIKERJAKAN | - |
-| ALT-PLG-002 | `Keanggotaan`, `TierMembership` | `POST /api/v1/pelanggan/{id}/keanggotaan` | `/resto/{outletSlug}/pelanggan` | PELAYAN | BELUM DIKERJAKAN | - |
-| ALT-PLG-003 | `PoinRiwayat` | `GET .../poin-riwayat`, `POST .../tukar-poin` | `/resto/{outletSlug}/pelanggan` | PELAYAN | BELUM DIKERJAKAN | - |
+**Diperbaiki pada batch keanggotaan (ALT-DEF-018/ALT-DEF-023/ALT-DEF-039,
+ADR-027):** tiga baris `ALT-PLG-001` s.d. `ALT-PLG-003` yang ada sebelumnya
+DIHAPUS - prefix domain `ALT-PLG` **tidak pernah ada** di `MASTER-CHECKLIST.md`
+(prefix nyata untuk domain Pelanggan & Keanggotaan adalah `ALT-MBR`, sama pola
+`ALT-DEF-020`/tabel rekonsiliasi ID di `DEFECT-LEDGER.md`); ketiga baris itu
+juga hanya mencakup 3 dari 13 requirement lama, memakai kolom Permission
+berisi **nama PERAN** (`PELAYAN`) alih-alih kode izin (pola sama masalah yang
+ditemukan `ALT-DEF-008` pada `ALT-PSD-001` s.d. `004`), dan mengacu model
+`TierMembership` yang sudah di-rename `TierKeanggotaan` (ADR-027 Keputusan 1).
+Domain `ALT-MBR` kini lengkap 19 baris dan terverifikasi baris-per-baris
+terhadap `MASTER-CHECKLIST.md`.
+
+| ALT-MBR-001 | `Pelanggan` (`status`/`saldoTokoCache` baru, ADR-027) | `GET/POST /api/v1/pelanggan` | `/pelanggan` | `pelanggan.kelola` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 (`keanggotaan-ledger-constraints.test.ts`) |
+| ALT-MBR-002 | `Pelanggan` (dedup - kandidat duplikat adalah QUERY, bukan tabel `KandidatDuplikatPelanggan` tersendiri pada batch ini) | `GET /api/v1/pelanggan/duplikat` | `/pelanggan/duplikat` | `pelanggan.duplikat.lihat` | BELUM DIKERJAKAN | - |
+| ALT-MBR-003 | `RiwayatGabungPelanggan` (BARU), `Pelanggan.status = DIGABUNGKAN` (BUKAN hard-delete, ADR-006/ADR-027 Keputusan 4) | `POST /api/v1/pelanggan/merge` (wajib `Idempotency-Key`) | `/pelanggan/duplikat` | `pelanggan.merge` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-004 | `PersetujuanPelanggan` (BARU, bukan `ConsentPelanggan` - lihat ADR-027 Keputusan 6) | `PUT /api/v1/pelanggan/{id}/consent` | `/pelanggan/{id}` | `pelanggan.consent.kelola` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-005 | `TierKeanggotaan` (rename dari `TierMembership`, ADR-027 Keputusan 1) | `GET/POST /api/v1/tier-keanggotaan` | `/pengaturan/membership` | `keanggotaan.tier.kelola` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-006 | `Keanggotaan` (`tenantId` BARU - sebelumnya TIDAK ADA sama sekali, `@@unique([tenantId, pelangganId])`) | `POST /api/v1/pelanggan/{id}/keanggotaan` | `/pelanggan/{id}` | `keanggotaan.daftar` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-007 | `PoinRiwayat` (diperkeras: `tenantId` BARU, `dibalikOlehId`, `kadaluarsaPada`, `dicatatOlehId` - ADR-027 Keputusan 2) | `GET /api/v1/pelanggan/{id}/poin-riwayat` | `/pelanggan/{id}` | `keanggotaan.poin.lihat` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-008 | `Keanggotaan.poinAktif`/`poinKumulatif` (komentar CACHE eksplisit di schema, pola `StokBahan`/ADR-023) | internal (job rekonsiliasi) | - | `keanggotaan.saldo.rekonsiliasi` | SKEMA SELESAI (komentar), JOB BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-009 | `PoinRiwayat.kadaluarsaPada` (BARU) + baris ledger `jenis = KADALUARSA` | internal (job kedaluwarsa poin terjadwal) | - | `keanggotaan.poin.kedaluwarsa` | SKEMA SELESAI, JOB BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-010 | `PoinRiwayat` (`jenis = PENUKARAN`) | `POST /api/v1/keanggotaan/{id}/tukar-poin` (wajib `Idempotency-Key`) | `/kasir/pembayaran` | `keanggotaan.poin.tukar` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-011 | `LedgerSaldoToko` (BARU, digantung ke `Pelanggan` BUKAN `Keanggotaan` - ADR-027 Keputusan 3) | `GET /api/v1/pelanggan/{id}/saldo-toko` | `/pelanggan/{id}` | `keanggotaan.saldo-toko.lihat` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-012 | `LedgerSaldoToko` (append-only, `dibalikOlehId` self-relasi `@unique`, `pembayaranId` -> integrasi metode `SALDO_TOKO`) | `GET /api/v1/pelanggan/{id}/saldo-toko/riwayat` | `/pelanggan/{id}` | `keanggotaan.saldo-toko.lihat` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-013 | - (rule engine, concern service-layer - lihat ADR-027 catatan anti-abuse: `dicatatOlehId` vs `Pesanan.dibuatOlehId`/`pelangganId`) | internal (rule engine) | - | `keanggotaan.anti-fraud` | BELUM DIKERJAKAN | - |
+| ALT-MBR-014 | `HadiahStempel` (BARU, `ALT-DEF-039`) | `GET/POST /api/v1/hadiah-stempel` | `/pengaturan/membership` | `keanggotaan.stempel.kelola` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 (`keanggotaan-ledger-constraints.test.ts`) |
+| ALT-MBR-015 | `LedgerStempel` (`jenis = PEROLEHAN`, BARU) | internal (event pesanan selesai) | - | `-` (aktor sistem, pola `resep.pemakaian.otomatis`) | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-016 | `LedgerStempel` (`jenis = PENUKARAN`, `hadiahStempelId`) | `POST /api/v1/keanggotaan/{id}/tukar-stempel` (wajib `Idempotency-Key`) | `/kasir/pembayaran` | `keanggotaan.stempel.tukar` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-017 | `LedgerStempel.dibalikOlehId` (self-relasi `@unique`, pola `MutasiStok`/ADR-023) | `POST /api/v1/ledger-stempel/{id}/balik` (wajib `Idempotency-Key`) | `/pelanggan/{id}` | `keanggotaan.stempel.balik` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-018 | `LedgerStempel` (append-only) | `GET /api/v1/pelanggan/{id}/stempel-riwayat` | `/pelanggan/{id}` | `keanggotaan.stempel.lihat` | SKEMA SELESAI, HANDLER BELUM DIKERJAKAN | `RELEASE-EVIDENCE.md` - pass ALT-DEF-018/023/039 |
+| ALT-MBR-019 | `Keanggotaan` (SENGAJA belum ada kolom cache stempel pada batch ini - saldo dihitung on-the-fly dari `LedgerStempel`, lihat `MASTER-CHECKLIST.md`) | internal (job rekonsiliasi, bila kolom cache ditambahkan kelak) | - | `keanggotaan.stempel.lihat` | BELUM DIKERJAKAN (sengaja, lihat catatan) | - |
 | ALT-KRY-001 | `Karyawan`, `Jabatan` | `GET/POST /api/v1/karyawan` | `/resto/{outletSlug}/karyawan` | HRD | BELUM DIKERJAKAN | - |
 | ALT-KRY-002 | `JadwalShift`, `PenugasanShift` | `GET /api/v1/jadwal-shift`, `POST .../penugasan` | `/resto/{outletSlug}/karyawan/shift` | HRD | BELUM DIKERJAKAN | - |
 | ALT-ABS-001 | `Absensi` | `POST /api/v1/absensi/masuk`, `/{id}/pulang` | `/absensi/mandiri` | semua staf | BELUM DIKERJAKAN | - |

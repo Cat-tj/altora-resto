@@ -1556,6 +1556,139 @@ ADR-026 tapi tidak diimplementasikan), dan endpoint/handler nyata. Karena
 itu status `ALT-DEF-009` dan `ALT-DEF-030` adalah `SIAP_DIVERIFIKASI`,
 **BUKAN** `DITUTUP`.
 
+## Pass correction-loop 2026-07-25 (lanjutan): perbaikan ALT-DEF-018, ALT-DEF-023, ALT-DEF-039
+
+### 1. Cakupan
+
+Batch domain Pelanggan & Keanggotaan ("PERBAIKI KEANGGOTAAN"), menutup tiga
+defect: `ALT-DEF-018` (poin/saldo toko tidak sepenuhnya ledger-sourced),
+`ALT-DEF-023` (tidak ada consent/merge history), dan `ALT-DEF-039` (BARU,
+Step 0 audit correction-loop: program stempel/punch-card loyalty hilang
+total dari `MASTER-CHECKLIST.md` dan schema). Juga menutup `ALT-DEF-040`
+(BARU, dangling permission codes `anggota.*` vs `pelanggan.*`/`keanggotaan.*`
+ditemukan saat audit permission). Detail keputusan desain lengkap:
+`docs/engineering/DECISION-LOG.md` ADR-027.
+
+### 2. Step 0 audit - hasil
+
+Grep `docs/engineering/MASTER-CHECKLIST.md` domain `ALT-MBR` (13 baris lama,
+`ALT-MBR-001` s.d. `ALT-MBR-013`) mengonfirmasi TIDAK SATU PUN requirement
+menyebut stempel/punch-card/kartu stempel - hanya poin (`ALT-MBR-007` dst.)
+dan saldo toko (`ALT-MBR-011`/`012`) yang sudah ada. Grep
+`prisma/schema/schema.prisma` bagian 11 (sebelum batch ini) mengonfirmasi
+tidak ada `LedgerStempel`/`HadiahStempel`. Karena master spec bagian "FITUR
+KEANGGOTAAN" eksplisit mencantumkan "Stempel"/"Hadiah" sebagai fitur dalam
+scope, gap ini dicatat sebagai `ALT-DEF-039` (TINGGI) dan 6 requirement baru
+`ALT-MBR-014` s.d. `ALT-MBR-019` ditambahkan ke `MASTER-CHECKLIST.md`
+(domain ALT-MBR: 13 -> 19 baris; total checklist: 249 -> 255).
+
+### 3. Command aktual dan hasil
+
+```
+$ npx prisma format --schema prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 93ms 🚀
+
+$ DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy" npx prisma validate --schema prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+
+$ DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy" npx prisma generate --schema prisma/schema/schema.prisma
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 1.29s
+
+$ npx tsc --noEmit -p packages/test-support
+(exit 0, tidak ada output)
+```
+
+Selama pengerjaan, satu error validasi Prisma nyata ditemukan dan diperbaiki:
+`Keanggotaan.pelanggan` (relasi 1:1 composite `(tenantId, pelangganId) ->
+Pelanggan(tenantId, id)`) ditolak Prisma dengan pesan "A one-to-one relation
+must use unique fields on the defining side" - diperbaiki dengan menambahkan
+`@@unique([tenantId, pelangganId])` pada `Keanggotaan` (selain
+`@@unique([tenantId, id])` yang sudah ada). `prisma validate` lulus setelah
+perbaikan ini.
+
+### 4. Test arsitektur - sebelum/sesudah
+
+Sebelum batch ini: **20 file** test arsitektur, seluruhnya lulus (warisan
+batch-batch sebelumnya). Sesudah batch ini: **21 file**, seluruhnya lulus,
+**0 regresi**:
+
+```
+$ for f in packages/test-support/src/architecture/*.test.ts; do
+    node --experimental-strip-types "$f" || echo "FAILED: $f"
+  done
+... (20 file lama: OK)
+OK: seluruh assertion arsitektur ALT-DEF-018/ALT-DEF-023/ALT-DEF-039 (ledger keanggotaan) lulus.
+PASS=21 FAIL=0 TOTAL=21
+```
+
+File baru: `packages/test-support/src/architecture/keanggotaan-ledger-constraints.test.ts`.
+
+### 5. Non-vacuity - mutation test
+
+Dua mutasi dijalankan terhadap `prisma/schema/schema.prisma`, masing-masing
+diverifikasi lewat `diff` bahwa perubahan BENAR-BENAR diterapkan sebelum
+hasil GAGAL dipercaya, lalu schema dipulihkan dan diverifikasi identik
+(`diff` kosong setelah restore):
+
+1. **Rename balik `TierKeanggotaan` -> `TierMembership`** (mensimulasikan
+   rename yang tidak dilakukan). Hasil: `node --experimental-strip-types`
+   GAGAL dengan pesan persis yang diharapkan ("model `TierMembership` MASIH
+   ADA - harus di-rename..."), exit code 1. Setelah restore, `diff` terhadap
+   backup kosong.
+2. **Tambah kolom `keanggotaanId String?` ke `LedgerSaldoToko`**
+   (mensimulasikan keputusan yang SALAH - digantung ke Keanggotaan, bukan
+   Pelanggan). Hasil: GAGAL dengan pesan persis ("LedgerSaldoToko TIDAK
+   boleh punya kolom `keanggotaanId`..."), exit code 1. `diff` sebelum
+   restore mengonfirmasi baris itu benar-benar ditambahkan (`> keanggotaanId
+   String?`); setelah restore, `diff` kosong.
+
+Kedua mutasi membuktikan assertion terkait **non-vacuous** (bukan selalu
+lulus terlepas isi schema).
+
+### 6. Keputusan desain kunci (ringkasan, detail penuh di ADR-027)
+
+- `TierMembership` -> `TierKeanggotaan` (rename, selaras checklist);
+  `PoinRiwayat` DIPERTAHANKAN (bukan `LedgerPoin`) - asimetri penamaan
+  didokumentasikan sadar.
+- `LedgerSaldoToko` digantung ke `Pelanggan` LANGSUNG, bukan `Keanggotaan` -
+  saldo toko independen dari status keanggotaan/tier.
+- Merge pelanggan: profil korban **tidak dihapus** (status `DIGABUNGKAN`,
+  ADR-006); transfer saldo lewat **pasangan entri ledger baru**
+  (`PENYESUAIAN` berpasangan), bukan repointing FK baris ledger lama -
+  menjaga integritas historis ledger.
+- `LedgerStempel`/`HadiahStempel` didesain minimal (hadiah = deskripsi bebas
+  + item gratis opsional), enum terpisah dari poin, **tanpa** kedaluwarsa
+  (belum ada dasar keputusan produk untuk itu).
+- `PersetujuanPelanggan` (bukan `ConsentPelanggan`) - penamaan Indonesia
+  konsisten; `WHATSAPP_NOTIFIKASI` sebagai nilai enum aspirasional, TIDAK
+  membatalkan keputusan `ALT-DEF-017` (notifikasi HANYA in-app/internal).
+
+### 7. Permission (ALT-DEF-040)
+
+`prisma/seed/izin.seed.ts` dan `docs/keamanan/PERMISSION-MATRIX.md` domain
+`anggota` sebelumnya hanya memuat 3 kode kasar (`anggota.lihat`,
+`anggota.kelola`, `anggota.tukar-poin`) yang **tidak pernah** direferensikan
+`MASTER-CHECKLIST.md` di manapun - dangling murni. Diganti dengan 19 kode
+granular (`pelanggan.*`/`keanggotaan.*`) yang benar-benar dipakai kolom
+Permission baris `ALT-MBR-001` s.d. `ALT-MBR-019`, diverifikasi lewat grep
+langsung terhadap `MASTER-CHECKLIST.md`.
+
+### 8. Ringkasan status
+
+Schema untuk `ALT-DEF-018`/`ALT-DEF-023`/`ALT-DEF-039` sudah benar secara
+sintaks (`format`+`validate`), tipe yang dihasilkan sudah benar secara
+bentuk (`generate`+`tsc --noEmit`), seluruh model/field/enum/constraint yang
+diklaim ADR-027 sudah dibuktikan ada lewat test struktur yang **terbukti
+non-vacuous** (2 mutasi), dan **tidak ada regresi** pada 20 test arsitektur
+sebelumnya.
+
+**Belum ada:** migrasi Postgres nyata dan trigger append-only untuk
+`PoinRiwayat`/`LedgerStempel`/`LedgerSaldoToko` (DIBLOKIR, `ALT-DEF-029`),
+handler/endpoint nyata (perolehan poin/stempel otomatis, job rekonsiliasi
+cache, job kedaluwarsa poin, endpoint merge/consent/tukar-stempel). Karena
+itu status `ALT-DEF-018`, `ALT-DEF-023`, `ALT-DEF-039`, dan `ALT-DEF-040`
+adalah `SIAP_DIVERIFIKASI`, **BUKAN** `DITUTUP`.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```
