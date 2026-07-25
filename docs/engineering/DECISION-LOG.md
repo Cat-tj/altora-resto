@@ -2438,3 +2438,104 @@ MASTER-CHECKLIST.md` 18 baris kolom Ketergantungan diperbaiki). **TIDAK
 disentuh (sesuai instruksi pass ini):** `prisma/schema/schema.prisma` sama
 sekali - `ALT-DEF-042` mendokumentasikan gap model tapi tidak membuat
 modelnya; itu pekerjaan batch domain Platform berikutnya.
+
+## ADR-030: Dimulainya fase DEEP CORRECTION LOOP - Postgres nyata tersedia, restrukturisasi INVARIAN-BELUM-DITEGAKKAN.md (ALT-DEF-029 diperbarui, ALT-DEF-044 baru)
+
+**Konteks.** Sepanjang 14+ batch correction-loop sebelumnya (ADR-001 s.d.
+ADR-029), satu premis lingkungan dianggap tetap: tidak ada instance Postgres
+nyata yang bisa diakses untuk menjalankan migrasi atau test integrasi -
+seluruh verifikasi berhenti di `prisma validate`/`format` (pemeriksaan
+sintaksis statis) dan test struktur (`node --experimental-strip-types` atas
+`packages/test-support/src/architecture/*.test.ts`, yang memeriksa BENTUK
+`PrismaClient` yang dihasilkan, bukan perilaku terhadap database nyata).
+Akibatnya, **tidak ada satu defect pun** di `DEFECT-LEDGER.md` yang pernah
+mencapai status `DITUTUP` - seluruhnya berhenti di `SIAP_DIVERIFIKASI`,
+dengan `ALT-DEF-029` sebagai umbrella blocker yang dirujuk hampir di semua
+baris lain.
+
+Pada sesi kerja ini, ditemukan (dan diverifikasi ulang secara eksplisit)
+bahwa lingkungan kerja SEKARANG punya PostgreSQL 16 nyata terpasang lewat
+Homebrew dengan trust-auth untuk user `icat`, dan sebuah database
+persisten, `altora_resto_dev`, sudah dibuat khusus untuk pekerjaan
+berkelanjutan - bukan sekadar koneksi transien yang hilang begitu sesi
+berakhir. `.env` di root repo (gitignored) sudah berisi `DATABASE_URL` yang
+mengarah ke database tersebut. Ini mengubah kalkulus correction-loop secara
+fundamental: migrasi, trigger, dan test integrasi yang sebelumnya HANYA bisa
+didesain di atas kertas sekarang BISA dan HARUS benar-benar dijalankan.
+
+**Keputusan 1 - Buka fase baru "DEEP CORRECTION LOOP", terpisah dari 14
+batch correction-loop sebelumnya.** Fase ini punya bar verifikasi yang
+secara eksplisit lebih ketat: klaim `SIAP_DIVERIFIKASI` yang cukup untuk fase
+lama (validasi sintaksis + test struktur) TIDAK lagi cukup untuk klaim
+`DITUTUP` di fase baru - `DITUTUP` sekarang butuh migrasi resmi yang benar-benar
+diterapkan (`prisma migrate deploy` sukses dari database kosong) DAN test
+integrasi yang benar-benar dijalankan terhadap `altora_resto_dev` (bukan
+`--experimental-strip-types` struktur semata). Lihat `RISK-015` di
+`docs/engineering/RISK-REGISTER.md` untuk risiko yang dicatat atas
+perubahan bar ini.
+
+**Keputusan 2 - Batch pertama fase ini adalah preflight audit + restrukturisasi
+dokumen, BUKAN eksekusi migrasi.** Menjalankan `prisma migrate dev` untuk
+memfoldkan `prisma/migrations/manual/001`-`005` (dan kandidat SQL baru) ke
+riwayat migrasi resmi adalah pekerjaan substansial tersendiri (per file:
+`migrate dev --create-only`, verifikasi isi, jalankan, verifikasi hasil di
+`altora_resto_dev`) yang sengaja DITUNDA ke batch kedua. Batch ini (batch
+pertama) secara eksplisit dibatasi ke: (a) audit `ALT-DEF-NNN` untuk
+memastikan ID berikutnya yang benar (`ALT-DEF-044`, diverifikasi langsung
+dari `DEFECT-LEDGER.md`, bukan dipercaya dari asumsi draft instruksi), (b)
+mencatat defect baru yang ditangkap audit ini (`ALT-DEF-044` - gap
+`manual/` sebagai jalur deployment paralel yang tidak pernah dijalankan
+`prisma migrate deploy`), (c) memperbarui defect lama yang preminya sudah
+usang (`ALT-DEF-029` - Postgres kini tersedia, tapi status TETAP
+`DIKONFIRMASI`, TIDAK `DITUTUP`, karena migrasi/trigger/test integrasi masih
+belum terpasang) atau yang rencananya sudah digantikan solusi lebih baik
+(`ALT-DEF-038` - trigger `BEFORE INSERT` lintas-tabel untuk promo repeatable
+diganti desain `@@unique([pesananId, promoId])` + counter `jumlahPenerapan`,
+constraint statis dalam satu tabel yang jauh lebih sederhana dan sudah punya
+precedent), dan (d) merestrukturisasi `docs/engineering/INVARIAN-BELUM-DITEGAKKAN.md`.
+Skema Prisma (`prisma/schema/schema.prisma`) SENGAJA TIDAK disentuh pada
+batch ini.
+
+**Keputusan 3 - Restrukturisasi `INVARIAN-BELUM-DITEGAKKAN.md` dari 3 seksi
+ad-hoc menjadi 5 kategori berjenjang.** Versi sebelumnya (seksi A/B/C:
+"SQL ditulis belum dijalankan" / "SQL belum ditulis" / "tidak mungkin DB
+enforced") mencampur dua sumbu klasifikasi yang berbeda: *jenis penegakan
+yang mungkin* (DB constraint vs guard transaksi vs job rekonsiliasi vs state
+machine) dan *seberapa dekat sebuah baris ke status DITUTUP*. Revisi ADR ini
+memisahkan keduanya secara eksplisit ke 5 kategori (A: migrasi resmi - saat
+ini KOSONG, diverifikasi lewat `ls prisma/migrations/`; B: DB-enforceable
+tapi belum resmi, dipecah B1-sudah-didraf/B2-belum-didraf; C: transaksi
+aplikasi, dengan catatan jujur bahwa optimistic concurrency belum ada di
+schema sama sekali hari ini; D: rekonsiliasi/cache; E: state machine guards,
+kategori BARU yang diekstrak dari `docs/arsitektur/STATE-MACHINES.md` dan
+sebelumnya tidak pernah punya baris invariant eksplisit). Skema ID `INV-NNN`
+diperkenalkan sebagai ruang ID terpisah dari `ALT-DEF-NNN` - satu invariant
+bisa dirujuk oleh nol atau lebih defect, dan sebaliknya, tanpa memaksakan
+1:1 antara kedua ruang ID tersebut. 20 baris lama dipecah menjadi 43 baris
+baru (rincian pemecahan ada di "Ringkasan angka" dokumen tersebut), termasuk
+kategori E yang seluruhnya baru (13 baris) dan satu baris (INV-043) yang
+secara eksplisit menangkap gap: `STATE-MACHINES.md` tidak pernah memodelkan
+Reservasi/Promo/Cuti sebagai state machine mandiri - direkomendasikan
+menjadi calon defect baru pada batch berikutnya, TIDAK dibuka sebagai
+`ALT-DEF-NNN` pada batch ini karena di luar scope eksplisit (restrukturisasi
+dokumen invariant, bukan pembukaan defect baru di luar `ALT-DEF-044`).
+
+**Keputusan 4 - Klaim "daftar tunggal dan lengkap" pada dokumen invariant
+dicabut, diganti "daftar terpusat SEMENTARA".** Klaim lama menyiratkan
+kelengkapan permanen yang tidak lagi akurat begitu fase deep-correction-loop
+dimulai: dokumen itu sendiri akan menjadi stale secepat baris-barisnya mulai
+berpindah kategori (fold ke migrasi resmi, trigger terpasang, test
+integrasi lulus) pada batch-batch berikutnya. Kejujuran status "provisional,
+snapshot per tanggal tertentu" dinilai lebih penting daripada kesan
+kelengkapan yang salah.
+
+**Cakupan batch ini vs. BELUM dikerjakan:** dokumen saja
+(`docs/engineering/INVARIAN-BELUM-DITEGAKKAN.md` ditulis ulang penuh,
+`docs/engineering/DEFECT-LEDGER.md` +1 baris baru + 2 baris diperbarui,
+`docs/engineering/RISK-REGISTER.md` +1 baris, `docs/engineering/
+RELEASE-EVIDENCE.md` +1 bagian bukti, `docs/engineering/DECISION-LOG.md`
+ADR ini). **TIDAK disentuh (sesuai instruksi eksplisit batch ini):**
+`prisma/schema/schema.prisma` sama sekali; tidak ada `prisma migrate`
+apa pun yang dijalankan terhadap `altora_resto_dev` meski koneksinya
+tersedia dan terverifikasi bekerja - itu pekerjaan batch kedua fase
+deep-correction-loop.

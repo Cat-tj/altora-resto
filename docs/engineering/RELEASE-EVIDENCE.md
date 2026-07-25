@@ -2210,6 +2210,80 @@ memfabrikasi angka". Breakdown status x severity, lihat
 `docs/engineering/CORRECTION-LOOP-STATUS.md`. **Nol defect berstatus
 `DITUTUP`** - dikonfirmasi dengan `awk` atas kolom Status seluruh 42 baris.
 
+### 13. Preflight fase DEEP CORRECTION LOOP (2026-07-25) - Postgres nyata & restrukturisasi INVARIAN-BELUM-DITEGAKKAN.md
+
+Ini adalah batch **pertama** dari fase baru "deep correction loop" yang
+diminta secara eksplisit lebih ketat dari 14+ batch correction-loop
+sebelumnya - batch ini murni **audit preflight + restrukturisasi dokumen**,
+BUKAN eksekusi migrasi (`prisma migrate` sengaja TIDAK dijalankan pada
+batch ini, itu scope batch berikutnya).
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -c "SELECT 1;"
+ ?column?
+----------
+        1
+(1 row)
+```
+
+**Konektivitas Postgres 16 lokal (`altora_resto_dev`, trust-auth, user
+`icat`) terkonfirmasi bekerja** - ini BUKAN klaim baru, ini verifikasi ulang
+atas database persisten yang sudah dibuat sebelum batch ini dimulai
+(`.env` root, gitignored, sudah berisi `DATABASE_URL` yang mengarah ke sana).
+
+```
+$ ls -la prisma/migrations/
+drwxr-xr-x@ 3 icat staff 96 ... manual
+$ ls prisma/migrations/manual/
+001_konfigurasi_qris_partial_unique.sql
+002_resep_target_xor_check.sql
+003_versi_resep_satu_aktif.sql
+004_stok_bahan_agregat_gudang_unik.sql
+005_mutasi_stok_append_only_dan_pembalik.sql
+```
+
+**`prisma/migrations/` HANYA berisi `manual/` - tidak ada satu pun folder
+migrasi bernomor timestamp yang dihasilkan `prisma migrate dev`.** Ini
+mengonfirmasi secara langsung akar masalah `ALT-DEF-044` (baru, dicatat
+batch ini): kelima file SQL manual tidak pernah berada dalam riwayat migrasi
+resmi Prisma, sehingga `prisma migrate deploy` standar tidak akan pernah
+menjalankannya.
+
+```
+$ grep -c '^| ALT-DEF-' docs/engineering/DEFECT-LEDGER.md
+44
+```
+
+**44 defect setelah batch ini (`ALT-DEF-001` s.d. `ALT-DEF-044`, tanpa
+gap nomor)** - `ALT-DEF-044` adalah satu-satunya defect baru yang dibuka
+pada batch ini (gap "manual SQL bukan migrasi resmi"). ID berikutnya yang
+tersedia sebelum batch ini dimulai memang `ALT-DEF-044` seperti yang
+diasumsikan instruksi - diverifikasi langsung dari baris tabel
+(`grep -oE 'ALT-DEF-[0-9]{3}'` menunjukkan `ALT-DEF-043` sebagai maksimum
+sebelum baris baru ditambahkan), bukan sekadar dipercaya dari asumsi.
+
+```
+$ wc -l docs/engineering/INVARIAN-BELUM-DITEGAKKAN.md
+181 docs/engineering/INVARIAN-BELUM-DITEGAKKAN.md
+$ grep -c '^| INV-' docs/engineering/INVARIAN-BELUM-DITEGAKKAN.md
+43
+```
+
+**43 baris invariant (`INV-001` s.d. `INV-043`) setelah restrukturisasi ke 5
+kategori** (A=0, B=14 [B1=7 sudah didraf + B2=7 belum didraf], C=10, D=6,
+E=13) - naik dari 20 baris versi sebelumnya karena pemecahan baris gabungan
+lama menjadi baris per-model/per-arah yang lebih presisi, penambahan 3 baris
+dari `ALT-DEF-043` (muncul di kategori B DAN D karena drafting-DB dan
+rekonsiliasi-cache adalah dua sisi berbeda dari invariant ledger keanggotaan
+yang sama), dan kategori E (state machine guards) yang seluruhnya baru,
+diekstrak dari `docs/arsitektur/STATE-MACHINES.md`.
+
+Tidak ada migrasi yang dijalankan, tidak ada trigger yang dipasang, tidak
+ada test integrasi yang dijalankan terhadap `altora_resto_dev` pada batch
+ini - seluruh pekerjaan itu tetap tercatat sebagai belum dilakukan di
+`DEFECT-LEDGER.md`/`INVARIAN-BELUM-DITEGAKKAN.md` dan menjadi scope
+eksplisit batch berikutnya.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```
