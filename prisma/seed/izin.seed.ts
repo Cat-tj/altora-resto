@@ -40,10 +40,39 @@ export const IZIN_SEED: readonly IzinSeedEntry[] = [
   { kode: "giliran.tutup-paksa", nama: "Tutup paksa giliran kasir", domain: "giliran", deskripsi: "Menutup giliran kasir milik pengguna lain (supervisor)." },
 
   // persediaan
-  { kode: "persediaan.lihat", nama: "Lihat stok bahan", domain: "persediaan", deskripsi: "Melihat saldo dan riwayat stok bahan." },
-  { kode: "persediaan.sesuaikan", nama: "Sesuaikan stok", domain: "persediaan", deskripsi: "Membuat mutasi penyesuaian stok manual." },
-  { kode: "persediaan.opname", nama: "Kelola stok opname", domain: "persediaan", deskripsi: "Menjadwalkan dan menjalankan sesi stok opname." },
-  { kode: "persediaan.transfer", nama: "Transfer stok", domain: "persediaan", deskripsi: "Membuat/menerima transfer stok antar gudang/outlet." },
+  // ALT-DEF-008: empat kode KOARSE lama (`persediaan.lihat`,
+  // `persediaan.sesuaikan`, `persediaan.opname`, `persediaan.transfer`)
+  // DIGANTI 17 kode granular yang SUDAH DIREFERENSIKAN MASTER-CHECKLIST.md
+  // (ALT-PSD-001 s.d. ALT-PSD-018). Kode lama tidak dipertahankan
+  // berdampingan: dua nama untuk satu keputusan otorisasi yang sama adalah
+  // persis drift yang dicatat ALT-DEF-034. Belum ada satu baris PeranIzin pun
+  // (belum ada migrasi yang pernah dijalankan, ALT-DEF-029), sehingga
+  // penggantian ini tidak memutus grant yang sudah ada.
+  { kode: "persediaan.bahan.kelola", nama: "Kelola bahan baku", domain: "persediaan", deskripsi: "Mendaftarkan/mengubah bahan baku tenant (ALT-PSD-001)." },
+  { kode: "persediaan.satuan.kelola", nama: "Kelola satuan", domain: "persediaan", deskripsi: "Mendefinisikan satuan dasar bahan (ALT-PSD-002)." },
+  { kode: "persediaan.gudang.kelola", nama: "Kelola gudang", domain: "persediaan", deskripsi: "Mendefinisikan gudang penyimpanan per outlet (ALT-PSD-003)." },
+  { kode: "persediaan.lokasi.kelola", nama: "Kelola lokasi penyimpanan", domain: "persediaan", deskripsi: "Mengelola sub-lokasi (rak/chiller/freezer) di dalam gudang (ALT-PSD-004)." },
+  { kode: "persediaan.mutasi.lihat", nama: "Lihat mutasi stok", domain: "persediaan", deskripsi: "Membaca ledger mutasi stok append-only (ALT-PSD-005)." },
+  { kode: "persediaan.mutasi.balik", nama: "Balik mutasi stok", domain: "persediaan", deskripsi: "Membuat mutasi pembalik atas mutasi yang salah/dibatalkan (ALT-PSD-006)." },
+  { kode: "persediaan.saldo.lihat", nama: "Lihat saldo stok", domain: "persediaan", deskripsi: "Membaca read-model saldo stok per gudang/lokasi (ALT-PSD-007)." },
+  { kode: "persediaan.reservasi.kelola", nama: "Kelola reservasi stok", domain: "persediaan", deskripsi: "Mengunci stok untuk pesanan yang sedang diproses (ALT-PSD-008)." },
+  { kode: "persediaan.reservasi.lepas", nama: "Lepas reservasi stok", domain: "persediaan", deskripsi: "Melepas reservasi secara manual sebagai koreksi (ALT-PSD-009). Pelepasan NORMAL terjadi otomatis lewat event pesanan dan tidak melewati kode izin ini." },
+  { kode: "persediaan.batch.kelola", nama: "Kelola batch stok", domain: "persediaan", deskripsi: "Mencatat batch penerimaan beserta tanggal kedaluwarsa untuk FEFO (ALT-PSD-010)." },
+  { kode: "persediaan.transfer.kelola", nama: "Kelola transfer stok", domain: "persediaan", deskripsi: "Membuat, mengajukan, dan mengirim transfer stok antar gudang/outlet (ALT-PSD-012)." },
+  { kode: "persediaan.transfer.setujui", nama: "Setujui transfer stok", domain: "persediaan", deskripsi: "Menyetujui/membatalkan transfer stok (approval manajer/owner)." },
+  { kode: "persediaan.transfer.terima", nama: "Terima transfer stok", domain: "persediaan", deskripsi: "Mengonfirmasi penerimaan transfer di gudang tujuan (ALT-PSD-013)." },
+  { kode: "persediaan.waste.kelola", nama: "Catat waste", domain: "persediaan", deskripsi: "Mencatat waste/spoilage dengan alasan baku (ALT-PSD-014)." },
+  { kode: "persediaan.alasan-waste.kelola", nama: "Kelola alasan waste", domain: "persediaan", deskripsi: "CRUD daftar alasan waste standar tenant (ALT-PSD-015)." },
+  { kode: "persediaan.opname.kelola", nama: "Kelola stok opname", domain: "persediaan", deskripsi: "Menjadwalkan, menghitung, mengunci, dan memposting sesi stok opname (ALT-PSD-016)." },
+  { kode: "persediaan.opname.setujui", nama: "Setujui hasil stok opname", domain: "persediaan", deskripsi: "Menyetujui selisih opname signifikan sebelum posting mutasi (ALT-PSD-017)." },
+  { kode: "persediaan.reorder.kelola", nama: "Kelola kebijakan pemesanan ulang", domain: "persediaan", deskripsi: "Menetapkan ambang minimum dan kuantitas reorder per bahan per outlet (ALT-PSD-018)." },
+  // `persediaan.alokasi.otomatis` (ALT-PSD-011) SENGAJA TIDAK ADA. Kolom
+  // Aktor requirement itu adalah pemicu internal (pemakaian resep/penjualan)
+  // dan tidak punya endpoint sama sekali - pemilihan batch FEFO/FIFO adalah
+  // algoritma, bukan keputusan otorisasi yang dipegang siapa pun. Menjadikannya
+  // kode izin justru menyiratkan ada peran yang boleh memakai stok TANPA
+  // alokasi batch. Kelas yang sama dengan `keamanan.qris.enkripsi` dan
+  // `resep.pemakaian.otomatis` - lihat ALT-DEF-034 dan PERMISSION-MATRIX 1a.
 
   // pembelian
   { kode: "pembelian.buat", nama: "Buat pembelian", domain: "pembelian", deskripsi: "Membuat purchase order draft." },

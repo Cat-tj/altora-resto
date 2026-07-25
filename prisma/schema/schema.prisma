@@ -79,69 +79,79 @@ model Tenant {
   status    StatusTenant @default(AKTIF)
   createdAt DateTime     @default(now())
 
-  outlet                  Outlet[]
-  keanggotaanTenant       KeanggotaanTenant[]
-  peran                   Peran[]
-  auditLog                AuditLog[]
-  pengaturanTenant        PengaturanTenant[]
-  satuan                  Satuan[]
-  bahan                   Bahan[]
-  resep                   Resep[]
+  outlet                     Outlet[]
+  keanggotaanTenant          KeanggotaanTenant[]
+  peran                      Peran[]
+  auditLog                   AuditLog[]
+  pengaturanTenant           PengaturanTenant[]
+  satuan                     Satuan[]
+  bahan                      Bahan[]
+  resep                      Resep[]
   // ALT-DEF-007: model baru domain resep & produksi (ADR-022).
-  konversiSatuan          KonversiSatuan[]
-  versiResep              VersiResep[]
-  komponenResep           KomponenResep[]
-  komponenResepModifier   KomponenResepModifier[]
-  prosesProduksi          ProsesProduksi[]
-  prosesProduksiBaris     ProsesProduksiBaris[]
-  batchProduksi           BatchProduksi[]
-  modifierGrup            ModifierGrup[]
-  itemMenu                ItemMenu[]
-  supplier                Supplier[]
-  purchaseOrder           PurchaseOrder[]
-  returPembelian          ReturPembelian[]
-  pelanggan               Pelanggan[]
-  tierMembership          TierMembership[]
-  promo                   Promo[]
-  kupon                   Kupon[]
-  promoPemakaian          PromoPemakaian[]
-  jabatan                 Jabatan[]
-  karyawan                Karyawan[]
-  jadwalShift             JadwalShift[]
-  absensi                 Absensi[]
-  kategoriBiaya           KategoriBiaya[]
-  rekapKasHarian          RekapKasHarian[]
-  biayaOperasional        BiayaOperasional[]
-  metodeBayar             MetodeBayar[]
-  pesanan                 Pesanan[]
-  pesananPerubahan        PesananPerubahan[]
-  pesananPenolakan        PesananPenolakan[]
-  pesananPembatalan       PesananPembatalan[]
-  mutasiStok              MutasiStok[]
-  stokOpname              StokOpname[]
-  tiketDapur              TiketDapur[]
-  riwayatStatusTiketDapur RiwayatStatusTiketDapur[]
-  gelombangDapur          GelombangDapur[]
-  aturanRoutingDapur      AturanRoutingDapur[]
-  stasiunDapur            StasiunDapur[]
-  rmPenjualanHarian       RmPenjualanHarian[]
-  rmPenjualanItemHarian   RmPenjualanItemHarian[]
-  rmStokKritis            RmStokKritis[]
-  rmKinerjaKaryawanHarian RmKinerjaKaryawanHarian[]
-  pembayaran              Pembayaran[]
+  konversiSatuan             KonversiSatuan[]
+  versiResep                 VersiResep[]
+  komponenResep              KomponenResep[]
+  komponenResepModifier      KomponenResepModifier[]
+  prosesProduksi             ProsesProduksi[]
+  prosesProduksiBaris        ProsesProduksiBaris[]
+  batchProduksi              BatchProduksi[]
+  modifierGrup               ModifierGrup[]
+  itemMenu                   ItemMenu[]
+  supplier                   Supplier[]
+  purchaseOrder              PurchaseOrder[]
+  returPembelian             ReturPembelian[]
+  pelanggan                  Pelanggan[]
+  tierMembership             TierMembership[]
+  promo                      Promo[]
+  kupon                      Kupon[]
+  promoPemakaian             PromoPemakaian[]
+  jabatan                    Jabatan[]
+  karyawan                   Karyawan[]
+  jadwalShift                JadwalShift[]
+  absensi                    Absensi[]
+  kategoriBiaya              KategoriBiaya[]
+  rekapKasHarian             RekapKasHarian[]
+  biayaOperasional           BiayaOperasional[]
+  metodeBayar                MetodeBayar[]
+  pesanan                    Pesanan[]
+  pesananPerubahan           PesananPerubahan[]
+  pesananPenolakan           PesananPenolakan[]
+  pesananPembatalan          PesananPembatalan[]
+  mutasiStok                 MutasiStok[]
+  stokOpname                 StokOpname[]
+  // ALT-DEF-008: model baru domain persediaan (ADR-023/024/025).
+  lokasiStok                 LokasiStok[]
+  batchStok                  BatchStok[]
+  reservasiStok              ReservasiStok[]
+  penyesuaianStok            PenyesuaianStok[]
+  transferStok               TransferStok[]
+  alasanWaste                AlasanWaste[]
+  catatanWaste               CatatanWaste[]
+  kebijakanPemesananUlang    KebijakanPemesananUlang[]
+  pengaturanPersediaanOutlet PengaturanPersediaanOutlet[]
+  tiketDapur                 TiketDapur[]
+  riwayatStatusTiketDapur    RiwayatStatusTiketDapur[]
+  gelombangDapur             GelombangDapur[]
+  aturanRoutingDapur         AturanRoutingDapur[]
+  stasiunDapur               StasiunDapur[]
+  rmPenjualanHarian          RmPenjualanHarian[]
+  rmPenjualanItemHarian      RmPenjualanItemHarian[]
+  rmStokKritis               RmStokKritis[]
+  rmKinerjaKaryawanHarian    RmKinerjaKaryawanHarian[]
+  pembayaran                 Pembayaran[]
   // ALT-DEF-014/ALT-DEF-015: model baru domain pembayaran & konfigurasi QRIS.
-  alokasiPembayaran       AlokasiPembayaran[]
-  pembayaranMetodeBaris   PembayaranMetodeBaris[]
-  koreksiPembayaran       KoreksiPembayaran[]
-  qrisKonfirmasiManual    QrisKonfirmasiManual[]
-  struk                   Struk[]
-  pembayaranRefund        PembayaranRefund[]
-  konfigurasiQris         KonfigurasiQris[]
-  riwayatKonfigurasiQris  RiwayatKonfigurasiQris[]
-  permintaanPersetujuan   PermintaanPersetujuan[]
-  idempotencyKey          IdempotencyKey[]
-  domainOutboxEvent       DomainOutboxEvent[]
-  notification            Notification[]
+  alokasiPembayaran          AlokasiPembayaran[]
+  pembayaranMetodeBaris      PembayaranMetodeBaris[]
+  koreksiPembayaran          KoreksiPembayaran[]
+  qrisKonfirmasiManual       QrisKonfirmasiManual[]
+  struk                      Struk[]
+  pembayaranRefund           PembayaranRefund[]
+  konfigurasiQris            KonfigurasiQris[]
+  riwayatKonfigurasiQris     RiwayatKonfigurasiQris[]
+  permintaanPersetujuan      PermintaanPersetujuan[]
+  idempotencyKey             IdempotencyKey[]
+  domainOutboxEvent          DomainOutboxEvent[]
+  notification               Notification[]
 
   @@map("tenant")
 }
@@ -157,40 +167,50 @@ model Outlet {
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
-  keanggotaanOutlet       KeanggotaanOutlet[]       @relation("KeanggotaanOutletOutlet")
-  pinOutlet               PinOutlet[]               @relation("PinOutletOutlet")
-  perangkat               Perangkat[]
-  pengaturanOutlet        PengaturanOutlet[]
-  kategoriMenu            KategoriMenu[]
-  hargaItemOutlet         HargaItemOutlet[]         @relation("HargaItemOutletOutlet")
-  gudang                  Gudang[]
-  purchaseOrder           PurchaseOrder[]
-  areaMeja                AreaMeja[]
-  meja                    Meja[]
-  reservasi               Reservasi[]
-  pesanan                 Pesanan[]
-  stasiunDapur            StasiunDapur[]
-  tiketDapur              TiketDapur[]
-  giliranKasir            GiliranKasir[]
-  pembayaran              Pembayaran[]
+  keanggotaanOutlet          KeanggotaanOutlet[]         @relation("KeanggotaanOutletOutlet")
+  pinOutlet                  PinOutlet[]                 @relation("PinOutletOutlet")
+  perangkat                  Perangkat[]
+  pengaturanOutlet           PengaturanOutlet[]
+  kategoriMenu               KategoriMenu[]
+  hargaItemOutlet            HargaItemOutlet[]           @relation("HargaItemOutletOutlet")
+  gudang                     Gudang[]
+  purchaseOrder              PurchaseOrder[]
+  areaMeja                   AreaMeja[]
+  meja                       Meja[]
+  reservasi                  Reservasi[]
+  pesanan                    Pesanan[]
+  stasiunDapur               StasiunDapur[]
+  tiketDapur                 TiketDapur[]
+  giliranKasir               GiliranKasir[]
+  pembayaran                 Pembayaran[]
   // ALT-DEF-007: produksi bahan setengah jadi berjalan PER OUTLET (dapur
   // outlet A tidak boleh mengklaim batch milik outlet B).
-  prosesProduksi          ProsesProduksi[]
-  batchProduksi           BatchProduksi[]
+  prosesProduksi             ProsesProduksi[]
+  batchProduksi              BatchProduksi[]
   // ALT-DEF-015: konfigurasi QRIS statis per outlet + audit perubahannya.
-  konfigurasiQris         KonfigurasiQris[]
-  riwayatKonfigurasiQris  RiwayatKonfigurasiQris[]
-  mutasiStok              MutasiStok[]
-  karyawanUtama           Karyawan[]                @relation("KaryawanOutletUtama")
-  jadwalShift             JadwalShift[]
-  absensi                 Absensi[]
-  rekapKasHarian          RekapKasHarian[]
-  biayaOperasional        BiayaOperasional[]
-  rmPenjualanHarian       RmPenjualanHarian[]
-  rmPenjualanItemHarian   RmPenjualanItemHarian[]
-  rmStokKritis            RmStokKritis[]
-  rmKinerjaKaryawanHarian RmKinerjaKaryawanHarian[]
-  AturanRoutingDapur      AturanRoutingDapur[]
+  konfigurasiQris            KonfigurasiQris[]
+  riwayatKonfigurasiQris     RiwayatKonfigurasiQris[]
+  mutasiStok                 MutasiStok[]
+  // ALT-DEF-008: model baru domain persediaan (ADR-023/024/025).
+  lokasiStok                 LokasiStok[]
+  batchStok                  BatchStok[]
+  reservasiStok              ReservasiStok[]
+  penyesuaianStok            PenyesuaianStok[]
+  catatanWaste               CatatanWaste[]
+  kebijakanPemesananUlang    KebijakanPemesananUlang[]
+  pengaturanPersediaanOutlet PengaturanPersediaanOutlet?
+  transferStokAsal           TransferStok[]              @relation("TransferStokOutletAsal")
+  transferStokTujuan         TransferStok[]              @relation("TransferStokOutletTujuan")
+  karyawanUtama              Karyawan[]                  @relation("KaryawanOutletUtama")
+  jadwalShift                JadwalShift[]
+  absensi                    Absensi[]
+  rekapKasHarian             RekapKasHarian[]
+  biayaOperasional           BiayaOperasional[]
+  rmPenjualanHarian          RmPenjualanHarian[]
+  rmPenjualanItemHarian      RmPenjualanItemHarian[]
+  rmStokKritis               RmStokKritis[]
+  rmKinerjaKaryawanHarian    RmKinerjaKaryawanHarian[]
+  AturanRoutingDapur         AturanRoutingDapur[]
 
   @@unique([tenantId, kode])
   // Diperlukan (bukan sekadar @id) agar KeanggotaanOutlet bisa memakai composite FK
@@ -248,6 +268,21 @@ model Pengguna {
   purchaseOrderDibuat             PurchaseOrder[]           @relation("PoDibuatOleh")
   penerimaanBarangDiterima        PenerimaanBarang[]        @relation("PenerimaanDiterimaOleh")
   stokOpnameDibuat                StokOpname[]              @relation("OpnameDibuatOleh")
+  // ALT-DEF-008: aktor domain persediaan. Seluruhnya FK ID TUNGGAL ke
+  // Pengguna - identitas global, tidak pernah di-composite-kan ke tenant
+  // (ADR-013 poin 5).
+  stokOpnameDihitung              StokOpname[]              @relation("OpnameDihitungOleh")
+  stokOpnameDikunci               StokOpname[]              @relation("OpnameDikunciOleh")
+  stokOpnameDisetujui             StokOpname[]              @relation("OpnameDisetujuiOleh")
+  mutasiStokDibuat                MutasiStok[]              @relation("MutasiStokDibuatOleh")
+  penyesuaianStokDicatat          PenyesuaianStok[]         @relation("PenyesuaianStokDicatatOleh")
+  penyesuaianStokDisetujui        PenyesuaianStok[]         @relation("PenyesuaianStokDisetujuiOleh")
+  catatanWasteDicatat             CatatanWaste[]            @relation("CatatanWasteDicatatOleh")
+  catatanWasteDisetujui           CatatanWaste[]            @relation("CatatanWasteDisetujuiOleh")
+  transferStokDibuat              TransferStok[]            @relation("TransferStokDibuatOleh")
+  transferStokDisetujui           TransferStok[]            @relation("TransferStokDisetujuiOleh")
+  transferStokDikirim             TransferStok[]            @relation("TransferStokDikirimOleh")
+  transferStokDiterima            TransferStok[]            @relation("TransferStokDiterimaOleh")
   pesananDibuat                   Pesanan[]                 @relation("PesananDibuatOleh")
   pesananRiwayatStatusDiubah      PesananRiwayatStatus[]    @relation("RiwayatStatusDiubahOleh")
   // ALT-DEF-005/ALT-PES-010/ALT-PES-011: pengguna yang melakukan
@@ -902,23 +937,30 @@ model Bahan {
   stokMinimum   Int                 @default(0)
   status        StatusAktifNonaktif @default(AKTIF)
 
-  tenant                     Tenant                  @relation(fields: [tenantId], references: [id])
-  satuanDasar                Satuan                  @relation(fields: [satuanDasarId], references: [id])
+  tenant                     Tenant                    @relation(fields: [tenantId], references: [id])
+  satuanDasar                Satuan                    @relation(fields: [satuanDasarId], references: [id])
   // ALT-DEF-007: `resepBahan ResepBahan[]` DIHAPUS - model ResepBahan
   // dibuang seluruhnya dan digantikan KomponenResep yang menggantung pada
   // VersiResep (ADR-022 Keputusan 4).
   komponenResep              KomponenResep[]
-  komponenResepModifier      KomponenResepModifier[] @relation("KomponenResepModifierBahan")
-  komponenResepModifierGanti KomponenResepModifier[] @relation("KomponenResepModifierBahanPengganti")
-  resepHasil                 Resep[]                 @relation("ResepBahanHasil")
+  komponenResepModifier      KomponenResepModifier[]   @relation("KomponenResepModifierBahan")
+  komponenResepModifierGanti KomponenResepModifier[]   @relation("KomponenResepModifierBahanPengganti")
+  resepHasil                 Resep[]                   @relation("ResepBahanHasil")
   prosesProduksiBaris        ProsesProduksiBaris[]
-  batchProduksi              BatchProduksi[]         @relation("BatchProduksiBahanHasil")
-  stokBahan                  StokBahan[]             @relation("StokBahanBahan")
+  batchProduksi              BatchProduksi[]           @relation("BatchProduksiBahanHasil")
+  stokBahan                  StokBahan[]               @relation("StokBahanBahan")
   poBaris                    PurchaseOrderBaris[]
   penerimaanBaris            PenerimaanBarangBaris[]
   mutasiStok                 MutasiStok[]
   opnameBaris                StokOpnameBaris[]
   rmStokKritis               RmStokKritis[]
+  // ALT-DEF-008: model baru domain persediaan (ADR-023/024/025).
+  batchStok                  BatchStok[]
+  reservasiStok              ReservasiStok[]
+  penyesuaianStok            PenyesuaianStok[]
+  transferStokBaris          TransferStokBaris[]
+  catatanWaste               CatatanWaste[]
+  kebijakanPemesananUlang    KebijakanPemesananUlang[]
 
   @@unique([tenantId, kodeSku])
   // ALT-DEF-010: agar StokBahan/MutasiStok/RmStokKritis bisa memakai
@@ -943,6 +985,11 @@ model Satuan {
   komponenResepModifier KomponenResepModifier[]
   prosesProduksiBaris   ProsesProduksiBaris[]
   batchProduksi         BatchProduksi[]
+  // ALT-DEF-008: satuan pada mutasi/reservasi/transfer/waste.
+  mutasiStok            MutasiStok[]
+  reservasiStok         ReservasiStok[]
+  transferStokBaris     TransferStokBaris[]
+  catatanWaste          CatatanWaste[]
 
   // ALT-DEF-007/ADR-013: agar KonversiSatuan/VersiResep/KomponenResep/
   // ProsesProduksiBaris/BatchProduksi (yang semuanya membawa tenantId
@@ -1259,6 +1306,13 @@ model BatchProduksi {
   bahanHasil     Bahan          @relation("BatchProduksiBahanHasil", fields: [tenantId, bahanHasilId], references: [tenantId, id])
   satuan         Satuan         @relation(fields: [tenantId, satuanId], references: [tenantId, id])
 
+  // ALT-DEF-008 (ADR-024 Keputusan 3): SEAM yang dijanjikan ADR-022 Keputusan 8
+  // poin 4 DITEBUS - `BatchStok` (domain persediaan) menunjuk ke sini lewat
+  // composite-FK (tenantId, batchProduksiId), 1:1 opsional. Batch produksi
+  // adalah catatan APA YANG DIBUAT; BatchStok adalah catatan APA YANG ADA DI
+  // RAK. Keduanya TIDAK disatukan - lihat rasional lengkap di model BatchStok.
+  batchStok BatchStok?
+
   @@unique([tenantId, nomorBatch])
   // Agar model persediaan/FEFO batch berikutnya (ALT-DEF-008) bisa memakai
   // composite-FK (tenantId, batchProduksiId) -> BatchProduksi(tenantId, id).
@@ -1269,34 +1323,161 @@ model BatchProduksi {
 // =====================================================================================
 // 4. PERSEDIAAN (docs/database/04-persediaan.md)
 // =====================================================================================
+//
+// ALT-DEF-008 / ADR-023 s.d. ADR-025 (lihat docs/engineering/DECISION-LOG.md).
+//
+// ATURAN KERAS DOMAIN INI: `MutasiStok` adalah LEDGER APPEND-ONLY dan satu-
+// satunya SUMBER KEBENARAN saldo stok. `StokBahan` adalah CACHE TURUNAN
+// (read-model) yang boleh dibuang dan dihitung ulang kapan saja dari
+// SUM(MutasiStok.jumlah); ia TIDAK PERNAH otoritatif. Setiap peristiwa stok
+// (pembelian, pemakaian resep, waste, transfer, opname, produksi) WAJIB
+// menulis baris `MutasiStok` baru; tidak ada satu pun jalur yang boleh menulis
+// `StokBahan` tanpa baris mutasi pendampingnya. Koreksi SELALU berupa baris
+// PEMBALIK baru (ADR-006), tidak pernah UPDATE/DELETE atas baris mutasi asal.
+// Lihat ADR-023 Keputusan 1 untuk rasional lengkap dan seam job rekonsiliasi.
 
+// ALT-DEF-008 (ADR-023 Keputusan 2): enum lama yang KOARSE
+// (MASUK_PEMBELIAN/KELUAR_PENJUALAN/OPNAME_PENYESUAIAN/TRANSFER_MASUK/
+// TRANSFER_KELUAR/RETUR) DIGANTI daftar penuh 12 nilai. Pemetaan nilai lama ->
+// baru didokumentasikan di ADR-023 Keputusan 2 dan docs/database/04-persediaan.md.
+// Nilai lama TIDAK dipertahankan berdampingan: tidak ada migrasi yang pernah
+// dijalankan (ALT-DEF-029) sehingga belum ada satu baris data pun, dan
+// membiarkan dua nama untuk satu peristiwa yang sama adalah persis kelas defect
+// yang sedang diperbaiki.
 enum JenisMutasiStok {
-  MASUK_PEMBELIAN
-  KELUAR_PENJUALAN
-  OPNAME_PENYESUAIAN
+  // MASUK
+  PEMBELIAN_MASUK
+  RETUR_PENJUALAN
   TRANSFER_MASUK
+  PRODUKSI_MASUK
+  // KELUAR
+  PEMAKAIAN_RESEP
+  RETUR_SUPPLIER
   TRANSFER_KELUAR
-  RETUR
+  PRODUKSI_KELUAR
+  WASTE
+  PEMAKAIAN_INTERNAL
+  // DUA ARAH (tanda ditentukan `jumlah`, bukan oleh nilai enum)
+  PENYESUAIAN
+  KOREKSI_OPNAME
 }
 
+// ALT-DEF-008: diperluas mengikuti jenis dokumen sumber yang kini benar-benar
+// ada sebagai model (PenyesuaianStok/CatatanWaste/TransferStok/ProsesProduksi).
 enum ReferensiJenisMutasi {
   PEMBELIAN
   PESANAN
   OPNAME
   TRANSFER
+  PRODUKSI
+  WASTE
+  PENYESUAIAN
+  RETUR_PEMBELIAN
+  PEMAKAIAN_INTERNAL
 }
 
+// ALT-DEF-008 (ADR-025): state machine opname LENGKAP menggantikan
+// DIRENCANAKAN/BERLANGSUNG/SELESAI/DIBATALKAN yang lama. Pemetaan:
+// DIRENCANAKAN -> DRAF, BERLANGSUNG -> SEDANG_DIHITUNG,
+// SELESAI -> DIPOSTING, DIBATALKAN -> DIBATALKAN.
+// DIKUNCI dan MENUNGGU_PERSETUJUAN adalah status BARU yang sebelumnya tidak
+// punya padanan sama sekali - tanpa keduanya, ALT-PSD-017 (approval selisih
+// signifikan) tidak punya tempat untuk berdiri. Tabel transisi penuh ada di
+// docs/arsitektur/STATE-MACHINES.md bagian 7.
 enum StatusStokOpname {
-  DIRENCANAKAN
-  BERLANGSUNG
-  SELESAI
+  DRAF
+  SEDANG_DIHITUNG
+  DIKUNCI
+  MENUNGGU_PERSETUJUAN
+  DISETUJUI
+  DIPOSTING
   DIBATALKAN
+}
+
+// ALT-DEF-008 (ADR-024 Keputusan 4): state machine transfer stok antar
+// gudang/outlet. `DITERIMA_SEBAGIAN` dipisahkan dari `DITERIMA` karena
+// keduanya punya konsekuensi berbeda: yang pertama masih menyisakan barang
+// "dalam perjalanan" yang belum jadi saldo di gudang mana pun.
+enum StatusTransferStok {
+  DRAF
+  DIAJUKAN
+  DISETUJUI
+  DIKIRIM
+  DITERIMA_SEBAGIAN
+  DITERIMA
+  DIBATALKAN
+}
+
+// ALT-DEF-008/ALT-PSD-004: jenis sub-lokasi penyimpanan di dalam satu Gudang.
+// Nullable di LokasiStok - "rak nomor 3" yang tidak dikategorikan tetap sah.
+enum JenisLokasiStok {
+  RAK
+  CHILLER
+  FREEZER
+  GUDANG_KERING
+  AREA_PERSIAPAN
+  LAINNYA
+}
+
+// ALT-DEF-008/ALT-PSD-010: status satu batch stok fisik. Sengaja SAMA
+// bentuknya dengan StatusBatchProduksi (ADR-022 Keputusan 6) - KEDALUWARSA
+// (konsekuensi tanggal) dipisahkan dari DIBUANG (keputusan manusia beralasan,
+// yang menghasilkan CatatanWaste + mutasi WASTE).
+enum StatusBatchStok {
+  TERSEDIA
+  HABIS
+  KEDALUWARSA
+  DIBUANG
+}
+
+// ALT-DEF-008/ALT-PSD-008 (ADR-024 Keputusan 2): siklus hidup satu reservasi.
+// DILEPAS = dibatalkan tanpa pemakaian (pesanan batal/ditolak);
+// DIKONSUMSI = berubah menjadi mutasi stok nyata (pemakaian terjadi);
+// KEDALUWARSA = melewati batas waktu tanpa keputusan (job penyapu).
+// Ketiganya TERMINAL. Membedakan DILEPAS dari DIKONSUMSI wajib: hanya yang
+// kedua yang punya baris MutasiStok pendamping.
+enum StatusReservasiStok {
+  AKTIF
+  DILEPAS
+  DIKONSUMSI
+  KEDALUWARSA
+}
+
+// ALT-DEF-008/ALT-PSD-018: metode perhitungan saran pemesanan ulang.
+enum MetodePemesananUlang {
+  MIN_MAX
+  FIXED
+}
+
+// ALT-DEF-008 (ADR-025 Keputusan 1): kapan stok BENAR-BENAR dipotong dari
+// ledger. Rekomendasi default SAAT_MASUK_DAPUR - saat itulah bahan secara
+// fisik mulai dipakai, sehingga saldo ledger paling dekat dengan kenyataan
+// rak. Reservasi (ReservasiStok) menutup jendela antara pesanan diterima dan
+// bahan benar-benar dipakai.
+enum KebijakanPemotonganStok {
+  SAAT_PESANAN_DITERIMA
+  SAAT_MASUK_DAPUR
+  SAAT_SELESAI
+  SAAT_PEMBAYARAN
+}
+
+// ALT-DEF-008/ALT-PSD-011 (ADR-025 Keputusan 3): FEFO = first-expired-
+// first-out (wajib untuk bahan perishable), FIFO = fallback berdasarkan
+// createdAt untuk bahan tanpa tanggal kedaluwarsa.
+enum MetodeAlokasiBatch {
+  FEFO
+  FIFO
 }
 
 // ALT-DEF-010: outlet direlasi lewat composite-FK (tenantId, outletId) ->
 // Outlet(tenantId, id). @@unique([tenantId, id]) ditambahkan agar
 // StokBahan/MutasiStok/StokOpname/PenerimaanBarang bisa memakai composite FK
 // menuju Gudang.
+// ALT-DEF-008: @@unique([outletId, id]) BARU ditambahkan - TransferStok
+// memakainya untuk menjamin di level database bahwa `gudangAsal` benar-benar
+// milik `outletAsal` (dan `gudangTujuan` milik `outletTujuan`), jaminan yang
+// TIDAK didapat dari composite (tenantId, gudangId) saja pada tenant
+// multi-outlet. Pola varian outlet-level per ADR-013 poin 3.
 model Gudang {
   id       String              @id
   tenantId String
@@ -1309,30 +1490,111 @@ model Gudang {
   stokOpname       StokOpname[]
   penerimaanBarang PenerimaanBarang[] @relation("PenerimaanBarangGudang")
   MutasiStok       MutasiStok[]
+  // ALT-DEF-008: sub-lokasi, waste, dan kedua sisi transfer.
+  lokasiStok       LokasiStok[]
+  catatanWaste     CatatanWaste[]
+  transferAsal     TransferStok[]     @relation("TransferStokGudangAsal")
+  transferTujuan   TransferStok[]     @relation("TransferStokGudangTujuan")
 
   @@unique([tenantId, id])
+  @@unique([outletId, id])
   @@map("gudang")
+}
+
+// ALT-DEF-008/ALT-PSD-004 (ADR-024 Keputusan 1): sub-lokasi penyimpanan di
+// dalam satu Gudang (rak, chiller, freezer). Ini yang membuat "saldo per
+// lokasi" (acceptance ALT-PSD-004) mungkin sama sekali - sebelumnya granularitas
+// terhalus adalah gudang.
+model LokasiStok {
+  id       String              @id
+  tenantId String
+  outletId String
+  gudangId String
+  nama     String
+  jenis    JenisLokasiStok?
+  status   StatusAktifNonaktif @default(AKTIF)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  outlet Outlet @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // Composite outlet-level (ADR-013 poin 3): lokasi TIDAK boleh menunjuk
+  // gudang milik outlet lain, meski masih satu tenant.
+  gudang Gudang @relation(fields: [outletId, gudangId], references: [outletId, id])
+
+  stokBahan    StokBahan[]
+  batchStok    BatchStok[]
+  catatanWaste CatatanWaste[]
+  mutasiSumber MutasiStok[]      @relation("MutasiStokLokasiSumber")
+  mutasiTujuan MutasiStok[]      @relation("MutasiStokLokasiTujuan")
+  opnameBaris  StokOpnameBaris[]
+
+  @@unique([gudangId, nama])
+  @@unique([tenantId, id])
+  @@map("lokasi_stok")
 }
 
 // ALT-DEF-010: sebelumnya tidak punya tenantId sama sekali (gap ditemukan
 // saat audit) - Gudang dan Bahan bisa secara teori dimiliki tenant berbeda
 // tanpa jaminan apa pun. Ditambahkan tenantId denormalisasi + DUA
 // composite-FK (pola sama seperti KeanggotaanOutlet/ADR-011).
+//
+// ALT-DEF-008 (ADR-023 Keputusan 3) - NAMA MODEL SENGAJA TETAP `StokBahan`,
+// BUKAN `SaldoStok` seperti bunyi MASTER-CHECKLIST ALT-PSD-007. Model ini
+// sudah melakukan persis tugas yang dimaksud `SaldoStok`, sudah dirujuk
+// composite-FK yang divalidasi (ADR-013), dan sudah punya @@map("stok_bahan").
+// Mengganti namanya adalah churn murni tanpa jaminan tambahan apa pun.
+// `SaldoStok` diperlakukan sebagai ALIAS dokumentasi.
+//
+// **INI CACHE TURUNAN, BUKAN SUMBER KEBENARAN.** `kuantitas` di sini WAJIB
+// selalu sama dengan SUM(MutasiStok.jumlah) untuk (gudangId, bahanId,
+// lokasiStokId) yang sama. Bila berbeda, YANG BENAR ADALAH LEDGER dan baris
+// ini yang salah - job rekonsiliasi menulis ulang baris ini, tidak pernah
+// sebaliknya (ADR-023 Keputusan 1).
 model StokBahan {
-  id        String   @id
-  tenantId  String
-  gudangId  String
-  bahanId   String
-  kuantitas Decimal  @default(0)
-  updatedAt DateTime @updatedAt
+  id                   String    @id
+  tenantId             String
+  gudangId             String
+  bahanId              String
+  // ALT-DEF-008: nullable = baris agregat level-GUDANG (jumlah seluruh lokasi).
+  // Non-null = saldo satu sub-lokasi tertentu (ALT-PSD-004).
+  lokasiStokId         String?
+  kuantitas            Decimal   @default(0)
+  // ALT-DEF-008: kuantitas yang sedang direservasi (ReservasiStok AKTIF).
+  // Stok TERSEDIA = kuantitas - kuantitasDireservasi. Reservasi mengurangi
+  // stok TERSEDIA tanpa menyentuh stok FISIK (ADR-024 Keputusan 2).
+  // Ini juga CACHE - kebenarannya SUM(ReservasiStok.jumlah WHERE AKTIF).
+  kuantitasDireservasi Decimal   @default(0)
+  // ALT-DEF-008: kapan baris cache ini terakhir direkonsiliasi dari ledger.
+  direkonsiliasiPada   DateTime?
+  updatedAt            DateTime  @updatedAt
 
-  gudang Gudang @relation("StokBahanGudang", fields: [tenantId, gudangId], references: [tenantId, id])
-  bahan  Bahan  @relation("StokBahanBahan", fields: [tenantId, bahanId], references: [tenantId, id])
+  gudang     Gudang      @relation("StokBahanGudang", fields: [tenantId, gudangId], references: [tenantId, id])
+  bahan      Bahan       @relation("StokBahanBahan", fields: [tenantId, bahanId], references: [tenantId, id])
+  lokasiStok LokasiStok? @relation(fields: [tenantId, lokasiStokId], references: [tenantId, id])
 
-  @@unique([gudangId, bahanId])
+  // ALT-DEF-008 PERINGATAN NULL-SEMANTICS: Postgres memperlakukan NULL sebagai
+  // NILAI YANG BERBEDA di unique index, sehingga @@unique di bawah TIDAK
+  // mencegah DUA baris agregat level-gudang (lokasiStokId NULL) untuk pasangan
+  // (gudangId, bahanId) yang sama. Penegak baris-agregat-tunggal adalah partial
+  // unique index Postgres di
+  // prisma/migrations/manual/004_stok_bahan_agregat_gudang_unik.sql
+  // (BELUM PERNAH DIJALANKAN, ALT-DEF-029). Dicatat di sini agar constraint di
+  // bawah tidak disalahartikan sebagai jaminan penuh.
+  @@unique([gudangId, bahanId, lokasiStokId])
   @@map("stok_bahan")
 }
 
+// ALT-DEF-008 (ADR-023 Keputusan 1): LEDGER APPEND-ONLY. Model ini SENGAJA
+// tidak punya `updatedAt`, tidak punya kolom status/soft-delete, dan tidak
+// punya jalur UPDATE apa pun di service layer - satu-satunya operasi yang sah
+// adalah INSERT. Koreksi = INSERT baris PEMBALIK (ADR-006).
+//
+// KETERBATASAN JUJUR: "append-only" TIDAK ditegakkan database pada batch ini.
+// Postgres tidak punya bentuk deklaratif untuk "tabel ini hanya menerima
+// INSERT"; penegak sebenarnya adalah (a) revoke UPDATE/DELETE pada role
+// aplikasi dan (b) trigger penolak, keduanya ada di
+// prisma/migrations/manual/005_mutasi_stok_append_only_dan_pembalik.sql yang
+// BELUM PERNAH DIJALANKAN (ALT-DEF-029). Sampai saat itu, append-only adalah
+// disiplin level-aplikasi.
 model MutasiStok {
   id             String               @id
   tenantId       String
@@ -1340,9 +1602,28 @@ model MutasiStok {
   gudangId       String
   bahanId        String
   jenis          JenisMutasiStok
+  // Positif = masuk, negatif = keluar. TIDAK ADA kolom terpisah untuk arah -
+  // satu sumber kebenaran tanda, sehingga SUM() langsung menghasilkan saldo.
   jumlah         Decimal
+  // ALT-DEF-008: satuan pada saat mutasi dicatat. Nullable karena baris lama
+  // (bila kelak ada) diasumsikan memakai satuan dasar bahan.
+  satuanId       String?
   referensiJenis ReferensiJenisMutasi
   referensiId    String
+  // ALT-DEF-008/ALT-PSD-004: transfer bergerak ANTAR LOKASI - keduanya terisi.
+  // Pembelian hanya punya tujuan; penjualan/pemakaian hanya punya sumber.
+  // Karena itu KEDUANYA nullable, dan aturan "mana yang wajib untuk jenis apa"
+  // adalah invariant LEVEL-APLIKASI (Prisma maupun CHECK sederhana tidak bisa
+  // mengekspresikan kondisional per-nilai-enum tanpa CHECK manual).
+  lokasiSumberId String?
+  lokasiTujuanId String?
+  // ALT-DEF-008/ALT-PSD-011: batch yang dialokasikan FEFO/FIFO. Nullable -
+  // tidak semua bahan di-batch (mis. bumbu curah).
+  batchStokId    String?
+  // ALT-DEF-008: harga perolehan per satuan saat mutasi (rupiah bulat,
+  // ADR-005). Nullable - hanya mutasi MASUK yang membawa biaya perolehan.
+  hargaPerolehan Int?
+  catatan        String?
   dibalikOlehId  String?              @unique
   dibuatOlehId   String
   createdAt      DateTime             @default(now())
@@ -1357,43 +1638,415 @@ model MutasiStok {
   // ALT-DEF-010: composite-FK (tenantId, bahanId) -> Bahan(tenantId, id).
   bahan  Bahan  @relation(fields: [tenantId, bahanId], references: [tenantId, id])
 
+  // ALT-DEF-008: relasi-relasi baru. `dibuatOleh` sebelumnya hanya kolom
+  // scalar TANPA FK sama sekali (gap yang sama seperti gudangId dulu) -
+  // FK ID tunggal ke Pengguna per ADR-013 poin 5.
+  satuan       Satuan?     @relation(fields: [tenantId, satuanId], references: [tenantId, id])
+  lokasiSumber LokasiStok? @relation("MutasiStokLokasiSumber", fields: [tenantId, lokasiSumberId], references: [tenantId, id])
+  lokasiTujuan LokasiStok? @relation("MutasiStokLokasiTujuan", fields: [tenantId, lokasiTujuanId], references: [tenantId, id])
+  batchStok    BatchStok?  @relation(fields: [tenantId, batchStokId], references: [tenantId, id])
+  dibuatOleh   Pengguna    @relation("MutasiStokDibuatOleh", fields: [dibuatOlehId], references: [id])
+
+  // Reversal: `dibalikOlehId` menunjuk mutasi PEMBALIK. Kolom tunggal +
+  // @unique = satu mutasi dibalik PALING BANYAK sekali (kolom tunggal), dan
+  // satu mutasi pembalik membalik PALING BANYAK satu mutasi asal (@unique).
+  // Yang TIDAK ditegakkan Prisma: tanda berlawanan, kesamaan tenant/gudang/
+  // bahan, dan larangan rantai pembalik-dari-pembalik - lihat file SQL 005.
   dibalikOleh  MutasiStok? @relation("MutasiPembalik", fields: [dibalikOlehId], references: [id])
   pembalikDari MutasiStok? @relation("MutasiPembalik")
 
+  penyesuaianStok     PenyesuaianStok?
+  catatanWaste        CatatanWaste?
+  transferBarisKeluar TransferStokBaris[] @relation("TransferBarisMutasiKeluar")
+  transferBarisMasuk  TransferStokBaris[] @relation("TransferBarisMutasiMasuk")
+  opnameBarisKoreksi  StokOpnameBaris?
+
+  // ALT-DEF-008: agar PenyesuaianStok/CatatanWaste/TransferStokBaris/
+  // StokOpnameBaris bisa memakai composite-FK (tenantId, mutasiStokId).
+  @@unique([tenantId, id])
+  @@index([tenantId, gudangId, bahanId, createdAt])
+  @@index([tenantId, referensiJenis, referensiId])
   @@map("mutasi_stok")
+}
+
+// ALT-DEF-008/ALT-PSD-010 (ADR-024 Keputusan 3): satu batch fisik stok -
+// pembawa tanggal kedaluwarsa (FEFO), tanggal produksi, harga perolehan, dan
+// lokasi. `createdAt` melengkapinya sebagai kunci urut FIFO fallback.
+//
+// SEAM BatchProduksi <-> BatchStok (ADR-024 Keputusan 3, memenuhi handoff
+// ADR-022 Keputusan 8 poin 4): KEDUANYA DIPERTAHANKAN dan DISAMBUNGKAN FK,
+// TIDAK disatukan. `BatchProduksi` adalah catatan domain PRODUKSI (apa yang
+// dibuat, dari proses mana, yield berapa); `BatchStok` adalah catatan domain
+// PERSEDIAAN (apa yang ADA di rak, berapa harga perolehannya, di lokasi mana,
+// kapan kedaluwarsa). Menyatukannya DITOLAK karena batch hasil PEMBELIAN tidak
+// punya `prosesProduksiId` sama sekali - menyatukan berarti membuat kolom
+// produksi nullable untuk mayoritas baris, dan menaruh kolom persediaan
+// (hargaPerolehan/lokasiStokId) di tabel domain produksi.
+// `@@unique([tenantId, batchProduksiId])` membuat relasi ini 1:1 opsional -
+// satu BatchProduksi menghasilkan PALING BANYAK satu BatchStok.
+// INVARIANT LEVEL-APLIKASI: setiap `BatchProduksi` atas bahan
+// BAHAN_SETENGAH_JADI WAJIB melahirkan tepat satu `BatchStok` dalam transaksi
+// yang sama dengan mutasi `PRODUKSI_MASUK`. Prisma tidak bisa mewajibkan sisi
+// itu (kolom ada di sisi BatchStok dan harus nullable untuk batch pembelian).
+model BatchStok {
+  id                 String          @id
+  tenantId           String
+  outletId           String
+  bahanId            String
+  nomorBatch         String
+  tanggalProduksi    DateTime?
+  tanggalKedaluwarsa DateTime?
+  kuantitasAwal      Decimal
+  // Rupiah bulat per ADR-005 - harga perolehan per satuan dasar bahan.
+  hargaPerolehan     Int
+  lokasiStokId       String?
+  // SEAM ke domain produksi (ADR-022 Keputusan 8). Nullable: batch hasil
+  // PEMBELIAN tidak punya proses produksi.
+  batchProduksiId    String?
+  status             StatusBatchStok @default(TERSEDIA)
+  createdAt          DateTime        @default(now())
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id])
+  outlet        Outlet         @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  bahan         Bahan          @relation(fields: [tenantId, bahanId], references: [tenantId, id])
+  lokasiStok    LokasiStok?    @relation(fields: [tenantId, lokasiStokId], references: [tenantId, id])
+  batchProduksi BatchProduksi? @relation(fields: [tenantId, batchProduksiId], references: [tenantId, id])
+
+  mutasiStok        MutasiStok[]
+  catatanWaste      CatatanWaste[]
+  transferStokBaris TransferStokBaris[]
+  opnameBaris       StokOpnameBaris[]
+
+  @@unique([tenantId, bahanId, nomorBatch])
+  @@unique([tenantId, batchProduksiId])
+  @@unique([tenantId, id])
+  // Indeks pendukung FEFO (kedaluwarsa terdekat dulu) dan FIFO (createdAt).
+  @@index([tenantId, bahanId, status, tanggalKedaluwarsa])
+  @@index([tenantId, bahanId, status, createdAt])
+  @@map("batch_stok")
+}
+
+// ALT-DEF-008/ALT-PSD-008/ALT-PSD-009 (ADR-024 Keputusan 2): reservasi stok.
+// Reservasi mengurangi stok TERSEDIA tanpa menyentuh stok FISIK - ia BUKAN
+// mutasi dan SENGAJA tidak menulis baris `MutasiStok`. Barulah saat
+// DIKONSUMSI, satu mutasi `PEMAKAIAN_RESEP` ditulis.
+//
+// INVARIANT LEVEL-APLIKASI (tidak bisa diekspresikan Prisma - ia invariant
+// SUM lintas-baris): SUM(jumlah) atas reservasi AKTIF untuk satu bahan di satu
+// gudang tidak boleh melebihi saldo fisik bahan tsb. Penegakannya adalah guard
+// transaksi + SELECT ... FOR UPDATE pada baris StokBahan.
+model ReservasiStok {
+  id              String              @id
+  tenantId        String
+  outletId        String
+  itemPesananId   String
+  bahanId         String
+  jumlah          Decimal
+  satuanId        String
+  status          StatusReservasiStok @default(AKTIF)
+  // Batas waktu reservasi otomatis kedaluwarsa (job penyapu). Nullable -
+  // kebijakan tanpa batas waktu sah.
+  kedaluwarsaPada DateTime?
+  createdAt       DateTime            @default(now())
+  dilepasPada     DateTime?
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id])
+  outlet      Outlet      @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  bahan       Bahan       @relation(fields: [tenantId, bahanId], references: [tenantId, id])
+  satuan      Satuan      @relation(fields: [tenantId, satuanId], references: [tenantId, id])
+  // FK ID tunggal: ItemPesanan tidak membawa tenantId sendiri (baris di bawah
+  // Pesanan, ADR-013) - konsisten dengan ItemPesanan.resepVersi (ADR-022 K7).
+  itemPesanan ItemPesanan @relation(fields: [itemPesananId], references: [id])
+
+  @@index([tenantId, bahanId, status])
+  @@index([itemPesananId, status])
+  @@map("reservasi_stok")
+}
+
+// ALT-DEF-008 (ADR-023 Keputusan 4): dokumen penyesuaian manual. `mutasiStokId`
+// WAJIB dan @unique - satu penyesuaian TEPAT SATU baris ledger; penyesuaian
+// tanpa mutasi berarti saldo berubah tanpa jejak ledger, yaitu pelanggaran
+// aturan keras domain ini.
+model PenyesuaianStok {
+  id              String   @id
+  tenantId        String
+  outletId        String
+  bahanId         String
+  jumlahSebelum   Decimal
+  jumlahSesudah   Decimal
+  alasan          String
+  disetujuiOlehId String?
+  mutasiStokId    String   @unique
+  dicatatOlehId   String
+  createdAt       DateTime @default(now())
+
+  tenant        Tenant     @relation(fields: [tenantId], references: [id])
+  outlet        Outlet     @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  bahan         Bahan      @relation(fields: [tenantId, bahanId], references: [tenantId, id])
+  mutasiStok    MutasiStok @relation(fields: [tenantId, mutasiStokId], references: [tenantId, id])
+  disetujuiOleh Pengguna?  @relation("PenyesuaianStokDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+  dicatatOleh   Pengguna   @relation("PenyesuaianStokDicatatOleh", fields: [dicatatOlehId], references: [id])
+
+  // Prisma mewajibkan unique yang mencakup seluruh field composite pada
+  // relasi 1-1 (pola yang sama seperti TiketDapur.pesananId, ADR-013).
+  @@unique([tenantId, mutasiStokId])
+  @@map("penyesuaian_stok")
+}
+
+// ALT-DEF-008/ALT-PSD-012/ALT-PSD-013 (ADR-024 Keputusan 4): header transfer
+// stok antar gudang/outlet. MENUTUP GAP ALT-DEF-032 (endpoint transfer stok
+// disebut spec idempotency tetapi tidak pernah ada di kontrak API).
+model TransferStok {
+  id              String             @id
+  tenantId        String
+  nomorTransfer   String
+  outletAsalId    String
+  gudangAsalId    String
+  outletTujuanId  String
+  gudangTujuanId  String
+  status          StatusTransferStok @default(DRAF)
+  catatan         String?
+  dibuatOlehId    String
+  disetujuiOlehId String?
+  dikirimOlehId   String?
+  diterimaOlehId  String?
+  diajukanPada    DateTime?
+  disetujuiPada   DateTime?
+  dikirimPada     DateTime?
+  diterimaPada    DateTime?
+  createdAt       DateTime           @default(now())
+
+  tenant       Tenant @relation(fields: [tenantId], references: [id])
+  outletAsal   Outlet @relation("TransferStokOutletAsal", fields: [tenantId, outletAsalId], references: [tenantId, id])
+  outletTujuan Outlet @relation("TransferStokOutletTujuan", fields: [tenantId, outletTujuanId], references: [tenantId, id])
+  // Composite outlet-level (ADR-013 poin 3) - INILAH yang menjamin di level
+  // database bahwa gudang asal benar-benar milik outlet asal. Composite
+  // (tenantId, gudangId) saja TIDAK memberi jaminan itu pada tenant
+  // multi-outlet, dan transfer adalah operasi yang justru menyeberangi outlet.
+  gudangAsal   Gudang @relation("TransferStokGudangAsal", fields: [outletAsalId, gudangAsalId], references: [outletId, id])
+  gudangTujuan Gudang @relation("TransferStokGudangTujuan", fields: [outletTujuanId, gudangTujuanId], references: [outletId, id])
+
+  dibuatOleh    Pengguna  @relation("TransferStokDibuatOleh", fields: [dibuatOlehId], references: [id])
+  disetujuiOleh Pengguna? @relation("TransferStokDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+  dikirimOleh   Pengguna? @relation("TransferStokDikirimOleh", fields: [dikirimOlehId], references: [id])
+  diterimaOleh  Pengguna? @relation("TransferStokDiterimaOleh", fields: [diterimaOlehId], references: [id])
+
+  baris TransferStokBaris[]
+
+  @@unique([tenantId, nomorTransfer])
+  @@unique([tenantId, id])
+  @@map("transfer_stok")
+}
+
+// ALT-DEF-008: baris transfer. `jumlahDikirim`/`jumlahDiterima` nullable dan
+// TERPISAH dari `jumlahDiminta` - selisih di antara ketiganya adalah SELURUH
+// alasan status DITERIMA_SEBAGIAN ada. `mutasiKeluarId`/`mutasiMasukId` adalah
+// jejak ledger sepasang: KELUAR ditulis saat DIKIRIM, MASUK saat DITERIMA -
+// bukan keduanya sekaligus, karena barang dalam perjalanan bukan saldo gudang
+// mana pun.
+model TransferStokBaris {
+  id             String   @id
+  tenantId       String
+  transferStokId String
+  bahanId        String
+  jumlahDiminta  Decimal
+  jumlahDikirim  Decimal?
+  jumlahDiterima Decimal?
+  satuanId       String
+  batchStokId    String?
+  mutasiKeluarId String?  @unique
+  mutasiMasukId  String?  @unique
+
+  transferStok TransferStok @relation(fields: [tenantId, transferStokId], references: [tenantId, id])
+  bahan        Bahan        @relation(fields: [tenantId, bahanId], references: [tenantId, id])
+  satuan       Satuan       @relation(fields: [tenantId, satuanId], references: [tenantId, id])
+  batchStok    BatchStok?   @relation(fields: [tenantId, batchStokId], references: [tenantId, id])
+  mutasiKeluar MutasiStok?  @relation("TransferBarisMutasiKeluar", fields: [tenantId, mutasiKeluarId], references: [tenantId, id])
+  mutasiMasuk  MutasiStok?  @relation("TransferBarisMutasiMasuk", fields: [tenantId, mutasiMasukId], references: [tenantId, id])
+
+  @@unique([transferStokId, bahanId])
+  @@map("transfer_stok_baris")
+}
+
+// ALT-DEF-008/ALT-PSD-015: taksonomi alasan waste tenant-scoped. Master data,
+// dapat dinonaktifkan tanpa menghapus histori (ADR-006).
+model AlasanWaste {
+  id       String              @id
+  tenantId String
+  kode     String
+  nama     String
+  status   StatusAktifNonaktif @default(AKTIF)
+
+  tenant       Tenant         @relation(fields: [tenantId], references: [id])
+  catatanWaste CatatanWaste[]
+
+  @@unique([tenantId, kode])
+  @@unique([tenantId, id])
+  @@map("alasan_waste")
+}
+
+// ALT-DEF-008/ALT-PSD-014: pencatatan waste/spoilage. `alasanWasteId` WAJIB
+// (bukan teks bebas) - itulah bunyi harfiah acceptance ALT-PSD-014.
+// `mutasiStokId` WAJIB dan @unique dengan alasan yang sama seperti
+// PenyesuaianStok: waste yang tidak menulis ledger berarti barang hilang tanpa
+// jejak.
+model CatatanWaste {
+  id              String   @id
+  tenantId        String
+  outletId        String
+  gudangId        String
+  lokasiStokId    String?
+  bahanId         String
+  batchStokId     String?
+  alasanWasteId   String
+  jumlah          Decimal
+  satuanId        String
+  // Nilai kerugian rupiah bulat (ADR-005), nullable - dihitung dari
+  // hargaPerolehan batch bila batch diketahui.
+  nilaiKerugian   Int?
+  catatan         String?
+  mutasiStokId    String   @unique
+  dicatatOlehId   String
+  disetujuiOlehId String?
+  createdAt       DateTime @default(now())
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id])
+  outlet      Outlet      @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  gudang      Gudang      @relation(fields: [tenantId, gudangId], references: [tenantId, id])
+  lokasiStok  LokasiStok? @relation(fields: [tenantId, lokasiStokId], references: [tenantId, id])
+  bahan       Bahan       @relation(fields: [tenantId, bahanId], references: [tenantId, id])
+  batchStok   BatchStok?  @relation(fields: [tenantId, batchStokId], references: [tenantId, id])
+  alasanWaste AlasanWaste @relation(fields: [tenantId, alasanWasteId], references: [tenantId, id])
+  satuan      Satuan      @relation(fields: [tenantId, satuanId], references: [tenantId, id])
+  mutasiStok  MutasiStok  @relation(fields: [tenantId, mutasiStokId], references: [tenantId, id])
+
+  dicatatOleh   Pengguna  @relation("CatatanWasteDicatatOleh", fields: [dicatatOlehId], references: [id])
+  disetujuiOleh Pengguna? @relation("CatatanWasteDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+
+  @@unique([tenantId, mutasiStokId])
+  @@index([tenantId, bahanId, createdAt])
+  @@map("catatan_waste")
+}
+
+// ALT-DEF-008/ALT-PSD-018: kebijakan pemesanan ulang PER OUTLET PER BAHAN.
+// Decimal (bukan Int seperti `Bahan.stokMinimum` yang lama) - ambang 0.5 kg
+// adalah kebutuhan nyata dan tidak bisa diwakili Int (lihat ALT-DEF-036).
+model KebijakanPemesananUlang {
+  id                   String               @id
+  tenantId             String
+  outletId             String
+  bahanId              String
+  stokMinimum          Decimal
+  stokMaksimum         Decimal?
+  jumlahPemesananUlang Decimal?
+  metode               MetodePemesananUlang @default(MIN_MAX)
+  status               StatusAktifNonaktif  @default(AKTIF)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  outlet Outlet @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  bahan  Bahan  @relation(fields: [tenantId, bahanId], references: [tenantId, id])
+
+  @@unique([outletId, bahanId])
+  @@map("kebijakan_pemesanan_ulang")
+}
+
+// ALT-DEF-008 (ADR-025 Keputusan 1/2/3): pengaturan persediaan PER OUTLET
+// sebagai KOLOM BERTIPE, bukan baris key-value di `PengaturanOutlet`.
+// ALASAN penolakan PengaturanOutlet (Json key-value): keempat nilai di bawah
+// dibaca di jalur panas SETIAP pemotongan stok dan tiga di antaranya adalah
+// enum tertutup. Key-value Json tidak memberi validasi enum, tidak memberi
+// default, dan salah ketik kunci akan diam-diam jatuh ke default - mengubah
+// perilaku POTONG STOK (konsekuensi finansial) tanpa error apa pun.
+// `PengaturanOutlet` tetap dipertahankan untuk pengaturan bebas-bentuk.
+model PengaturanPersediaanOutlet {
+  id                           String                  @id
+  tenantId                     String
+  outletId                     String                  @unique
+  // ALT-PSD-011 / master spec: kapan stok BENAR-BENAR dipotong dari ledger.
+  kebijakanPemotongan          KebijakanPemotonganStok @default(SAAT_MASUK_DAPUR)
+  // Reservasi dibuat saat pesanan DITERIMA (ALT-PSD-008).
+  reservasiSaatPesananDiterima Boolean                 @default(true)
+  kedaluwarsaReservasiMenit    Int?
+  // ALT-PSD-011: FEFO default (perishable), FIFO fallback.
+  metodeAlokasiBatch           MetodeAlokasiBatch      @default(FEFO)
+  // ADR-025 Keputusan 4 (kebijakan stok negatif). Default FALSE = tolak.
+  izinkanStokNegatif           Boolean                 @default(false)
+  // Ambang selisih opname yang memicu MENUNGGU_PERSETUJUAN (ALT-PSD-017),
+  // rupiah bulat (ADR-005). Nullable = seluruh selisih butuh persetujuan.
+  ambangSelisihOpname          Int?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  outlet Outlet @relation(fields: [tenantId, outletId], references: [tenantId, id])
+
+  @@unique([tenantId, outletId])
+  @@map("pengaturan_persediaan_outlet")
 }
 
 // ALT-DEF-010: gudang direlasi lewat composite-FK (tenantId, gudangId) ->
 // Gudang(tenantId, id) - StokOpname tidak punya outletId langsung, jadi
 // tenantId adalah kolom bersama yang tersedia untuk komposit ini.
+//
+// ALT-DEF-008 (ADR-025 Keputusan 5): opname TIDAK PERNAH menyentuh saldo
+// secara langsung. Ia memposting mutasi `KOREKSI_OPNAME` per baris, dan
+// saldo berubah HANYA sebagai konsekuensi ledger (ADR-023 Keputusan 1).
+// `snapshotPada` adalah waktu kuantitas sistem dibekukan - tanpanya,
+// "selisih" membandingkan hitungan fisik pukul 22:00 dengan saldo yang sudah
+// bergerak sampai pukul 23:00, dan angkanya tidak bermakna.
 model StokOpname {
-  id               String           @id
-  tenantId         String
-  gudangId         String
-  status           StatusStokOpname @default(DIRENCANAKAN)
-  dijadwalkanPada  DateTime
-  diselesaikanPada DateTime?
-  dibuatOlehId     String
+  id              String           @id
+  tenantId        String
+  gudangId        String
+  status          StatusStokOpname @default(DRAF)
+  dijadwalkanPada DateTime
+  // Waktu kuantitas sistem di-snapshot (transisi DRAF -> SEDANG_DIHITUNG).
+  snapshotPada    DateTime?
+  dikunciPada     DateTime?
+  disetujuiPada   DateTime?
+  dipostingPada   DateTime?
+  dibatalkanPada  DateTime?
+  alasan          String?
+  dibuatOlehId    String
+  penghitungId    String?
+  pengunciId      String?
+  penyetujuId     String?
 
   tenant     Tenant            @relation(fields: [tenantId], references: [id])
   gudang     Gudang            @relation(fields: [tenantId, gudangId], references: [tenantId, id])
   dibuatOleh Pengguna          @relation("OpnameDibuatOleh", fields: [dibuatOlehId], references: [id])
+  penghitung Pengguna?         @relation("OpnameDihitungOleh", fields: [penghitungId], references: [id])
+  pengunci   Pengguna?         @relation("OpnameDikunciOleh", fields: [pengunciId], references: [id])
+  penyetuju  Pengguna?         @relation("OpnameDisetujuiOleh", fields: [penyetujuId], references: [id])
   baris      StokOpnameBaris[]
 
+  @@unique([tenantId, id])
   @@map("stok_opname")
 }
 
+// ALT-DEF-008: `kuantitasFisik`/`selisih` DIJADIKAN NULLABLE - baris yang
+// belum dihitung TIDAK boleh berpura-pura fisiknya 0 (yang membuat selisih
+// sebesar seluruh saldo dan memposting koreksi yang menghapus stok nyata).
+// `mutasiKoreksiId` adalah jejak ledger baris ini setelah DIPOSTING.
 model StokOpnameBaris {
-  id              String  @id
+  id              String    @id
   stokOpnameId    String
   bahanId         String
+  lokasiStokId    String?
+  batchStokId     String?
+  // Snapshot saldo sistem pada StokOpname.snapshotPada.
   kuantitasSistem Decimal
-  kuantitasFisik  Decimal
-  selisih         Decimal
+  kuantitasFisik  Decimal?
+  selisih         Decimal?
+  alasan          String?
+  mutasiKoreksiId String?   @unique
+  dihitungPada    DateTime?
 
-  stokOpname StokOpname @relation(fields: [stokOpnameId], references: [id])
-  bahan      Bahan      @relation(fields: [bahanId], references: [id])
+  stokOpname    StokOpname  @relation(fields: [stokOpnameId], references: [id])
+  bahan         Bahan       @relation(fields: [bahanId], references: [id])
+  lokasiStok    LokasiStok? @relation(fields: [lokasiStokId], references: [id])
+  batchStok     BatchStok?  @relation(fields: [batchStokId], references: [id])
+  mutasiKoreksi MutasiStok? @relation(fields: [mutasiKoreksiId], references: [id])
 
+  @@unique([stokOpnameId, bahanId, lokasiStokId])
   @@map("stok_opname_baris")
 }
 
@@ -1803,13 +2456,17 @@ model ItemPesanan {
   // (mis. minuman botol) sah tidak punya versi resep.
   resepVersiId          String?
 
-  pesanan    Pesanan     @relation(fields: [pesananId], references: [id])
-  itemMenu   ItemMenu    @relation(fields: [itemMenuId], references: [id])
-  varianMenu VarianMenu? @relation(fields: [varianMenuId], references: [id])
+  pesanan       Pesanan         @relation(fields: [pesananId], references: [id])
+  itemMenu      ItemMenu        @relation(fields: [itemMenuId], references: [id])
+  varianMenu    VarianMenu?     @relation(fields: [varianMenuId], references: [id])
   // ItemPesanan tidak membawa `tenantId` sendiri (baris di bawah Pesanan,
   // lihat ADR-013) sehingga FK ini ID tunggal, konsisten dengan itemMenu/
   // varianMenu di atas.
-  resepVersi VersiResep? @relation(fields: [resepVersiId], references: [id])
+  resepVersi    VersiResep?     @relation(fields: [resepVersiId], references: [id])
+  // ALT-DEF-008/ALT-PSD-008 (ADR-024 Keputusan 2): reservasi stok digantung
+  // pada BARIS pesanan, bukan pada Pesanan - satu baris dibatalkan tidak boleh
+  // melepas reservasi baris lain di pesanan yang sama.
+  reservasiStok ReservasiStok[]
 
   modifier        ItemPesananModifier[]
   tiketDapurBaris TiketDapurBaris?

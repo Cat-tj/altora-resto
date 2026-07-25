@@ -36,14 +36,44 @@ Daftar kode `Izin.kode` berikut adalah starter set yang di-seed lewat
 ALT-DEF-003/ALT-DEF-013 + 9 kode `pesanan.*` baru pada batch ALT-DEF-005/
 ALT-DEF-016 + 11 kode `dapur.*` baru pada batch ALT-DEF-006 + 8 kode
 `pembayaran.*` dan 4 kode `kasir.*` baru serta 3 kode `qris.*` tambahan pada
-batch ALT-DEF-004/ALT-DEF-014/ALT-DEF-015 = **69 kode** - lihat catatan di bawah
+batch ALT-DEF-004/ALT-DEF-014/ALT-DEF-015 + 10 kode `resep.*` baru pada batch
+ALT-DEF-007 + **penggantian 4 kode `persediaan.*` koarse dengan 18 kode
+granular pada batch ALT-DEF-008** = **93 kode** - lihat catatan di bawah
 tabel), dikelompokkan per `domain`:
+
+> **ALT-DEF-008:** empat kode persediaan lama (`persediaan.lihat`,
+> `persediaan.sesuaikan`, `persediaan.opname`, `persediaan.transfer`) DIGANTI,
+> bukan didampingi, oleh 18 kode granular yang sudah direferensikan
+> `MASTER-CHECKLIST.md` `ALT-PSD-001` s.d. `ALT-PSD-018`. Dua nama untuk satu
+> keputusan otorisasi yang sama adalah persis drift yang dicatat `ALT-DEF-034`.
+> Penggantian aman karena belum ada satu baris `PeranIzin` pun (belum ada
+> migrasi yang pernah dijalankan, `ALT-DEF-029`).
+>
+> **Satu kode SENGAJA TIDAK diseed:** `persediaan.alokasi.otomatis`
+> (`ALT-PSD-011`). Aktornya adalah pemicu internal dan ia tidak punya endpoint
+> sama sekali - pemilihan batch FEFO/FIFO adalah algoritma, bukan keputusan
+> otorisasi yang dipegang siapa pun. Menjadikannya kode izin menyiratkan ada
+> peran yang boleh memakai stok TANPA alokasi batch. Kelas yang sama persis
+> dengan `keamanan.qris.enkripsi` dan `resep.pemakaian.otomatis` - lihat
+> bagian 1a dan `ALT-DEF-034`. Diusulkan kolom Permission `ALT-PSD-011` diubah
+> menjadi `-`.
+>
+> **Satu kode TIDAK berasal dari MASTER-CHECKLIST:**
+> `persediaan.transfer.setujui`. `ALT-PSD-012` hanya mencakup PEMBUATAN
+> transfer dan `ALT-PSD-013` hanya PENERIMAAN - keduanya melewatkan langkah
+> approval, padahal state machine transfer (`STATE-MACHINES.md` bagian 8) punya
+> transisi `DIAJUKAN -> DISETUJUI` yang justru merupakan gerbang kontrol
+> internalnya. Kode ini mengikuti pola yang sudah ada (`pembelian.setujui`,
+> `persediaan.opname.setujui`) dan BUKAN izin spekulatif: ada endpoint nyata
+> (`POST /api/v1/transfer-stok/{id}/setujui`) dan transisi nyata yang
+> memerlukannya. Kekurangan cakupan `ALT-PSD-012`/`ALT-PSD-013` dicatat sebagai
+> `ALT-DEF-037`, bukan diperbaiki diam-diam di MASTER-CHECKLIST.
 
 | Domain | Kode Izin |
 |---|---|
 | transaksi | `transaksi.buat`, `transaksi.ubah-harga`, `transaksi.diskon`, `transaksi.batalkan-item`, `transaksi.batalkan`, `transaksi.retur`, `transaksi.koreksi-pembayaran` |
 | giliran | `giliran.buka`, `giliran.tutup`, `giliran.tutup-paksa` |
-| persediaan | `persediaan.lihat`, `persediaan.sesuaikan`, `persediaan.opname`, `persediaan.transfer` |
+| persediaan | `persediaan.bahan.kelola`, `persediaan.satuan.kelola`, `persediaan.gudang.kelola`, `persediaan.lokasi.kelola`, `persediaan.mutasi.lihat`, `persediaan.mutasi.balik`, `persediaan.saldo.lihat`, `persediaan.reservasi.kelola`, `persediaan.reservasi.lepas`, `persediaan.batch.kelola`, `persediaan.transfer.kelola`, `persediaan.transfer.setujui`, `persediaan.transfer.terima`, `persediaan.waste.kelola`, `persediaan.alasan-waste.kelola`, `persediaan.opname.kelola`, `persediaan.opname.setujui`, `persediaan.reorder.kelola` |
 | pembelian | `pembelian.buat`, `pembelian.setujui`, `pembelian.terima` |
 | promo | `promo.lihat`, `promo.kelola` |
 | anggota | `anggota.lihat`, `anggota.kelola`, `anggota.tukar-poin` |

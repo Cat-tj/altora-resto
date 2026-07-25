@@ -211,29 +211,124 @@ pesanan**, bukan dari versi aktif saat ini (ADR-022 Keputusan 8).
 
 ## 6. Persediaan (`packages/persediaan`)
 
+> **DIPERBARUI PADA BATCH ALT-DEF-008** (ADR-023/ADR-024/ADR-025). Bagian ini
+> sebelumnya hanya memuat 9 endpoint (gudang, saldo, mutasi, penyesuaian,
+> pembalikan, dan opname 4-langkah). **Catatan gap `ALT-DEF-032` yang dulu ada
+> di sini DIHAPUS karena gap-nya DITUTUP** - endpoint transfer stok lengkap
+> beserta anotasi `Idempotency-Key` kini ada di bawah, persis seperti yang
+> dituntut baris remediasi `ALT-DEF-032`.
+>
+> **Aturan yang berlaku untuk SELURUH endpoint di bagian ini (ADR-023
+> Keputusan 1):** `MutasiStok` adalah ledger append-only dan satu-satunya
+> sumber kebenaran saldo. Tidak ada satu pun endpoint di sini yang menulis
+> `StokBahan` secara langsung; saldo berubah HANYA sebagai konsekuensi baris
+> mutasi. Tidak ada endpoint `PUT`/`DELETE` atas `/mutasi-stok/{id}` dan tidak
+> akan pernah ada - koreksi selalu lewat `/balik` (ADR-006).
+
+### 6.1 Master data
+
 | Metode | Path | Deskripsi |
 |---|---|---|
 | GET | `/api/v1/gudang` | Daftar gudang per outlet. |
-| GET | `/api/v1/stok-bahan` | Saldo stok bahan per gudang (derived dari mutasi). |
-| GET | `/api/v1/mutasi-stok` | Riwayat mutasi stok (append-only, filter jenis/tanggal). |
-| POST | `/api/v1/mutasi-stok/penyesuaian` | Catat mutasi penyesuaian manual (butuh alasan). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "posting mutasi stok" di master spec). |
-| POST | `/api/v1/mutasi-stok/{mutasiId}/balik` | Buat mutasi pembalik (koreksi, no hard-delete). |
-| GET | `/api/v1/stok-opname` | Daftar sesi stok opname. |
-| POST | `/api/v1/stok-opname` | Jadwalkan opname baru. |
-| POST | `/api/v1/stok-opname/{id}/mulai` | Mulai perhitungan fisik (DIRENCANAKAN -> BERLANGSUNG). |
-| POST | `/api/v1/stok-opname/{id}/baris` | Input hasil hitung fisik per bahan. |
-| POST | `/api/v1/stok-opname/{id}/selesaikan` | Selesaikan opname, hasilkan mutasi penyesuaian. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "posting opname" di master spec). |
+| POST | `/api/v1/gudang` | Buat gudang baru (`ALT-PSD-003`). |
+| GET | `/api/v1/gudang/{gudangId}/lokasi` | Daftar `LokasiStok` (rak/chiller/freezer) di satu gudang (`ALT-PSD-004`). |
+| POST | `/api/v1/gudang/{gudangId}/lokasi` | Buat sub-lokasi. `nama` unik per gudang; `jenis` opsional. |
+| GET | `/api/v1/alasan-waste` | Daftar taksonomi alasan waste tenant (`ALT-PSD-015`). |
+| POST | `/api/v1/alasan-waste` | Tambah alasan waste. `kode` unik per tenant. |
+| PUT | `/api/v1/alasan-waste/{id}` | Ubah nama/status. **Tidak ada DELETE** - dinonaktifkan lewat `status` agar histori `CatatanWaste` tetap terbaca (ADR-006). |
+| GET | `/api/v1/outlet/{outletId}/pengaturan-persediaan` | Baca `PengaturanPersediaanOutlet` (kebijakan pemotongan, FEFO/FIFO, stok negatif, ambang opname). |
+| PUT | `/api/v1/outlet/{outletId}/pengaturan-persediaan` | Ubah pengaturan persediaan outlet. Mengubah `kebijakanPemotongan` **tidak** berlaku surut atas pesanan yang sedang berjalan. |
+| GET | `/api/v1/bahan/{bahanId}/reorder-policy` | Baca `KebijakanPemesananUlang` per outlet (`ALT-PSD-018`). |
+| PUT | `/api/v1/bahan/{bahanId}/reorder-policy` | Set ambang minimum/maksimum & kuantitas reorder per outlet. |
 
-**Catatan gap - "transfer stok" (ALT-PLT-018):** master spec idempotency
-menyebut "transfer stok" sebagai salah satu operasi kritis yang wajib
-`Idempotency-Key`, TETAPI belum ada endpoint transfer-stok-antar-gudang/outlet
-eksplisit di kontrak ini - `JenisMutasiStok` di schema sudah punya varian
-`TRANSFER_MASUK`/`TRANSFER_KELUAR`, namun endpoint yang memicu keduanya belum
-dirancang di dokumen ini. Dicatat sebagai gap terpisah, lihat
-`docs/engineering/DEFECT-LEDGER.md` `ALT-DEF-032` - begitu endpoint transfer
-stok ditambahkan di batch domain persediaan berikutnya, endpoint tersebut
-WAJIB langsung menyertakan requirement `Idempotency-Key` ini sejak awal
-perancangan, bukan ditambahkan belakangan.
+### 6.2 Saldo dan ledger
+
+| Metode | Path | Deskripsi |
+|---|---|---|
+| GET | `/api/v1/stok-bahan` | Saldo stok (`StokBahan`, alias spec `SaldoStok`) per gudang. Filter `?gudangId=`, `?bahanId=`, `?lokasiStokId=`. **Read-model turunan** - respons menyertakan `direkonsiliasiPada` agar klien tahu seberapa segar cache-nya, dan `kuantitasTersedia = kuantitas - kuantitasDireservasi`. |
+| GET | `/api/v1/mutasi-stok` | Riwayat ledger (append-only). Filter `?jenis=`, `?gudangId=`, `?bahanId=`, `?dari=`/`?sampai=`, `?referensiJenis=`/`?referensiId=`. |
+| GET | `/api/v1/mutasi-stok/{mutasiId}` | Detail satu baris mutasi, termasuk `dibalikOlehId` bila sudah dibalik. |
+| POST | `/api/v1/mutasi-stok/penyesuaian` | Catat `PenyesuaianStok` manual (`alasan` **wajib**), menghasilkan TEPAT SATU `MutasiStok` `PENYESUAIAN`. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "posting mutasi stok"). |
+| POST | `/api/v1/mutasi-stok/{mutasiId}/balik` | Buat mutasi pembalik (koreksi, no hard-delete). **Wajib header `Idempotency-Key`** - retry akan membuat pembalik ganda dan menggandakan koreksi saldo. Menolak `409 MUTASI_SUDAH_DIBALIK` bila `dibalikOlehId` sudah terisi. |
+| POST | `/api/v1/persediaan/rekonsiliasi` | Jalankan rekonsiliasi cache dari ledger untuk satu gudang (`?gudangId=`): hitung ulang `SUM(MutasiStok.jumlah)` dan **timpa** `StokBahan.kuantitas`, isi `direkonsiliasiPada`. Arah penulisan SATU ARAH; ledger tidak pernah disesuaikan ke cache. **Wajib header `Idempotency-Key`**. |
+| GET | `/api/v1/batch-stok` | Daftar `BatchStok`. Filter `?bahanId=`, `?status=`, `?kedaluwarsaSebelum=`, `?lokasiStokId=`. Urutan default FEFO (`tanggalKedaluwarsa` menaik, NULL terakhir lalu `createdAt`). |
+| POST | `/api/v1/batch-stok` | Catat batch (mis. dari penerimaan barang). `nomorBatch` unik per `(tenant, bahan)`. |
+
+### 6.3 Reservasi stok
+
+| Metode | Path | Deskripsi |
+|---|---|---|
+| GET | `/api/v1/reservasi-stok` | Daftar reservasi. Filter `?itemPesananId=`, `?bahanId=`, `?status=`. |
+| POST | `/api/v1/reservasi-stok` | Buat reservasi untuk satu `itemPesananId` (`ALT-PSD-008`). Umumnya dipicu **event internal** saat `Pesanan -> DITERIMA`; endpoint eksplisit disediakan untuk koreksi manual. **Wajib header `Idempotency-Key`**. Menolak `409 STOK_TIDAK_CUKUP` bila `SUM(reservasi AKTIF) + jumlah` melebihi saldo fisik dan `izinkanStokNegatif = false`. |
+| POST | `/api/v1/reservasi-stok/{id}/lepas` | `AKTIF -> DILEPAS` (`ALT-PSD-009`). **Tidak menghasilkan mutasi apa pun** - reservasi tidak pernah menyentuh stok fisik. |
+
+**Catatan reservasi:** reservasi mengurangi stok **TERSEDIA**, tidak pernah
+stok **FISIK**, dan SENGAJA bukan baris ledger (ADR-024 Keputusan 2).
+Transisi `AKTIF -> DIKONSUMSI` **tidak punya endpoint sendiri**: ia terjadi
+sebagai efek samping pemotongan stok sesuai
+`PengaturanPersediaanOutlet.kebijakanPemotongan` (default saat pesanan masuk
+dapur). Menyediakan endpoint terpisah untuknya akan membuka jalur konsumsi
+reservasi tanpa mutasi pendamping - pelanggaran ADR-023 Keputusan 1.
+
+### 6.4 Transfer stok (`ALT-PSD-012`/`ALT-PSD-013`, menutup `ALT-DEF-032`)
+
+| Metode | Path | Deskripsi |
+|---|---|---|
+| GET | `/api/v1/transfer-stok` | Daftar transfer. Filter `?status=`, `?outletAsalId=`, `?outletTujuanId=`. |
+| GET | `/api/v1/transfer-stok/{id}` | Detail transfer beserta baris dan jejak mutasi keluar/masuk. |
+| POST | `/api/v1/transfer-stok` | Buat transfer status `DRAF` + baris (`jumlahDiminta`). Menolak `422 TRANSFER_GUDANG_SAMA` bila `gudangAsalId == gudangTujuanId`. |
+| PUT | `/api/v1/transfer-stok/{id}/baris` | Ubah baris. **Hanya sah saat `DRAF`** -> selain itu `409 TRANSFER_TERKUNCI`. |
+| POST | `/api/v1/transfer-stok/{id}/ajukan` | `DRAF -> DIAJUKAN`. |
+| POST | `/api/v1/transfer-stok/{id}/setujui` | `DIAJUKAN -> DISETUJUI` (approval manajer/owner). **Belum ada mutasi apa pun** - barang belum bergerak. |
+| POST | `/api/v1/transfer-stok/{id}/kirim` | `DISETUJUI -> DIKIRIM`: memposting `MutasiStok` `TRANSFER_KELUAR` per baris di gudang asal. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "transfer stok" - disertakan **sejak perancangan awal** sesuai remediasi `ALT-DEF-032`). |
+| POST | `/api/v1/transfer-stok/{id}/terima` | `DIKIRIM|DITERIMA_SEBAGIAN -> DITERIMA_SEBAGIAN|DITERIMA`: memposting `TRANSFER_MASUK` **hanya untuk baris yang belum punya `mutasiMasukId`**. **Wajib header `Idempotency-Key`**. |
+| POST | `/api/v1/transfer-stok/{id}/batalkan` | Batalkan. Ditolak `409 TRANSFER_SUDAH_DIKIRIM` dari status `DIKIRIM` - jalur yang benar adalah terima apa adanya lalu batalkan sisa dari `DITERIMA_SEBAGIAN`, sehingga selisih tercatat sebagai `WASTE`/`PENYESUAIAN` beralasan dan tidak menghilang. |
+
+**Mengapa `kirim` dan `terima` memposting mutasi pada waktu BERBEDA:** menulis
+`TRANSFER_KELUAR` dan `TRANSFER_MASUK` sekaligus akan membuat barang yang
+sedang di jalan tampak sudah menjadi saldo gudang tujuan, sehingga gudang
+tujuan bisa "memakai" barang yang belum tiba. Lihat state machine bagian 8 di
+`docs/arsitektur/STATE-MACHINES.md`.
+
+### 6.5 Waste (`ALT-PSD-014`)
+
+| Metode | Path | Deskripsi |
+|---|---|---|
+| GET | `/api/v1/waste` | Daftar `CatatanWaste`. Filter `?bahanId=`, `?alasanWasteId=`, `?dari=`/`?sampai=`. |
+| POST | `/api/v1/waste` | Catat waste. `alasanWasteId` **wajib** (bukan teks bebas - bunyi harfiah `ALT-PSD-014`); `catatan` opsional dan MELENGKAPI, bukan menggantikan. Menghasilkan TEPAT SATU `MutasiStok` `WASTE` (`jumlah` negatif). **Wajib header `Idempotency-Key`** - ini posting mutasi stok. |
+
+### 6.6 Stok opname (`ALT-PSD-016`/`ALT-PSD-017`)
+
+State machine penuh: `docs/arsitektur/STATE-MACHINES.md` bagian 7.
+
+| Metode | Path | Deskripsi |
+|---|---|---|
+| GET | `/api/v1/stok-opname` | Daftar sesi opname. Filter `?gudangId=`, `?status=`. |
+| POST | `/api/v1/stok-opname` | Buat sesi opname status `DRAF`. |
+| POST | `/api/v1/stok-opname/{id}/mulai` | `DRAF -> SEDANG_DIHITUNG`: **membekukan `snapshotPada`** dan membuat baris `StokOpnameBaris` dengan `kuantitasSistem` = saldo saat itu, `kuantitasFisik = NULL`. |
+| PUT | `/api/v1/stok-opname/{id}/baris` | Input hasil hitung fisik per `(bahan, lokasi)`. Hanya sah saat `SEDANG_DIHITUNG`. |
+| POST | `/api/v1/stok-opname/{id}/kunci` | `SEDANG_DIHITUNG -> DIKUNCI`. Menolak `422 OPNAME_BARIS_BELUM_LENGKAP` bila ada baris ber-`kuantitasFisik` NULL. Sistem lalu otomatis memilih `MENUNGGU_PERSETUJUAN` atau `DISETUJUI` berdasarkan `ambangSelisihOpname`. |
+| POST | `/api/v1/stok-opname/{id}/buka-ulang` | `DIKUNCI|MENUNGGU_PERSETUJUAN -> SEDANG_DIHITUNG` (approval supervisor, `alasan` wajib). `snapshotPada` **tidak** di-reset. |
+| POST | `/api/v1/stok-opname/{id}/setujui` | `MENUNGGU_PERSETUJUAN -> DISETUJUI` (`ALT-PSD-017`). Menolak `403 PENYETUJU_TIDAK_BOLEH_PENGHITUNG` bila `penyetujuId == penghitungId`. |
+| POST | `/api/v1/stok-opname/{id}/posting` | `DISETUJUI -> DIPOSTING`: memposting `MutasiStok` `KOREKSI_OPNAME` untuk tiap baris ber-`selisih != 0`. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "posting opname"). **TERMINAL** - tidak dapat dibatalkan; koreksi lewat `/mutasi-stok/{id}/balik` atau opname baru. |
+| POST | `/api/v1/stok-opname/{id}/batalkan` | Batalkan sesi (`alasan` wajib). Ditolak dari `DIPOSTING`. |
+
+**CATATAN PENTING - endpoint lama yang DIHAPUS:**
+`POST /api/v1/stok-opname/{id}/selesaikan` **tidak ada lagi**. Ia mengasumsikan
+opname punya satu langkah "selesaikan" yang sekaligus mengunci, menyetujui, dan
+memposting - persis penggabungan yang membuat `ALT-PSD-017` (approval selisih
+signifikan) mustahil. Penggantinya adalah rangkaian
+`/kunci` -> (`/setujui`) -> `/posting`.
+
+**Catatan invariant yang BELUM ditegakkan di level data** (ADR-025, `ALT-DEF-029`):
+sifat append-only `mutasi_stok`, kesepadanan mutasi pembalik, dan keunikan baris
+saldo/opname agregat level-gudang seluruhnya bergantung pada
+`prisma/migrations/manual/004_*.sql` dan `005_*.sql` yang **belum pernah
+dieksekusi**. Larangan stok negatif, batas reservasi terhadap saldo fisik, dan
+kesamaan `StokBahan.kuantitas` dengan `SUM(MutasiStok.jumlah)` adalah invariant
+agregat yang **tidak akan pernah** menjadi DB-enforced meski migrasi dijalankan
+- ketiganya guard transaksi level-aplikasi. Jangan menganggap aturan-aturan ini
+terjamin.
 
 ## 7. Supplier & Pembelian (`packages/pembelian`)
 
@@ -551,8 +646,12 @@ setiap baris tabel endpoint pada dokumen ini untuk detail per-endpoint):
 | konfigurasi QRIS (ALT-DEF-015) | `PUT /api/v1/outlet/{id}/qris`, `POST /api/v1/outlet/{id}/qris/unggah`, `POST /api/v1/outlet/{id}/qris/{konfigurasiId}/aktifkan` - retry tanpa idempotensi dapat menghasilkan dua konfigurasi AKTIF sebelum partial index ADR-021 terpasang |
 | penerimaan barang | `POST /api/v1/purchase-order/{id}/penerimaan` |
 | posting mutasi stok | `POST /api/v1/mutasi-stok/penyesuaian` |
-| posting opname | `POST /api/v1/stok-opname/{id}/selesaikan` |
-| transfer stok | **belum ada endpoint** - lihat catatan gap di bagian 6, `ALT-DEF-032` |
+| posting opname | `POST /api/v1/stok-opname/{id}/posting` (menggantikan `/selesaikan` yang dihapus, `ALT-DEF-008`) |
+| transfer stok (`ALT-DEF-032` DITUTUP) | `POST /api/v1/transfer-stok/{id}/kirim` (posting `TRANSFER_KELUAR`) dan `POST /api/v1/transfer-stok/{id}/terima` (posting `TRANSFER_MASUK`) - lihat bagian 6.4. Keduanya membawa requirement ini **sejak perancangan awal**, bukan ditambahkan belakangan |
+| posting waste (`ALT-DEF-008`) | `POST /api/v1/waste` - retry tanpa idempotensi menggandakan mutasi `WASTE` dan nilai kerugian di laporan |
+| pembalikan mutasi stok (`ALT-DEF-008`) | `POST /api/v1/mutasi-stok/{id}/balik` - retry akan membuat pembalik ganda dan menggandakan koreksi saldo |
+| rekonsiliasi saldo (`ALT-DEF-008`) | `POST /api/v1/persediaan/rekonsiliasi` |
+| reservasi stok (`ALT-DEF-008`) | `POST /api/v1/reservasi-stok` |
 | penukaran poin | `POST /api/v1/keanggotaan/{id}/tukar-poin` |
 | penerapan promo | `POST /api/v1/pesanan/{id}/promo` |
 

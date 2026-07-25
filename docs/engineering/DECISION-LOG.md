@@ -1389,10 +1389,435 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
   `ModifierOpsi` (dicatat sebagai `ALT-DEF-035`, bukan diperbaiki diam-diam di
   sini karena itu domain menu).
 
+## ADR-023: Ledger stok sebagai sumber kebenaran tunggal, `StokBahan` sebagai cache turunan (ALT-DEF-008)
+
+- **Status:** DITERIMA
+- **Konteks:** `ALT-DEF-008` mencatat domain persediaan hanya punya `Gudang`,
+  `StokBahan` (saldo), `MutasiStok`, `StokOpname`, `StokOpnameBaris`. Yang
+  jauh lebih berbahaya daripada daftar model yang hilang adalah bahwa
+  **tidak ada satu pun dokumen yang pernah menyatakan mana di antara
+  `StokBahan` dan `MutasiStok` yang otoritatif.** `docs/database/04-persediaan.md`
+  menulis `kuantitas "saldo berjalan, hasil agregasi mutasi"` di satu tempat,
+  tetapi kontrak API menyediakan endpoint yang membaca saldo langsung dan
+  tidak ada aturan yang melarang penulisan langsung ke `StokBahan`. Selama
+  ambiguitas itu bertahan, implementasi yang wajar akan menulis ke KEDUANYA
+  dan saldo akan menyimpang diam-diam - kelas defect yang tidak pernah
+  terdeteksi sampai stok opname pertama.
+
+- **Keputusan 1 - `MutasiStok` adalah LEDGER APPEND-ONLY dan SATU-SATUNYA
+  sumber kebenaran; `StokBahan` adalah CACHE TURUNAN yang boleh dibuang.**
+  Aturan keras yang berlaku di seluruh domain:
+  1. Setiap peristiwa stok WAJIB menulis satu (atau lebih) baris `MutasiStok`.
+     Tidak ada satu pun jalur kode yang boleh mengubah `StokBahan.kuantitas`
+     tanpa baris mutasi pendampingnya dalam transaksi yang sama.
+  2. `StokBahan.kuantitas` WAJIB selalu sama dengan
+     `SUM(MutasiStok.jumlah)` untuk `(gudangId, bahanId, lokasiStokId)` yang
+     sama. Bila keduanya berbeda, **yang benar adalah ledger** dan baris cache
+     yang salah.
+  3. Koreksi SELALU berupa baris PEMBALIK baru (ADR-006). `MutasiStok` tidak
+     pernah di-UPDATE maupun di-DELETE.
+  4. Model `MutasiStok` karena itu SENGAJA tidak punya `updatedAt`, tidak
+     punya kolom status, dan tidak punya kolom soft-delete - kehadiran salah
+     satunya akan menyiratkan baris mutasi punya siklus hidup, padahal ia
+     peristiwa yang sudah terjadi.
+  - **Seam job rekonsiliasi (FITUR BERIKUTNYA, bukan batch ini).** Kolom
+    `StokBahan.direkonsiliasiPada` ditambahkan sebagai tempat berpijak: job
+    rekonsiliasi periodik menghitung ulang `SUM(MutasiStok.jumlah)` per
+    `(gudangId, bahanId, lokasiStokId)`, MENIMPA `StokBahan.kuantitas`, dan
+    mengisi `direkonsiliasiPada`. Arah penulisan itu SATU ARAH dan tidak
+    pernah sebaliknya. Job-nya sendiri adalah kode dan tidak ditulis di batch
+    ini; yang ditulis adalah kolomnya dan aturannya.
+  - **KEJUJURAN YANG WAJIB DINYATAKAN:** "append-only" **TIDAK ditegakkan
+    database** pada batch ini. Postgres tidak punya bentuk deklaratif untuk
+    "tabel ini hanya menerima INSERT"; penegak sebenarnya (revoke UPDATE/DELETE
+    + trigger penolak) ada di
+    `prisma/migrations/manual/005_mutasi_stok_append_only_dan_pembalik.sql`
+    yang **BELUM PERNAH DIJALANKAN** (`ALT-DEF-029`). Sampai saat itu,
+    append-only adalah **disiplin level-aplikasi semata**: satu bug service
+    layer - atau satu `UPDATE` lewat `psql` - dapat menulis ulang sejarah stok
+    tanpa jejak apa pun.
+
+- **Keputusan 2 - `JenisMutasiStok` diperluas menjadi 12 nilai; nilai lama
+  DIGANTI, bukan dipertahankan berdampingan.**
+  Nilai baru: `PEMBELIAN_MASUK`, `RETUR_PENJUALAN`, `TRANSFER_MASUK`,
+  `PRODUKSI_MASUK`, `PEMAKAIAN_RESEP`, `RETUR_SUPPLIER`, `TRANSFER_KELUAR`,
+  `PRODUKSI_KELUAR`, `WASTE`, `PEMAKAIAN_INTERNAL`, `PENYESUAIAN`,
+  `KOREKSI_OPNAME`.
+  **Pemetaan nilai lama -> baru:**
+
+  | Lama | Baru | Catatan |
+  |---|---|---|
+  | `MASUK_PEMBELIAN` | `PEMBELIAN_MASUK` | Perubahan urutan kata saja; semantik identik. |
+  | `KELUAR_PENJUALAN` | `PEMAKAIAN_RESEP` | Nama lama SALAH secara konseptual: yang berkurang bukan "penjualan" melainkan BAHAN yang dipakai resep. Satu penjualan bisa menghasilkan nol mutasi (item tanpa resep) atau belasan (satu per komponen). |
+  | `OPNAME_PENYESUAIAN` | `KOREKSI_OPNAME` | Dipisahkan dari `PENYESUAIAN` manual - keduanya punya jalur otorisasi berbeda (opname butuh approval berjenjang, ALT-PSD-017). |
+  | `TRANSFER_MASUK` | `TRANSFER_MASUK` | Tidak berubah. |
+  | `TRANSFER_KELUAR` | `TRANSFER_KELUAR` | Tidak berubah. |
+  | `RETUR` | `RETUR_PENJUALAN` **atau** `RETUR_SUPPLIER` | **AMBIGU** - lihat di bawah. |
+
+  `RETUR` adalah satu-satunya pemetaan yang tidak deterministik: nilai lama
+  itu menutupi DUA peristiwa dengan arah berlawanan (retur pelanggan =
+  bahan/produk MASUK kembali; retur ke supplier = barang KELUAR). Pembeda yang
+  tersedia adalah `referensiJenis`: `PESANAN` -> `RETUR_PENJUALAN`,
+  `PEMBELIAN` -> `RETUR_SUPPLIER`. Karena belum ada satu baris data pun
+  (`ALT-DEF-029`), pemetaan ini adalah instruksi untuk migrasi kelak, bukan
+  transformasi yang dijalankan sekarang.
+  - **Ketidakcocokan nama yang DIPUTUSKAN secara sadar:** ADR-022 Keputusan 8
+    poin 2 menyebut nilai enum `KELUAR_PEMAKAIAN_RESEP`, sedangkan master spec
+    `ALT-DEF-008` menyebut `PEMAKAIAN_RESEP`. Dipakai **`PEMAKAIAN_RESEP`**
+    (bunyi master spec). Awalan `KELUAR_`/`MASUK_` sengaja TIDAK dipakai
+    sebagai konvensi umum karena arah sudah dibawa TANDA `jumlah` - dua sumber
+    kebenaran untuk arah adalah persis pola yang ADR ini hindari di tempat
+    lain. `PEMBELIAN_MASUK`/`TRANSFER_MASUK`/`PRODUKSI_MASUK` mempertahankan
+    sufiks arah hanya karena pasangannya (`TRANSFER_KELUAR`/`PRODUKSI_KELUAR`)
+    memang perlu dibedakan sebagai peristiwa, bukan sebagai arah.
+  - `ReferensiJenisMutasi` ikut diperluas (`PRODUKSI`, `WASTE`, `PENYESUAIAN`,
+    `RETUR_PEMBELIAN`, `PEMAKAIAN_INTERNAL`) agar setiap jenis mutasi punya
+    jenis dokumen sumber yang benar-benar ada sebagai model.
+  - `docs/arsitektur/STATE-MACHINES.md` memuat tiga baris yang merujuk
+    `MutasiStok.jenis = RETUR`; ketiganya diperbarui menjadi `RETUR_PENJUALAN`
+    di batch ini. Membiarkan referensi ke nilai enum yang tidak ada lagi akan
+    membuat dokumen state machine menjadi salah secara diam-diam.
+
+- **Keputusan 3 - `StokBahan` DIPERTAHANKAN NAMANYA; `SaldoStok` adalah alias
+  dokumentasi, bukan model baru.**
+  `MASTER-CHECKLIST.md` `ALT-PSD-007` menyebut entitas `SaldoStok`. Model
+  `StokBahan` yang sudah ada melakukan **persis** tugas itu, sudah dirujuk
+  composite-FK yang divalidasi (ADR-013), sudah punya `@@map("stok_bahan")`,
+  dan sudah dirujuk `RmStokKritis`. Mengganti namanya adalah churn murni tanpa
+  satu pun jaminan tambahan, dan akan memaksa perubahan di test arsitektur
+  serta dokumen ERD yang tidak salah. **Yang berubah bukan namanya melainkan
+  STATUSNYA:** ia kini dinyatakan secara eksplisit sebagai cache turunan
+  (Keputusan 1), yang sebelumnya tidak pernah dinyatakan di mana pun.
+  - `StokBahan` mendapat `lokasiStokId String?` dan
+    `@@unique([gudangId, bahanId, lokasiStokId])` (menggantikan
+    `@@unique([gudangId, bahanId])`) sehingga saldo per sub-lokasi mungkin
+    (`ALT-PSD-004`). `NULL` = baris agregat level-gudang.
+  - **JEBAKAN NULL-SEMANTICS yang WAJIB dicatat:** Postgres memperlakukan NULL
+    sebagai nilai yang selalu BERBEDA di unique index, sehingga
+    `@@unique([gudangId, bahanId, lokasiStokId])` **TIDAK** mencegah dua baris
+    agregat level-gudang untuk pasangan bahan yang sama. Penegaknya adalah
+    partial unique index di
+    `prisma/migrations/manual/004_stok_bahan_agregat_gudang_unik.sql`
+    (`WHERE "lokasiStokId" IS NULL`) - **BELUM PERNAH DIJALANKAN**
+    (`ALT-DEF-029`). Alternatif yang ditolak (lokasi wajib + entitas "DEFAULT"
+    boneka; kolom sentinel yang mematikan FK) didokumentasikan di file SQL
+    tersebut.
+  - `kuantitasDireservasi Decimal @default(0)` ditambahkan: stok **TERSEDIA** =
+    `kuantitas - kuantitasDireservasi`. Ini juga cache (kebenarannya
+    `SUM(ReservasiStok.jumlah WHERE status = AKTIF)`).
+
+- **Keputusan 4 - `PenyesuaianStok` dan `CatatanWaste` WAJIB punya
+  `mutasiStokId` non-null dan `@unique`.**
+  Sebuah dokumen penyesuaian/waste yang tidak menulis baris ledger berarti
+  saldo berubah tanpa jejak - pelanggaran langsung Keputusan 1. `@unique`
+  mencegah dua dokumen mengklaim satu baris mutasi yang sama (yang akan
+  membuat nilai kerugian terhitung ganda di laporan waste). Kolom
+  `disetujuiOlehId` nullable pada keduanya: ambang nilai yang membutuhkan
+  persetujuan adalah kebijakan service-layer
+  (`PengaturanPersediaanOutlet.ambangSelisihOpname` untuk opname), bukan
+  bagian skema.
+
+- **Keputusan 5 - integritas reversal: apa yang SUDAH dan BELUM dijamin.**
+  Kolom `dibalikOlehId String? @unique` yang sudah ada **diverifikasi ulang**
+  di batch ini, bukan diasumsikan benar. Yang benar-benar ia jamin:
+  1. Satu mutasi dibalik **paling banyak sekali** - dijamin secara struktural
+     karena `dibalikOlehId` adalah kolom TUNGGAL (bukan tabel relasi), jadi
+     tidak ada tempat untuk menaruh pembalik kedua. **DIJAMIN DB.**
+  2. Satu mutasi pembalik membalik **paling banyak satu** mutasi asal -
+     dijamin `@unique`. **DIJAMIN DB.**
+  Yang **TIDAK** ia jamin sama sekali, dan karenanya HANYA level-aplikasi
+  sampai file SQL 005 dijalankan:
+  3. `jumlah` pembalik berlawanan tanda tepat dengan mutasi asal.
+  4. Pembalik berada di tenant/gudang/bahan yang sama.
+  5. Larangan rantai pembalik-dari-pembalik.
+  Ketiganya adalah invariant **LINTAS-BARIS** (membandingkan satu baris dengan
+  baris lain), dan CHECK constraint Postgres dilarang membaca baris lain -
+  satu-satunya penegak level-data yang mungkin adalah trigger, yang ditulis di
+  file SQL 005 dan **belum pernah dijalankan**. Menganggap `@unique` menjamin
+  "reversal benar" adalah kesalahan baca yang ADR ini ada untuk mencegahnya.
+
+## ADR-024: `LokasiStok`, `BatchStok`, seam `BatchProduksi`, reservasi, dan transfer (ALT-DEF-008)
+
+- **Status:** DITERIMA
+
+- **Keputusan 1 - `LokasiStok` sebagai sub-lokasi di dalam `Gudang`, dan
+  `MutasiStok` membawa lokasi SUMBER dan TUJUAN yang keduanya nullable.**
+  `LokasiStok(id, tenantId, outletId, gudangId, nama, jenis?, status)` dengan
+  composite-FK **outlet-level** ke `Gudang(outletId, id)` (ADR-013 poin 3) -
+  varian outlet-level dipilih, bukan tenant-level, karena risiko nyatanya
+  adalah lokasi outlet A menunjuk gudang outlet B dalam tenant yang sama.
+  `Gudang` karena itu mendapat `@@unique([outletId, id])` baru.
+  `MutasiStok` mendapat `lokasiSumberId String?` + `lokasiTujuanId String?`.
+  **Keduanya nullable dengan sengaja** karena ketiga bentuk berikut sama-sama
+  sah: transfer (dua-duanya terisi), pembelian (hanya tujuan), pemakaian
+  (hanya sumber). **Aturan "mana yang wajib untuk jenis mutasi apa" adalah
+  invariant LEVEL-APLIKASI** - ia kondisional per-nilai-enum, yang tidak dapat
+  diekspresikan DSL Prisma. **SENGAJA TIDAK** ditambahkan CHECK constraint
+  untuknya di batch ini: bentuknya akan menjadi rantai `CASE` sepanjang 12
+  cabang yang harus disunting setiap kali satu nilai enum ditambahkan, dan
+  konsekuensi pelanggarannya adalah kolom kosong yang terdeteksi laporan, bukan
+  saldo yang salah (saldo tetap benar karena ia dihitung dari `jumlah` +
+  `gudangId`). Dicatat di sini agar tidak terlihat sebagai kelalaian.
+
+- **Keputusan 2 - `ReservasiStok` mengurangi stok TERSEDIA, tidak pernah stok
+  FISIK, dan SENGAJA bukan baris ledger.**
+  `ReservasiStok(id, tenantId, outletId, itemPesananId, bahanId, jumlah,
+  satuanId, status, kedaluwarsaPada?, createdAt, dilepasPada?)` + enum
+  `StatusReservasiStok` (`AKTIF`/`DILEPAS`/`DIKONSUMSI`/`KEDALUWARSA`).
+  - **Mengapa BUKAN baris `MutasiStok`:** reservasi tidak memindahkan barang
+    apa pun. Menuliskannya sebagai mutasi akan membuat `SUM(jumlah)` -
+    definisi saldo fisik menurut ADR-023 Keputusan 1 - melaporkan stok yang
+    lebih kecil daripada yang benar-benar ada di rak, sehingga opname fisik
+    akan selalu menunjukkan "kelebihan" palsu sebesar total reservasi aktif.
+  - `DILEPAS` vs `DIKONSUMSI` **wajib dibedakan**: hanya yang kedua yang punya
+    baris `MutasiStok` pendamping. Menggabungkan keduanya menjadi satu status
+    terminal membuat pertanyaan "apakah reservasi ini pernah menjadi
+    pemakaian?" tidak terjawab dari data.
+  - Digantung pada `itemPesananId`, **bukan** `pesananId`: membatalkan satu
+    baris pesanan tidak boleh melepas reservasi baris lain di pesanan yang
+    sama. FK ID tunggal ke `ItemPesanan` (yang tidak membawa `tenantId`
+    sendiri) - konsisten dengan `ItemPesanan.resepVersi`, ADR-022 Keputusan 7.
+  - **INVARIANT LEVEL-APLIKASI:** `SUM(jumlah)` reservasi `AKTIF` untuk satu
+    bahan di satu gudang tidak boleh melebihi saldo fisiknya. Ini invariant
+    **SUM lintas-baris** - Prisma tidak dapat mengekspresikannya dan Postgres
+    hanya bisa lewat trigger/exclusion constraint yang mahal. Penegakannya
+    adalah guard transaksi + `SELECT ... FOR UPDATE` pada baris `StokBahan`.
+    **Tidak ada penegak level-data untuk ini, sekarang maupun setelah kelima
+    file SQL manual dijalankan.**
+
+- **Keputusan 3 - `BatchStok` DAN `BatchProduksi` dipertahankan dan
+  DISAMBUNGKAN FK; TIDAK disatukan (menebus seam ADR-022 Keputusan 8 poin 4).**
+  `BatchStok(id, tenantId, outletId, bahanId, nomorBatch, tanggalProduksi?,
+  tanggalKedaluwarsa?, kuantitasAwal, hargaPerolehan, lokasiStokId?,
+  batchProduksiId?, status, createdAt)` dengan
+  `@@unique([tenantId, bahanId, nomorBatch])`.
+  ADR-022 Keputusan 6 sudah menyiapkan `BatchProduksi.@@unique([tenantId, id])`
+  **secara eksplisit** "agar model persediaan/FEFO batch berikutnya bisa
+  memakai composite-FK ke sini" - handoff itu dihormati apa adanya:
+  `BatchStok.batchProduksiId` + composite-FK
+  `(tenantId, batchProduksiId) -> BatchProduksi(tenantId, id)` +
+  `@@unique([tenantId, batchProduksiId])` yang menjadikan relasi ini **1:1
+  opsional**.
+  - **Mengapa TIDAK disatukan** (yang merupakan alternatif nyata, bukan straw
+    man): batch hasil **PEMBELIAN** tidak punya `prosesProduksiId`,
+    `versiResepId`, maupun proses apa pun. Menyatukan berarti membuat seluruh
+    kolom produksi nullable untuk mayoritas baris, DAN menaruh kolom
+    persediaan (`hargaPerolehan`, `lokasiStokId`) di tabel milik domain
+    produksi. Pemisahan ini adalah pemisahan DOMAIN, bukan duplikasi:
+    `BatchProduksi` menjawab "apa yang DIBUAT dan dari proses mana",
+    `BatchStok` menjawab "apa yang ADA di rak, berapa harga perolehannya, di
+    lokasi mana, kapan kedaluwarsa".
+  - **Bahaya "dua konsep batch yang terputus" ditutup dengan tiga hal:**
+    (a) FK yang benar-benar ada, (b) `@@unique` yang membuatnya 1:1,
+    (c) invariant tertulis: **setiap `BatchProduksi` atas bahan
+    `BAHAN_SETENGAH_JADI` WAJIB melahirkan tepat satu `BatchStok` dalam
+    transaksi yang sama dengan mutasi `PRODUKSI_MASUK`.** Poin (c) adalah
+    **invariant LEVEL-APLIKASI** - Prisma tidak dapat mewajibkan sisi itu,
+    karena kolomnya ada di `BatchStok` dan harus nullable untuk batch
+    pembelian. Ini keterbatasan yang diterima sadar dan dinyatakan, bukan
+    dilewati.
+  - `nomorBatch` unik per `(tenantId, bahanId)`, **bukan** per `tenantId` saja
+    seperti `BatchProduksi`. Nomor batch dalam praktik diberikan supplier dan
+    hanya bermakna dalam konteks satu bahan; menuntutnya unik lintas-bahan
+    akan menolak data supplier yang sah.
+
+- **Keputusan 4 - `TransferStok` + `TransferStokBaris` dengan state machine
+  tujuh status, dan pasangan mutasi yang TIDAK ditulis bersamaan.**
+  Enum `StatusTransferStok`: `DRAF`/`DIAJUKAN`/`DISETUJUI`/`DIKIRIM`/
+  `DITERIMA_SEBAGIAN`/`DITERIMA`/`DIBATALKAN`. Tabel transisi penuh ada di
+  `docs/arsitektur/STATE-MACHINES.md` bagian 8.
+  - **`TRANSFER_KELUAR` ditulis saat `DIKIRIM`; `TRANSFER_MASUK` ditulis saat
+    `DITERIMA`/`DITERIMA_SEBAGIAN` - BUKAN keduanya sekaligus.** Menulis
+    keduanya pada satu titik akan membuat barang yang sedang di jalan tampak
+    sudah menjadi saldo gudang tujuan, sehingga gudang tujuan bisa "memakai"
+    barang yang belum tiba. Jeda di antara keduanya adalah barang dalam
+    perjalanan, dan ia memang bukan saldo gudang mana pun.
+  - `jumlahDiminta`/`jumlahDikirim?`/`jumlahDiterima?` adalah **tiga kolom
+    terpisah**, bukan satu kolom yang ditimpa. Selisih di antara ketiganya
+    adalah seluruh alasan `DITERIMA_SEBAGIAN` ada; menimpanya menghapus
+    informasi susut/kehilangan dalam perjalanan.
+  - Composite-FK **outlet-level** dipakai untuk kedua gudang
+    (`gudangAsal` via `(outletAsalId, gudangAsalId) -> Gudang(outletId, id)`).
+    Ini yang menjamin di level database bahwa gudang asal benar-benar milik
+    outlet asal - jaminan yang TIDAK didapat dari composite `(tenantId,
+    gudangId)` saja pada tenant multi-outlet, dan transfer justru operasi yang
+    menyeberangi outlet.
+  - **INVARIANT LEVEL-APLIKASI:** `gudangAsalId != gudangTujuanId` (transfer ke
+    diri sendiri tidak bermakna) dan `jumlahDiterima <= jumlahDikirim <=
+    jumlahDiminta`. Keduanya CHECK constraint sederhana yang **sengaja tidak
+    ditulis** di batch ini karena `prisma/migrations/manual/` sudah memuat lima
+    file yang belum satu pun pernah dijalankan; menambah file keenam yang juga
+    tidak dijalankan menambah klaim, bukan jaminan. Dicatat sebagai utang
+    eksplisit yang dilunasi bersamaan dengan eksekusi migrasi nyata
+    (`ALT-DEF-029`).
+  - **Menutup `ALT-DEF-032`:** endpoint `POST /api/v1/transfer-stok` beserta
+    `/ajukan`, `/setujui`, `/kirim`, `/terima`, `/batalkan` ditambahkan ke
+    `docs/api/API-CONTRACT.md` bagian 6, seluruh operasi posting membawa
+    anotasi `Idempotency-Key` **sejak perancangan awal** persis seperti yang
+    dituntut baris remediasi `ALT-DEF-032`.
+
+- **Keputusan 5 - `CatatanWaste` + `AlasanWaste`, dan `KebijakanPemesananUlang`
+  per OUTLET.**
+  - `AlasanWaste(id, tenantId, kode, nama, status)`,
+    `@@unique([tenantId, kode])`. `CatatanWaste.alasanWasteId` **non-null** -
+    itulah bunyi harfiah acceptance `ALT-PSD-014` ("memilih dari daftar
+    standar, bukan teks bebas"). Kolom `catatan String?` tetap ada untuk
+    keterangan tambahan, dan ia **melengkapi**, tidak menggantikan, alasan
+    berkode.
+  - `KebijakanPemesananUlang(id, tenantId, outletId, bahanId, stokMinimum,
+    stokMaksimum?, jumlahPemesananUlang?, metode, status)`,
+    `@@unique([outletId, bahanId])`. **Per OUTLET**, bukan per tenant: ambang
+    reorder outlet bandara dan outlet perumahan berbeda jauh untuk bahan yang
+    sama.
+  - `stokMinimum` di sini bertipe `Decimal`, sedangkan `Bahan.stokMinimum` yang
+    lama bertipe `Int`. Keduanya **berdampingan** setelah batch ini, dan itu
+    adalah dua sumber kebenaran - dicatat sebagai defect baru `ALT-DEF-036`
+    (bukan diperbaiki diam-diam, karena `RmStokKritis`/`ALT-ANL-005` merujuk
+    kolom lama dan perbaikannya menyentuh domain analitik).
+
+## ADR-025: Kebijakan pemotongan stok, FEFO/FIFO, stok negatif, dan state machine opname (ALT-DEF-008)
+
+- **Status:** DITERIMA
+
+- **Keputusan 1 - kebijakan pemotongan stok sebagai KOLOM BERTIPE di model
+  `PengaturanPersediaanOutlet` baru, BUKAN baris key-value di
+  `PengaturanOutlet`.**
+  Enum `KebijakanPemotonganStok`: `SAAT_PESANAN_DITERIMA`/`SAAT_MASUK_DAPUR`/
+  `SAAT_SELESAI`/`SAAT_PEMBAYARAN`, `@default(SAAT_MASUK_DAPUR)` sesuai
+  rekomendasi master spec - saat itulah bahan secara fisik mulai dipakai,
+  sehingga saldo ledger paling dekat dengan kenyataan rak.
+  **Mengapa `PengaturanOutlet` (Json key-value) DITOLAK** meski ia sudah ada
+  dan "lebih murah": keempat pengaturan di model baru dibaca di **jalur panas
+  setiap pemotongan stok**, dan tiga di antaranya adalah enum tertutup. Json
+  key-value tidak memberi validasi enum, tidak memberi default, dan **salah
+  ketik kunci akan diam-diam jatuh ke nilai default** - artinya mengubah
+  perilaku potong-stok (konsekuensi finansial langsung) tanpa error apa pun.
+  Untuk pengaturan yang salahnya hanya berakibat kosmetik, `PengaturanOutlet`
+  tetap tempat yang benar dan **dipertahankan**; ia tidak digantikan.
+  Model: `PengaturanPersediaanOutlet(id, tenantId, outletId @unique,
+  kebijakanPemotongan, reservasiSaatPesananDiterima, kedaluwarsaReservasiMenit?,
+  metodeAlokasiBatch, izinkanStokNegatif, ambangSelisihOpname?)`.
+
+- **Keputusan 2 - reservasi dibuat saat pesanan DITERIMA, dikonsumsi saat
+  masuk dapur.**
+  `reservasiSaatPesananDiterima Boolean @default(true)`. Alurnya:
+  `Pesanan -> DITERIMA` membuat baris `ReservasiStok` `AKTIF` per komponen
+  resep (dihitung dari `ItemPesanan.resepVersiId`, **bukan** dari versi aktif
+  saat ini - ADR-022 Keputusan 8 poin 2); `Pesanan -> DIKIRIM_KE_DAPUR`
+  mengubahnya menjadi `DIKONSUMSI` dan menulis mutasi `PEMAKAIAN_RESEP`;
+  pembatalan/penolakan mengubahnya menjadi `DILEPAS` tanpa mutasi apa pun.
+  `kedaluwarsaReservasiMenit` menyediakan jaring pengaman untuk reservasi yang
+  tidak pernah mendapat keputusan (job penyapu -> `KEDALUWARSA`); nullable =
+  tanpa batas waktu.
+
+- **Keputusan 3 - FEFO default, FIFO fallback; ini logika SERVICE-LAYER dan
+  skema hanya wajib membawa cukup kolom untuknya.**
+  Enum `MetodeAlokasiBatch` (`FEFO`/`FIFO`), `@default(FEFO)`.
+  - **FEFO** mengurutkan `BatchStok` berstatus `TERSEDIA` menaik menurut
+    `tanggalKedaluwarsa`. Batch dengan `tanggalKedaluwarsa IS NULL` (bahan tak
+    kedaluwarsa) diurutkan **terakhir**, lalu di antara sesamanya menurut
+    `createdAt` - inilah FIFO fallback, dan ia berlaku otomatis tanpa
+    konfigurasi terpisah.
+  - **FIFO** mengurutkan murni menurut `createdAt` menaik, mengabaikan
+    kedaluwarsa. Dipakai untuk bahan non-perishable yang penilaiannya
+    berbasis biaya perolehan.
+  - **Verifikasi bahwa skema benar-benar cukup:** alokasi butuh (1) urutan
+    kedaluwarsa -> `BatchStok.tanggalKedaluwarsa`, (2) urutan penerimaan ->
+    `BatchStok.createdAt`, (3) umur produksi -> `BatchStok.tanggalProduksi`,
+    (4) sisa yang bisa dialokasikan -> `kuantitasAwal` dikurangi
+    `SUM(MutasiStok.jumlah WHERE batchStokId = ...)`, (5) penyaring batch mati
+    -> `status`, (6) nilai persediaan -> `hargaPerolehan`. **Keenamnya ada.**
+    Dua indeks pendukung ditambahkan:
+    `@@index([tenantId, bahanId, status, tanggalKedaluwarsa])` (FEFO) dan
+    `@@index([tenantId, bahanId, status, createdAt])` (FIFO).
+  - **Sisa batch SENGAJA tidak disimpan sebagai kolom.** Menyimpannya akan
+    menciptakan cache turunan KEDUA di samping `StokBahan`, dengan aturan
+    rekonsiliasi sendiri - persis kelas defect yang ADR-023 Keputusan 1 ada
+    untuk mencegahnya. Sisa dihitung dari ledger.
+
+- **Keputusan 4 - kebijakan stok negatif: DITOLAK secara default, dapat
+  diizinkan per outlet, tidak pernah senyap.**
+  `izinkanStokNegatif Boolean @default(false)`.
+  - `false` (default): operasi yang akan membuat stok **TERSEDIA** turun di
+    bawah nol **DITOLAK** dengan `409 STOK_TIDAK_CUKUP`. Pesanan tidak dapat
+    diterima; pemakaian resep tidak dapat diposting.
+  - `true`: operasi tetap diposting, saldo boleh negatif, DAN baris mutasinya
+    wajib memicu notifikasi ke peran GUDANG/MANAJER. Nilainya untuk operasi
+    resto nyata: bahan yang penerimaan barangnya belum sempat diinput tidak
+    boleh menghentikan layanan meja.
+  - **INVARIANT LEVEL-APLIKASI SEPENUHNYA.** Ini invariant **SUM lintas-baris**
+    atas ledger; ia tidak dapat diekspresikan sebagai CHECK constraint (yang
+    hanya melihat satu baris) maupun sebagai apa pun di DSL Prisma. Tidak ada
+    penegak level-data untuk ini, sekarang maupun setelah kelima file SQL
+    manual dijalankan. Penegakannya adalah guard transaksi yang membaca saldo
+    dengan `SELECT ... FOR UPDATE` sebelum menulis mutasi.
+
+- **Keputusan 5 - state machine `StokOpname` tujuh status, dan opname TIDAK
+  PERNAH menyentuh saldo secara langsung.**
+  Enum lama (`DIRENCANAKAN`/`BERLANGSUNG`/`SELESAI`/`DIBATALKAN`) diganti
+  `DRAF`/`SEDANG_DIHITUNG`/`DIKUNCI`/`MENUNGGU_PERSETUJUAN`/`DISETUJUI`/
+  `DIPOSTING`/`DIBATALKAN`. Pemetaan: `DIRENCANAKAN -> DRAF`,
+  `BERLANGSUNG -> SEDANG_DIHITUNG`, `SELESAI -> DIPOSTING`,
+  `DIBATALKAN -> DIBATALKAN`. `DIKUNCI` dan `MENUNGGU_PERSETUJUAN` adalah
+  status **baru yang sebelumnya tidak punya padanan sama sekali** - tanpa
+  keduanya, `ALT-PSD-017` (approval selisih signifikan) tidak punya tempat
+  untuk berdiri.
+  - **Opname memposting mutasi `KOREKSI_OPNAME`, tidak pernah menulis
+    `StokBahan`.** Konsekuensi langsung ADR-023 Keputusan 1: kalau opname
+    menulis saldo langsung, ledger dan cache berpisah pada saat yang justru
+    paling penting untuk cocok.
+  - Kolom aktor baru: `dibuatOlehId` (sudah ada), `penghitungId?`,
+    `pengunciId?`, `penyetujuId?`. **Empat peran terpisah, bukan satu kolom
+    `diubahOlehId`** - pemisahan penghitung dari penyetuju adalah inti kontrol
+    internal opname (orang yang menghitung tidak boleh menyetujui hitungannya
+    sendiri). **Aturan `penghitungId != penyetujuId` adalah invariant
+    LEVEL-APLIKASI** - ia CHECK constraint sederhana yang bisa ditulis, tetapi
+    lihat catatan utang di ADR-024 Keputusan 4 tentang menambah file SQL yang
+    tidak dijalankan.
+  - `snapshotPada DateTime?` - waktu kuantitas sistem dibekukan (transisi
+    `DRAF -> SEDANG_DIHITUNG`). **Tanpa kolom ini, "selisih" membandingkan
+    hitungan fisik pukul 22:00 dengan saldo yang sudah bergerak sampai pukul
+    23:00, dan angkanya tidak bermakna sama sekali** - defect diam-diam yang
+    ada di model lama.
+  - `StokOpnameBaris.kuantitasFisik` dan `selisih` **DIJADIKAN NULLABLE**
+    (sebelumnya non-null). Ini perbaikan defect, bukan pelonggaran: baris yang
+    belum dihitung tidak boleh berpura-pura fisiknya `0`, karena `0` membuat
+    `selisih` sebesar seluruh saldo dan memposting koreksi yang **menghapus
+    stok nyata**. `mutasiKoreksiId String? @unique` adalah jejak ledger baris
+    ini setelah `DIPOSTING`.
+  - `StokOpnameBaris` mendapat `@@unique([stokOpnameId, bahanId, lokasiStokId])`
+    - dua baris hitung untuk bahan yang sama menghasilkan koreksi ganda saat
+    posting. Jebakan NULL-semantics yang sama seperti ADR-023 Keputusan 3
+    berlaku dan ditutup index kedua di file SQL manual 004
+    (**belum pernah dijalankan**, `ALT-DEF-029`).
+
+- **Ringkasan invariant LEVEL-APLIKASI domain ini (tidak ada satu pun yang
+  dijamin database pada saat ADR ini ditulis):**
+
+  | # | Invariant | Penegak yang direncanakan | Status |
+  |---|---|---|---|
+  | 1 | `mutasi_stok` append-only | trigger, SQL manual 005 | BELUM DIJALANKAN |
+  | 2 | Pembalik berlawanan tanda & sepadan | trigger, SQL manual 005 | BELUM DIJALANKAN |
+  | 3 | Satu baris `StokBahan` agregat per (gudang, bahan) | partial unique index, SQL manual 004 | BELUM DIJALANKAN |
+  | 4 | Satu baris opname agregat per (opname, bahan) | partial unique index, SQL manual 004 | BELUM DIJALANKAN |
+  | 5 | `StokBahan.kuantitas == SUM(MutasiStok.jumlah)` | job rekonsiliasi (kode, belum ditulis) | TIDAK PERNAH DB-ENFORCED |
+  | 6 | `SUM(ReservasiStok AKTIF) <= saldo fisik` | guard transaksi + `FOR UPDATE` | TIDAK PERNAH DB-ENFORCED |
+  | 7 | Stok tidak negatif (bila `izinkanStokNegatif = false`) | guard transaksi + `FOR UPDATE` | TIDAK PERNAH DB-ENFORCED |
+  | 8 | Setiap `BatchProduksi` bahan setengah jadi melahirkan satu `BatchStok` | guard transaksi produksi | TIDAK PERNAH DB-ENFORCED |
+  | 9 | `lokasiSumber`/`lokasiTujuan` wajib sesuai jenis mutasi | validasi service-layer | TIDAK DITEGAKKAN |
+  | 10 | `gudangAsal != gudangTujuan`; `diterima <= dikirim <= diminta` | validasi service-layer | UTANG CHECK constraint |
+  | 11 | `penghitungId != penyetujuId` pada opname | validasi service-layer | UTANG CHECK constraint |
+
+  Baris 5-9 **tidak akan menjadi DB-enforced meski seluruh file SQL manual
+  dijalankan** - ia invariant agregat/kondisional yang memang berada di luar
+  jangkauan constraint deklaratif. Ini dinyatakan agar pembaca berikutnya tidak
+  menganggap "jalankan migrasi" sebagai penutup seluruh daftar ini.
+
 ## Status ringkas
 
 Semua ADR di atas berstatus **DITERIMA sebagai keputusan desain**, tetapi
 implementasinya di kode berstatus **BELUM DIKERJAKAN** kecuali skema Prisma awal
 (ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015, ADR-016,
-ADR-017, ADR-018, ADR-019, ADR-020, ADR-021, ADR-022 sudah tercermin di
+ADR-017, ADR-018, ADR-019, ADR-020, ADR-021, ADR-022, ADR-023, ADR-024, ADR-025
+sudah tercermin di
 `prisma/schema/schema.prisma`).

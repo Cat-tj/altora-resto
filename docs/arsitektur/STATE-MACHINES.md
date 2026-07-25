@@ -1,6 +1,15 @@
 # State Machine Inti Altora Resto
 
-Tujuh state machine inti yang menjadi tulang punggung alur operasional restoran.
+Delapan state machine inti yang menjadi tulang punggung alur operasional restoran.
+
+**ALT-DEF-008 (correction-loop lanjutan):** bagian 7 (Opname) ditulis ulang
+penuh - diagram lama 4-status (`DIRENCANAKAN`/`BERLANGSUNG`/`SELESAI`/
+`DIBATALKAN`) tidak punya tempat sama sekali untuk `ALT-PSD-017` (approval
+selisih signifikan) - dan bagian 8 (Transfer Stok) adalah **baru**. Tiga baris
+di bagian 1 dan 5 yang merujuk `MutasiStok.jenis = RETUR` diperbarui menjadi
+`RETUR_PENJUALAN`: nilai enum `RETUR` **sudah tidak ada lagi** setelah ADR-023
+Keputusan 2, dan membiarkan rujukan ke nilai yang tidak ada membuat dokumen ini
+salah secara diam-diam.
 
 ## 1. Pesanan
 
@@ -80,7 +89,7 @@ di bawah untuk detail per baris):
 | DITERIMA | DIBATALKAN | KASIR/PELAYAN (izin `pesanan.batalkan`) | - | Tulis 1 baris `PesananPembatalan` | `order.cancelled` | `pesanan_diterima_dibatalkan` |
 | MENUNGGU_PEMBAYARAN | DIBATALKAN | KASIR/PELAYAN/pelanggan (izin `pesanan.batalkan` atau self-cancel) | - | Tulis 1 baris `PesananPembatalan` | `order.cancelled` | `pesanan_menunggu_pembayaran_dibatalkan_manual` |
 | DIKONFIRMASI | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, `BatasIzin.wajibPersetujuanManajer`) | Approval supervisor wajib (mis. stok habis ditemukan setelah konfirmasi) | Tulis 1 baris `PesananPembatalan` (`dibatalkanOlehId` = supervisor penyetuju) | `order.cancelled` | `pesanan_dikonfirmasi_dibatalkan_approval` |
-| DIKIRIM_KE_DAPUR | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, wajib approval) | Approval supervisor wajib; bahan mungkin sudah mulai terpakai | Tulis 1 baris `PesananPembatalan`; mutasi stok pembalik (`MutasiStok.jenis = RETUR`) bila bahan sudah dipakai | `order.cancelled` | `pesanan_kirim_dapur_dibatalkan_approval_dgn_pembalik_stok` |
+| DIKIRIM_KE_DAPUR | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, wajib approval) | Approval supervisor wajib; bahan mungkin sudah mulai terpakai | Tulis 1 baris `PesananPembatalan`; mutasi stok pembalik (`MutasiStok.jenis = RETUR_PENJUALAN`) bila bahan sudah dipakai | `order.cancelled` | `pesanan_kirim_dapur_dibatalkan_approval_dgn_pembalik_stok` |
 | SEDANG_DISIAPKAN | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, wajib approval) | Approval supervisor wajib; bahan sudah terpakai | Tulis 1 baris `PesananPembatalan`; mutasi stok pembalik sebagian sesuai progres masak | `order.cancelled` | `pesanan_sedang_disiapkan_dibatalkan_approval_dgn_pembalik_stok` |
 
 Catatan tambahan (bukan transisi status, tetapi bagian dari alur `ALT-PES-010`):
@@ -280,11 +289,11 @@ Catatan penting yang TIDAK terlihat langsung di diagram:
 | DITERIMA | DIBATALKAN | KASIR/PELAYAN/SUPERVISOR (izin `pesanan.batalkan`) | Masak belum dimulai (`mulaiDiprosesPada == null`) | Tidak ada mutasi stok pembalik (bahan belum dipakai) | `kitchen.ticket_cancelled` | `tiket_dapur_diterima_dibatalkan_sebelum_masak` |
 | DITAHAN | DITERIMA | DAPUR/SUPERVISOR (izin `dapur.tiket.tahan`) | Hold dilepas dan masak BELUM dimulai (`mulaiDiprosesPada == null`) | Timer SLA dilanjutkan kembali | `kitchen.ticket_released` | `tiket_dapur_hold_dilepas_kembali_diterima` |
 | DITAHAN | SEDANG_DISIAPKAN | DAPUR (izin `dapur.tiket.tahan`) | Hold dilepas DAN minimal 1 baris langsung `MENUNGGU -> DIMASAK` | Set `mulaiDiprosesPada = now()` bila masih null; timer SLA dilanjutkan | `kitchen.started` | `tiket_dapur_hold_dilepas_langsung_masak` |
-| DITAHAN | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, `BatasIzin.wajibPersetujuanManajer`) | Approval supervisor wajib | Mutasi stok pembalik (`MutasiStok.jenis = RETUR`) HANYA bila `mulaiDiprosesPada != null` | `kitchen.ticket_cancelled` | `tiket_dapur_ditahan_dibatalkan_approval` |
+| DITAHAN | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, `BatasIzin.wajibPersetujuanManajer`) | Approval supervisor wajib | Mutasi stok pembalik (`MutasiStok.jenis = RETUR_PENJUALAN`) HANYA bila `mulaiDiprosesPada != null` | `kitchen.ticket_cancelled` | `tiket_dapur_ditahan_dibatalkan_approval` |
 | SEDANG_DISIAPKAN | SELESAI_SEBAGIAN | DAPUR (izin `dapur.baris.siap`) | Minimal 1 `TiketDapurBaris` berstatus `SIAP` DAN minimal 1 baris masih `MENUNGGU`/`DIMASAK` (`ALT-DPR-008`) | Tidak ada efek samping di level `Pesanan` (belum siap keseluruhan) | `kitchen.line_ready` | `tiket_dapur_sebagian_baris_siap` |
 | SEDANG_DISIAPKAN | SIAP | DAPUR (izin `dapur.tiket.siap`) | **SELURUH** `TiketDapurBaris` milik tiket ini berstatus `SIAP` (`ALT-DPR-009`) | Set `siapPada = now()` (timer berhenti, `ALT-DPR-005`); notifikasi in-app ke pelayan (`Notification.tipe = PESANAN_SIAP`); emit event ke domain Pesanan - `Pesanan.status` menjadi `SIAP` HANYA bila SELURUH tiket pesanan tsb sudah `SIAP`/`DISAJIKAN` | `kitchen.ready` | `tiket_dapur_seluruh_baris_siap_notifikasi_pelayan` |
 | SEDANG_DISIAPKAN | DITAHAN | SUPERVISOR (izin `dapur.tiket.tahan`) | `alasan` hold wajib; approval supervisor karena masak sudah berjalan | Timer SLA dihentikan; baris `DIMASAK` tetap `DIMASAK` (tidak di-reset ke `MENUNGGU`) | `kitchen.ticket_held` | `tiket_dapur_ditahan_di_tengah_masak` |
-| SEDANG_DISIAPKAN | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, wajib approval) | Approval supervisor wajib; TIDAK ada baris yang sudah `SIAP` (bila ada, tiket sudah `SELESAI_SEBAGIAN` dan pembatalan tiket penuh terlarang) | Mutasi stok pembalik sebagian (`MutasiStok.jenis = RETUR`) sesuai progres masak | `kitchen.ticket_cancelled` | `tiket_dapur_sedang_disiapkan_dibatalkan_approval_dgn_pembalik_stok` |
+| SEDANG_DISIAPKAN | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, wajib approval) | Approval supervisor wajib; TIDAK ada baris yang sudah `SIAP` (bila ada, tiket sudah `SELESAI_SEBAGIAN` dan pembatalan tiket penuh terlarang) | Mutasi stok pembalik sebagian (`MutasiStok.jenis = RETUR_PENJUALAN`) sesuai progres masak | `kitchen.ticket_cancelled` | `tiket_dapur_sedang_disiapkan_dibatalkan_approval_dgn_pembalik_stok` |
 | SELESAI_SEBAGIAN | SIAP | DAPUR (izin `dapur.tiket.siap`) | Baris terakhir yang tersisa bertransisi ke `SIAP` - SELURUH baris kini `SIAP` | Set `siapPada = now()`; notifikasi in-app ke pelayan; emit event agregat ke domain Pesanan (lihat baris `SEDANG_DISIAPKAN -> SIAP`) | `kitchen.ready` | `tiket_dapur_selesai_sebagian_jadi_siap` |
 | SELESAI_SEBAGIAN | SEDANG_DISIAPKAN | DAPUR/SUPERVISOR (izin `dapur.baris.siap`) | Koreksi: baris yang tadinya ditandai `SIAP` dikembalikan ke `DIMASAK` (salah tandai) - kini TIDAK ada lagi baris `SIAP` | Tidak ada efek samping tambahan; koreksi baris tercatat di `RiwayatStatusTiketDapur` seperti transisi lain | `kitchen.line_ready` (payload koreksi) | `tiket_dapur_koreksi_baris_salah_tandai_siap` |
 | SIAP | DISAJIKAN | PELAYAN/DAPUR (izin `dapur.tiket.ambil`) | Tiket berstatus `SIAP` (`ALT-DPR-010`) | Emit event ke domain Pesanan - `Pesanan.status` menjadi `DISAJIKAN` HANYA bila SELURUH tiket pesanan tsb sudah `DISAJIKAN` | `kitchen.served` | `tiket_dapur_diambil_pelayan_disajikan` |
@@ -322,16 +331,139 @@ stateDiagram-v2
 
 ## 7. Opname (Stok Opname)
 
+**ALT-DEF-008 (correction-loop lanjutan):** diagram dan tabel di bawah
+menggantikan diagram lama 4-status (`DIRENCANAKAN`/`BERLANGSUNG`/`SELESAI`/
+`DIBATALKAN`). Pemetaan: `DIRENCANAKAN -> DRAF`,
+`BERLANGSUNG -> SEDANG_DIHITUNG`, `SELESAI -> DIPOSTING`, `DIBATALKAN` tetap.
+`DIKUNCI` dan `MENUNGGU_PERSETUJUAN` adalah status **baru yang sebelumnya
+tidak punya padanan sama sekali** - tanpa keduanya, `ALT-PSD-017` (approval
+selisih signifikan) tidak punya tempat untuk berdiri. Lihat ADR-025 Keputusan 5
+di `docs/engineering/DECISION-LOG.md`.
+
 ```mermaid
 stateDiagram-v2
-    [*] --> DIRENCANAKAN: opname dijadwalkan
-    DIRENCANAKAN --> BERLANGSUNG: perhitungan fisik dimulai
-    BERLANGSUNG --> SELESAI: semua baris dihitung & selisih dicatat
-    DIRENCANAKAN --> DIBATALKAN
-    BERLANGSUNG --> DIBATALKAN: dibatalkan sebelum selesai
-    SELESAI --> [*]
+    [*] --> DRAF: opname dijadwalkan
+    DRAF --> SEDANG_DIHITUNG: snapshot kuantitas sistem dibekukan & hitung fisik dimulai
+    SEDANG_DIHITUNG --> DIKUNCI: seluruh baris terisi kuantitasFisik, hitung ditutup
+    DIKUNCI --> SEDANG_DIHITUNG: buka kembali untuk hitung ulang (approval supervisor)
+    DIKUNCI --> MENUNGGU_PERSETUJUAN: ada selisih di atas ambang (guard)
+    DIKUNCI --> DISETUJUI: seluruh selisih di bawah ambang (auto-approve, guard)
+    MENUNGGU_PERSETUJUAN --> DISETUJUI: supervisor menyetujui selisih
+    MENUNGGU_PERSETUJUAN --> SEDANG_DIHITUNG: supervisor menolak, minta hitung ulang
+    DISETUJUI --> DIPOSTING: mutasi KOREKSI_OPNAME diposting ke ledger
+    DRAF --> DIBATALKAN
+    SEDANG_DIHITUNG --> DIBATALKAN
+    DIKUNCI --> DIBATALKAN: approval supervisor
+    MENUNGGU_PERSETUJUAN --> DIBATALKAN: approval supervisor
+    DIPOSTING --> [*]
     DIBATALKAN --> [*]
 ```
+
+Catatan penting yang TIDAK terlihat langsung di diagram:
+
+- **`DIPOSTING` adalah status TERMINAL dan TIDAK dapat dibatalkan.** Begitu
+  mutasi `KOREKSI_OPNAME` masuk ledger, membatalkannya berarti mengubah
+  sejarah stok - dilarang ADR-006. Jalur koreksi yang benar adalah membuat
+  mutasi PEMBALIK (`POST /mutasi-stok/{id}/balik`) atau opname baru.
+- **Opname TIDAK PERNAH menulis `StokBahan` secara langsung** (ADR-023
+  Keputusan 1). Ia memposting mutasi `KOREKSI_OPNAME` per baris, dan saldo
+  berubah HANYA sebagai konsekuensi ledger. Kalau opname menulis saldo
+  langsung, ledger dan cache berpisah pada saat yang justru paling penting
+  untuk cocok.
+- **`snapshotPada` dibekukan pada transisi `DRAF -> SEDANG_DIHITUNG`.** Tanpa
+  pembekuan itu, "selisih" membandingkan hitungan fisik pukul 22:00 dengan
+  saldo yang sudah bergerak sampai pukul 23:00, dan angkanya tidak bermakna.
+- **Empat aktor terpisah** (`dibuatOlehId`, `penghitungId`, `pengunciId`,
+  `penyetujuId`), bukan satu kolom `diubahOlehId`: pemisahan penghitung dari
+  penyetuju adalah inti kontrol internal opname. Aturan
+  `penghitungId != penyetujuId` adalah **invariant level-aplikasi** (belum ada
+  CHECK constraint, lihat ADR-025 ringkasan invariant).
+- Cabang `DIKUNCI -> MENUNGGU_PERSETUJUAN` vs `DIKUNCI -> DISETUJUI` adalah
+  transisi **otomatis oleh sistem** berdasarkan guard
+  (`PengaturanPersediaanOutlet.ambangSelisihOpname`), bukan pilihan manual.
+  `ambangSelisihOpname` NULL berarti **seluruh** selisih butuh persetujuan.
+
+### Tabel transisi lengkap
+
+| statusAsal | statusTujuan | aktorDiizinkan | guard | sideEffect | auditEvent | testRequired |
+|---|---|---|---|---|---|---|
+| (baru) | DRAF | GUDANG/MANAJER (izin `persediaan.opname.kelola`) | `gudangId` milik outlet aktor; tidak ada opname lain berstatus non-terminal atas gudang yang sama | Buat 1 baris `StokOpname` (`dibuatOlehId`, `dijadwalkanPada`) tanpa baris hitung | `inventory.count_created` | `opname_dibuat_status_draf` |
+| DRAF | SEDANG_DIHITUNG | GUDANG (izin `persediaan.opname.kelola`) | Waktu `dijadwalkanPada` sudah tiba (atau dimulai lebih awal dengan izin yang sama) | Set `snapshotPada = now()` dan `penghitungId`; buat baris `StokOpnameBaris` untuk tiap `(bahan, lokasi)` bersaldo di gudang tsb dengan `kuantitasSistem` = saldo saat itu, `kuantitasFisik = NULL` | `inventory.count_started` | `opname_mulai_dihitung_snapshot_dibekukan` |
+| SEDANG_DIHITUNG | DIKUNCI | GUDANG/MANAJER (izin `persediaan.opname.kelola`) | **SELURUH** `StokOpnameBaris` sudah punya `kuantitasFisik` non-NULL (`ALT-PSD-016`: opname tidak bisa langsung selesai tanpa input baris hitung) | Set `dikunciPada = now()`, `pengunciId`; hitung `selisih = kuantitasFisik - kuantitasSistem` per baris | `inventory.count_locked` | `opname_dikunci_wajib_seluruh_baris_terisi` |
+| SEDANG_DIHITUNG | DIBATALKAN | GUDANG/MANAJER (izin `persediaan.opname.kelola`) | `alasan` wajib diisi | Set `dibatalkanPada`; baris hitung TIDAK dihapus (ADR-006); tidak ada mutasi apa pun | `inventory.count_cancelled` | `opname_dibatalkan_saat_dihitung_tanpa_mutasi` |
+| DIKUNCI | SEDANG_DIHITUNG | MANAJER ke atas (izin `persediaan.opname.setujui`) | Buka kembali untuk hitung ulang; `alasan` wajib | Kosongkan `dikunciPada`/`pengunciId`; `snapshotPada` **TIDAK** di-reset (snapshot asli tetap acuan) | `inventory.count_reopened` | `opname_dibuka_ulang_snapshot_tidak_direset` |
+| DIKUNCI | MENUNGGU_PERSETUJUAN | sistem (otomatis) | Minimal 1 baris punya nilai selisih di atas `PengaturanPersediaanOutlet.ambangSelisihOpname`, ATAU ambang bernilai NULL | Notifikasi in-app ke peran MANAJER/OWNER outlet | `inventory.count_awaiting_approval` | `opname_selisih_di_atas_ambang_butuh_persetujuan` |
+| DIKUNCI | DISETUJUI | sistem (otomatis) | **SELURUH** selisih bernilai di bawah ambang DAN ambang non-NULL | Set `disetujuiPada = now()`, `penyetujuId = NULL` (auto-approve sistem) | `inventory.count_approved` | `opname_selisih_kecil_auto_disetujui` |
+| DIKUNCI | DIBATALKAN | MANAJER ke atas (izin `persediaan.opname.setujui`) | Approval supervisor wajib; `alasan` wajib | Set `dibatalkanPada`; tidak ada mutasi apa pun | `inventory.count_cancelled` | `opname_dikunci_dibatalkan_approval` |
+| MENUNGGU_PERSETUJUAN | DISETUJUI | MANAJER/OWNER (izin `persediaan.opname.setujui`) | `penyetujuId != penghitungId` (**invariant level-aplikasi**, ADR-025 Keputusan 5) | Set `disetujuiPada = now()`, `penyetujuId` | `inventory.count_approved` | `opname_disetujui_penyetuju_bukan_penghitung` |
+| MENUNGGU_PERSETUJUAN | SEDANG_DIHITUNG | MANAJER/OWNER (izin `persediaan.opname.setujui`) | Supervisor menolak angka; `alasan` wajib | Kosongkan `dikunciPada`/`pengunciId`; baris hitung dipertahankan untuk dikoreksi | `inventory.count_reopened` | `opname_ditolak_supervisor_hitung_ulang` |
+| MENUNGGU_PERSETUJUAN | DIBATALKAN | MANAJER/OWNER (izin `persediaan.opname.setujui`) | Approval supervisor; `alasan` wajib | Set `dibatalkanPada`; tidak ada mutasi apa pun | `inventory.count_cancelled` | `opname_menunggu_persetujuan_dibatalkan` |
+| DISETUJUI | DIPOSTING | GUDANG/MANAJER (izin `persediaan.opname.kelola`) + **wajib `Idempotency-Key`** | Status `DISETUJUI`; belum pernah diposting (`dipostingPada IS NULL`) | Untuk tiap baris dengan `selisih != 0`: buat 1 `MutasiStok` `KOREKSI_OPNAME` (`jumlah = selisih`, `referensiJenis = OPNAME`, `referensiId = stokOpnameId`) dan isi `StokOpnameBaris.mutasiKoreksiId`; set `dipostingPada = now()`. Baris `selisih = 0` **tidak** menghasilkan mutasi. `StokBahan` TIDAK ditulis langsung - ia menyusul lewat rekonsiliasi ledger | `inventory.count_posted` | `opname_diposting_menghasilkan_mutasi_koreksi_opname` |
+
+## 8. Transfer Stok (antar gudang/outlet)
+
+**BARU pada ALT-DEF-008** (ADR-024 Keputusan 4). Menutup gap `ALT-DEF-032`:
+master spec idempotency (`ALT-PLT-018`) menyebut "transfer stok" sebagai
+operasi kritis, tetapi endpoint maupun state machine-nya tidak pernah ada.
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAF: transfer disusun
+    DRAF --> DIAJUKAN: diajukan untuk approval
+    DIAJUKAN --> DISETUJUI: disetujui manajer/owner
+    DIAJUKAN --> DRAF: dikembalikan untuk diperbaiki
+    DISETUJUI --> DIKIRIM: barang dikirim (mutasi TRANSFER_KELUAR diposting)
+    DIKIRIM --> DITERIMA_SEBAGIAN: sebagian diterima di tujuan
+    DIKIRIM --> DITERIMA: seluruhnya diterima di tujuan
+    DITERIMA_SEBAGIAN --> DITERIMA: sisa diterima
+    DITERIMA_SEBAGIAN --> DIBATALKAN: sisa dibatalkan (approval, selisih jadi WASTE/PENYESUAIAN)
+    DRAF --> DIBATALKAN
+    DIAJUKAN --> DIBATALKAN
+    DISETUJUI --> DIBATALKAN: sebelum barang dikirim
+    DITERIMA --> [*]
+    DIBATALKAN --> [*]
+```
+
+Catatan penting yang TIDAK terlihat langsung di diagram:
+
+- **`TRANSFER_KELUAR` diposting saat `DIKIRIM`; `TRANSFER_MASUK` saat
+  `DITERIMA`/`DITERIMA_SEBAGIAN` - BUKAN keduanya sekaligus.** Menulis
+  keduanya pada satu titik membuat barang yang sedang di jalan tampak sudah
+  menjadi saldo gudang tujuan, sehingga gudang tujuan bisa "memakai" barang
+  yang belum tiba. Jeda di antara keduanya adalah barang dalam perjalanan, dan
+  ia memang bukan saldo gudang mana pun.
+- **`DIKIRIM` TIDAK dapat dibatalkan langsung.** Begitu `TRANSFER_KELUAR`
+  masuk ledger, barang sudah keluar dari gudang asal secara pencatatan. Jalur
+  yang benar adalah menerima apa adanya (`DITERIMA_SEBAGIAN`) lalu
+  membatalkan sisa dengan approval, sehingga selisihnya tercatat sebagai
+  `WASTE`/`PENYESUAIAN` beralasan - bukan menghilang.
+- `jumlahDiminta`/`jumlahDikirim`/`jumlahDiterima` adalah **tiga kolom
+  terpisah**, bukan satu kolom yang ditimpa. Selisih di antara ketiganya
+  adalah seluruh alasan `DITERIMA_SEBAGIAN` ada; menimpanya menghapus
+  informasi susut/kehilangan dalam perjalanan.
+- Transfer **lintas outlet** sah (`outletAsalId != outletTujuanId`). Jaminan
+  bahwa `gudangAsal` benar-benar milik `outletAsal` adalah composite-FK
+  outlet-level `(outletAsalId, gudangAsalId) -> Gudang(outletId, id)`
+  (ADR-013 poin 3) - **DIJAMIN DB**.
+- `gudangAsalId != gudangTujuanId` dan `jumlahDiterima <= jumlahDikirim <=
+  jumlahDiminta` adalah **invariant level-aplikasi** (utang CHECK constraint,
+  lihat ADR-024 Keputusan 4).
+
+### Tabel transisi lengkap
+
+| statusAsal | statusTujuan | aktorDiizinkan | guard | sideEffect | auditEvent | testRequired |
+|---|---|---|---|---|---|---|
+| (baru) | DRAF | GUDANG/MANAJER (izin `persediaan.transfer.kelola`) | `gudangAsalId != gudangTujuanId`; aktor punya akses ke outlet asal | Buat `TransferStok` + `TransferStokBaris` (`jumlahDiminta` saja); `nomorTransfer` ditentukan server, unik per tenant | `inventory.transfer_created` | `transfer_stok_dibuat_status_draf` |
+| DRAF | DIAJUKAN | GUDANG/MANAJER (izin `persediaan.transfer.kelola`) | Minimal 1 baris; seluruh `jumlahDiminta > 0` | Set `diajukanPada = now()`; notifikasi in-app ke MANAJER outlet asal | `inventory.transfer_submitted` | `transfer_stok_diajukan_wajib_ada_baris` |
+| DIAJUKAN | DISETUJUI | MANAJER/OWNER (izin `persediaan.transfer.setujui`) | Stok TERSEDIA di gudang asal mencukupi seluruh baris (kecuali `izinkanStokNegatif`) | Set `disetujuiPada`, `disetujuiOlehId`. **Belum ada mutasi apa pun** - barang belum bergerak | `inventory.transfer_approved` | `transfer_stok_disetujui_belum_ada_mutasi` |
+| DIAJUKAN | DRAF | MANAJER/OWNER (izin `persediaan.transfer.setujui`) | Dikembalikan untuk diperbaiki; `catatan` wajib | Kosongkan `diajukanPada` | `inventory.transfer_returned` | `transfer_stok_dikembalikan_ke_draf` |
+| DIAJUKAN | DIBATALKAN | GUDANG/MANAJER (izin `persediaan.transfer.kelola`) | `catatan` wajib | Tidak ada mutasi; baris tidak dihapus (ADR-006) | `inventory.transfer_cancelled` | `transfer_stok_diajukan_dibatalkan` |
+| DISETUJUI | DIKIRIM | GUDANG outlet asal (izin `persediaan.transfer.kelola`) + **wajib `Idempotency-Key`** | Seluruh baris punya `jumlahDikirim` non-NULL dan `<= jumlahDiminta`; alokasi batch FEFO/FIFO berhasil | Untuk tiap baris: 1 `MutasiStok` `TRANSFER_KELUAR` (`jumlah = -jumlahDikirim`, `gudangId = gudangAsalId`, `referensiJenis = TRANSFER`) dan isi `TransferStokBaris.mutasiKeluarId`. Set `dikirimPada`, `dikirimOlehId`; notifikasi ke gudang tujuan | `inventory.transfer_dispatched` | `transfer_stok_dikirim_hanya_mutasi_keluar` |
+| DISETUJUI | DIBATALKAN | MANAJER/OWNER (izin `persediaan.transfer.setujui`) | Barang **belum** dikirim (`dikirimPada IS NULL`); `catatan` wajib | Tidak ada mutasi | `inventory.transfer_cancelled` | `transfer_stok_disetujui_dibatalkan_sebelum_kirim` |
+| DIKIRIM | DITERIMA_SEBAGIAN | GUDANG outlet tujuan (izin `persediaan.transfer.terima`) + **wajib `Idempotency-Key`** | Minimal 1 baris punya `jumlahDiterima` non-NULL, DAN minimal 1 baris masih NULL atau `jumlahDiterima < jumlahDikirim` | Untuk baris yang diterima: 1 `MutasiStok` `TRANSFER_MASUK` (`jumlah = +jumlahDiterima`, `gudangId = gudangTujuanId`) dan isi `mutasiMasukId` | `inventory.transfer_received_partial` | `transfer_stok_diterima_sebagian_mutasi_masuk_parsial` |
+| DIKIRIM | DITERIMA | GUDANG outlet tujuan (izin `persediaan.transfer.terima`) + **wajib `Idempotency-Key`** | **SELURUH** baris punya `jumlahDiterima == jumlahDikirim` | 1 `MutasiStok` `TRANSFER_MASUK` per baris; set `diterimaPada`, `diterimaOlehId` | `inventory.transfer_received` | `transfer_stok_diterima_penuh_mutasi_masuk_lengkap` |
+| DITERIMA_SEBAGIAN | DITERIMA | GUDANG outlet tujuan (izin `persediaan.transfer.terima`) + **wajib `Idempotency-Key`** | Sisa baris kini punya `jumlahDiterima == jumlahDikirim` | `MutasiStok` `TRANSFER_MASUK` untuk sisa baris saja - baris yang sudah punya `mutasiMasukId` **tidak** diposting ulang | `inventory.transfer_received` | `transfer_stok_sisa_diterima_tanpa_posting_ganda` |
+| DITERIMA_SEBAGIAN | DIBATALKAN | MANAJER/OWNER (izin `persediaan.transfer.setujui`) | Approval supervisor; `catatan` wajib berisi perlakuan selisih | Selisih (`jumlahDikirim - jumlahDiterima`) **wajib** dicatat sebagai `CatatanWaste` (`AlasanWaste` hilang-dalam-perjalanan) atau `PenyesuaianStok` beralasan - selisih TIDAK boleh menghilang tanpa jejak ledger | `inventory.transfer_cancelled` | `transfer_stok_sisa_dibatalkan_selisih_jadi_waste` |
 
 ## Catatan umum
 
