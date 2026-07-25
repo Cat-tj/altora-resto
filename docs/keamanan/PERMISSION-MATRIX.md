@@ -79,7 +79,7 @@ tabel), dikelompokkan per `domain`:
 | persediaan | `persediaan.bahan.kelola`, `persediaan.satuan.kelola`, `persediaan.gudang.kelola`, `persediaan.lokasi.kelola`, `persediaan.mutasi.lihat`, `persediaan.mutasi.balik`, `persediaan.saldo.lihat`, `persediaan.reservasi.kelola`, `persediaan.reservasi.lepas`, `persediaan.batch.kelola`, `persediaan.transfer.kelola`, `persediaan.transfer.setujui`, `persediaan.transfer.terima`, `persediaan.waste.kelola`, `persediaan.alasan-waste.kelola`, `persediaan.opname.kelola`, `persediaan.opname.setujui`, `persediaan.reorder.kelola` |
 | pembelian | `pembelian.buat`, `pembelian.setujui`, `pembelian.terima` |
 | promo | `promo.lihat`, `promo.kelola`, `promo.kondisi.kelola`, `promo.reward.kelola`, `promo.jadwal.kelola`, `promo.outlet.kelola`, `promo.kanal.kelola`, `promo.prioritas.kelola`, `promo.kuota.kelola`, `promo.batas-pelanggan.kelola`, `promo.terapkan`, `promo.validasi` |
-| anggota | `anggota.lihat`, `anggota.kelola`, `anggota.tukar-poin` |
+| anggota | `pelanggan.kelola`, `pelanggan.duplikat.lihat`, `pelanggan.merge`, `pelanggan.consent.kelola`, `keanggotaan.tier.kelola`, `keanggotaan.daftar`, `keanggotaan.poin.lihat`, `keanggotaan.saldo.rekonsiliasi`, `keanggotaan.poin.kedaluwarsa`, `keanggotaan.poin.tukar`, `keanggotaan.poin.balik`, `keanggotaan.saldo-toko.lihat`, `keanggotaan.saldo-toko.kelola`, `keanggotaan.saldo-toko.balik`, `keanggotaan.anti-fraud`, `keanggotaan.stempel.kelola`, `keanggotaan.stempel.lihat`, `keanggotaan.stempel.tukar`, `keanggotaan.stempel.balik` (ALT-DEF-040: kode LAMA `anggota.lihat`/`anggota.kelola`/`anggota.tukar-poin` DIHAPUS - dangling, tidak pernah direferensikan `MASTER-CHECKLIST.md`; diganti kode granular yang benar-benar dipakai checklist domain `ALT-MBR`, termasuk 6 kode stempel baru dari ALT-DEF-039) |
 | karyawan | `karyawan.lihat`, `karyawan.kelola` |
 | absensi | `absensi.koreksi`, `absensi.setujui` |
 | laporan | `laporan.operasional`, `laporan.keuangan` |
@@ -307,9 +307,28 @@ Legenda: `M` = boleh (Miliki akses penuh), `B` = boleh dengan approval Bertingka
 | Kelola prioritas/stacking & kuota promo (`promo.prioritas.kelola`, `promo.kuota.kelola`, `promo.batas-pelanggan.kelola`) | M | B | - | - | - | - | - | - | - |
 | Validasi/simulasi promo (`promo.validasi`) | M | M | M | M | M | - | - | - | - |
 | Terapkan promo ke pesanan (`promo.terapkan`) | M | M | M | M | M | - | - | - | - |
-| **Pelanggan & Keanggotaan** |
-| Kelola data pelanggan | M | M | M | M | M | - | - | - | - |
-| Kelola tier & poin manual | M | B | - | - | - | - | - | - | - |
+| **Pelanggan & Keanggotaan** (ALT-DEF-018/ALT-DEF-023/ALT-DEF-039, ADR-027 -
+  baris di bawah MENGGANTIKAN dua baris ringkas lama "Kelola data pelanggan"/
+  "Kelola tier & poin manual" dengan pemetaan granular per kode `izin`) |
+| Kelola data pelanggan (`pelanggan.kelola`) | M | M | M | M | M | - | - | - | - |
+| Lihat kandidat duplikat pelanggan (`pelanggan.duplikat.lihat`) | M | M | - | - | - | - | - | - | - |
+| Gabungkan profil pelanggan duplikat (`pelanggan.merge`) | M | M | - | - | - | - | - | - | - |
+| Kelola consent pelanggan (`pelanggan.consent.kelola`) | M | M | M | M | M | - | - | - | - |
+| Kelola tier keanggotaan (`keanggotaan.tier.kelola`) | M | B | - | - | - | - | - | - | - |
+| Daftarkan keanggotaan (`keanggotaan.daftar`) | M | M | M | M | M | - | - | - | - |
+| Lihat poin & riwayat (`keanggotaan.poin.lihat`) | M | M | M | M | M | - | - | - | - |
+| Rekonsiliasi saldo poin (`keanggotaan.saldo.rekonsiliasi`) | M | B | - | - | - | - | - | - | - |
+| Proses kedaluwarsa poin (`keanggotaan.poin.kedaluwarsa`) | M | B | - | - | - | - | - | - | - |
+| Tukar poin (`keanggotaan.poin.tukar`) | M | M | M | M | - | - | - | - | - |
+| Balikkan ledger poin (`keanggotaan.poin.balik`) | M | M | M | - | - | - | - | - | - |
+| Lihat saldo toko & riwayat (`keanggotaan.saldo-toko.lihat`) | M | M | M | M | M | - | - | - | - |
+| Kelola saldo toko/tambah manual (`keanggotaan.saldo-toko.kelola`) | M | M | - | - | - | - | - | - | - |
+| Balikkan ledger saldo toko (`keanggotaan.saldo-toko.balik`) | M | M | M | - | - | - | - | - | - |
+| Deteksi penyalahgunaan poin/saldo (`keanggotaan.anti-fraud`) | M | M | - | - | - | - | - | - | - |
+| Kelola hadiah stempel (`keanggotaan.stempel.kelola`) | M | B | - | - | - | - | - | - | - |
+| Lihat stempel & riwayat (`keanggotaan.stempel.lihat`) | M | M | M | M | M | - | - | - | - |
+| Tukar stempel (`keanggotaan.stempel.tukar`) | M | M | M | M | - | - | - | - | - |
+| Balikkan ledger stempel (`keanggotaan.stempel.balik`) | M | M | M | - | - | - | - | - | - |
 | **Karyawan & Absensi** |
 | Kelola data karyawan & jabatan | M | B | - | - | - | - | - | - | M |
 | Kelola jadwal shift | M | M | L | - | - | - | - | - | M |

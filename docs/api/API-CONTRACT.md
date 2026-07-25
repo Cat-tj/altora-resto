@@ -591,14 +591,81 @@ tidak menulis apa pun, boleh tanpa pesanan nyata) dari **evaluasi/penerapan**
 
 ## 13. Pelanggan & Keanggotaan (`packages/keanggotaan`)
 
-| Metode | Path | Deskripsi |
-|---|---|---|
-| GET | `/api/v1/pelanggan` | Cari pelanggan (nomor telepon/nama). |
-| POST | `/api/v1/pelanggan` | Daftarkan pelanggan baru. |
-| GET | `/api/v1/pelanggan/{id}/keanggotaan` | Info tier & poin aktif. |
-| POST | `/api/v1/pelanggan/{id}/keanggotaan` | Daftarkan ke program membership. |
-| GET | `/api/v1/pelanggan/{id}/poin-riwayat` | Riwayat perolehan/penukaran poin. |
-| POST | `/api/v1/keanggotaan/{id}/tukar-poin` | Tukar poin (jenis PENUKARAN). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "penukaran poin" di master spec). |
+**ALT-DEF-018/ALT-DEF-023/ALT-DEF-039 (correction-loop batch keanggotaan,
+ADR-027):** bagian ini ditulis ulang dari 6 endpoint scaffold menjadi kontrak
+penuh mengikuti aturan emas "seluruh saldo pelanggan bersumber dari ledger" -
+`GET .../poin-riwayat` dkk BUKAN lagi endpoint yang membaca kolom cache
+langsung, melainkan membaca agregasi `PoinRiwayat`/`LedgerStempel`/
+`LedgerSaldoToko`. Endpoint redeem/merge memakai header `Idempotency-Key`
+(`ALT-PLT-018`) mengikuti pola batch-batch sebelumnya (pesanan/pembayaran/
+promo) - keduanya adalah aksi finansial/destruktif yang tidak boleh
+terduplikasi akibat retry jaringan.
+
+### 13.1 Pelanggan (dasar, dedup, merge, consent)
+
+| Metode | Path | Deskripsi | Permission |
+|---|---|---|---|
+| GET | `/api/v1/pelanggan` | Cari pelanggan (nomor telepon/nama), tenant-scoped. | `pelanggan.kelola` |
+| POST | `/api/v1/pelanggan` | Daftarkan pelanggan baru. | `pelanggan.kelola` |
+| PATCH | `/api/v1/pelanggan/{id}` | Ubah data dasar pelanggan. | `pelanggan.kelola` |
+| GET | `/api/v1/pelanggan/duplikat` | Kandidat duplikat berdasarkan nomor telepon/nama mirip (`ALT-MBR-002`) - hanya MENANDAI, tidak pernah menghapus otomatis. | `pelanggan.duplikat.lihat` |
+| POST | `/api/v1/pelanggan/merge` | Gabungkan dua profil pelanggan (`ALT-MBR-003`): `pelangganUtamaId` (penyintas) + `pelangganGabunganId` (korban). Menulis `RiwayatGabungPelanggan`, menandai korban `status = DIGABUNGKAN` (TIDAK dihapus, ADR-006), dan menulis pasangan entri `PENYESUAIAN` di `PoinRiwayat`/`LedgerStempel`/`LedgerSaldoToko` korban (negatif) dan penyintas (positif) untuk memindahkan saldo (ADR-027 Keputusan 4). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`) - merge yang terduplikasi akibat retry akan memindahkan saldo dua kali. | `pelanggan.merge` |
+| PUT | `/api/v1/pelanggan/{id}/consent` | Catat/perbarui persetujuan (`ALT-MBR-004`) - selalu menulis baris `PersetujuanPelanggan` BARU (consent bukan kolom mutable, lihat ADR-027 Keputusan 6). Body: `jenisPersetujuan`, `disetujui`. | `pelanggan.consent.kelola` |
+| GET | `/api/v1/pelanggan/{id}/consent` | Status consent terkini per `jenisPersetujuan` (baris `PersetujuanPelanggan` terbaru per jenis). | `pelanggan.consent.kelola` |
+
+### 13.2 Tier & Keanggotaan (poin)
+
+| Metode | Path | Deskripsi | Permission |
+|---|---|---|---|
+| GET | `/api/v1/tier-keanggotaan` | Daftar tier keanggotaan tenant (`ALT-MBR-005`). | `keanggotaan.tier.kelola` |
+| POST | `/api/v1/tier-keanggotaan` | Buat tier baru. | `keanggotaan.tier.kelola` |
+| GET | `/api/v1/pelanggan/{id}/keanggotaan` | Info tier & saldo poin - `poinAktif`/`poinKumulatif` yang dikembalikan adalah **hasil rekonsiliasi cache terkini**, bukan tulisan langsung (`ALT-MBR-008`). | `keanggotaan.poin.lihat` |
+| POST | `/api/v1/pelanggan/{id}/keanggotaan` | Daftarkan pelanggan ke program membership (`ALT-MBR-006`) - satu `Keanggotaan` aktif per pelanggan per tenant. | `keanggotaan.daftar` |
+| GET | `/api/v1/pelanggan/{id}/poin-riwayat` | Riwayat `PoinRiwayat` (append-only, `ALT-MBR-007`). | `keanggotaan.poin.lihat` |
+| POST | `/api/v1/keanggotaan/{id}/tukar-poin` | Tukar poin (menulis baris `PENUKARAN`). Ditolak `409 SALDO_TIDAK_CUKUP` bila agregasi `PoinRiwayat` < jumlah yang diminta. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "penukaran poin" di master spec). | `keanggotaan.poin.tukar` |
+| POST | `/api/v1/poin-riwayat/{id}/balik` | Balikkan satu baris `PoinRiwayat` (`PEMBALIKAN`) - menulis baris pembalik baru, TIDAK mengubah/menghapus baris asal (`dibalikOlehId`). **Wajib header `Idempotency-Key`**. | `keanggotaan.poin.balik` |
+
+### 13.3 Program stempel (punch-card, `ALT-DEF-039`/`ALT-MBR-014` s.d. `ALT-MBR-019`)
+
+| Metode | Path | Deskripsi | Permission |
+|---|---|---|---|
+| GET | `/api/v1/hadiah-stempel` | Daftar hadiah yang bisa ditukar dengan stempel (`ALT-MBR-014`). | `keanggotaan.stempel.kelola` |
+| POST | `/api/v1/hadiah-stempel` | Definisikan hadiah baru (`jumlahStempelDibutuhkan`, `deskripsi`, `itemGratisId` opsional). | `keanggotaan.stempel.kelola` |
+| GET | `/api/v1/pelanggan/{id}/stempel-riwayat` | Riwayat `LedgerStempel` (append-only, `ALT-MBR-018`). | `keanggotaan.stempel.lihat` |
+| POST | `/api/v1/keanggotaan/{id}/tukar-stempel` | Tukar stempel dengan satu `hadiahStempelId` (`ALT-MBR-016`). Ditolak `409 SALDO_TIDAK_CUKUP` bila agregasi `LedgerStempel` < `jumlahStempelDibutuhkan` hadiah. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`). | `keanggotaan.stempel.tukar` |
+| POST | `/api/v1/ledger-stempel/{id}/balik` | Balikkan satu baris `LedgerStempel` (`ALT-MBR-017`) - pola sama `poin-riwayat/{id}/balik`. **Wajib header `Idempotency-Key`**. | `keanggotaan.stempel.balik` |
+
+> **Catatan cakupan:** perolehan stempel otomatis saat pesanan selesai
+> (`ALT-MBR-015`) adalah event internal (dipicu transisi `Pesanan -> SELESAI`),
+> BUKAN endpoint HTTP terpisah - konsisten dengan pola
+> `resep.pemakaian.otomatis`/`persediaan.alokasi.otomatis` (kolom Permission
+> `-`, aktor "sistem").
+
+### 13.4 Saldo toko / store credit (`ALT-DEF-018`/`ALT-MBR-011`/`ALT-MBR-012`)
+
+| Metode | Path | Deskripsi | Permission |
+|---|---|---|---|
+| GET | `/api/v1/pelanggan/{id}/saldo-toko` | Saldo toko terkini (hasil rekonsiliasi `LedgerSaldoToko`, BUKAN `Pelanggan.saldoTokoCache` mentah). | `keanggotaan.saldo-toko.lihat` |
+| GET | `/api/v1/pelanggan/{id}/saldo-toko/riwayat` | Riwayat `LedgerSaldoToko` (append-only). | `keanggotaan.saldo-toko.lihat` |
+| POST | `/api/v1/pelanggan/{id}/saldo-toko/tambah` | Tambah saldo toko manual (mis. refund ke saldo, bukan tunai) - menulis baris `REFUND`/`PENAMBAHAN`. **Wajib header `Idempotency-Key`**. | `keanggotaan.saldo-toko.kelola` |
+| POST | `/api/v1/ledger-saldo-toko/{id}/balik` | Balikkan satu baris `LedgerSaldoToko`. **Wajib header `Idempotency-Key`**. | `keanggotaan.saldo-toko.balik` |
+
+> **Integrasi pembayaran:** pembayaran dengan `KodeMetodeBayar = SALDO_TOKO`
+> (lihat bagian 11) menulis baris `PEMAKAIAN` di `LedgerSaldoToko` dalam
+> transaksi yang SAMA dengan `Pembayaran`, mengisi `LedgerSaldoToko.pembayaranId`
+> - bukan endpoint terpisah. Ditolak `409 SALDO_TIDAK_CUKUP` bila saldo toko
+> kurang dari nominal pembayaran.
+
+### 13.5 Anti-abuse (`ALT-MBR-013`)
+
+Deteksi pola pemakaian mencurigakan (mis. penukaran poin/stempel berulang
+dalam waktu singkat, atau kasir yang menukar poin ke akunnya sendiri) adalah
+**concern service-layer, bukan schema**, dan sengaja tidak punya endpoint
+HTTP dedicated pada batch ini. Hook deteksi yang sudah tersedia dari schema:
+`dicatatOlehId` (siapa yang mencatat baris ledger) dapat dicocokkan dengan
+`Pesanan.dibuatOlehId`/`Pesanan.pelangganId` untuk mendeteksi kasir yang
+memakai akunnya sendiri sebagai pelanggan pada transaksi yang ia proses
+sendiri - lihat ADR-027 untuk catatan pendekatan ini.
 
 ## 14. Karyawan & Absensi (`packages/karyawan`, `packages/absensi`)
 

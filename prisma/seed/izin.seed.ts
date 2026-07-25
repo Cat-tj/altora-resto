@@ -104,10 +104,41 @@ export const IZIN_SEED: readonly IzinSeedEntry[] = [
   // lihat MASTER-CHECKLIST.md ALT-PRM-017 (kolom Permission dikoreksi jadi
   // `-` di batch ini) dan PERMISSION-MATRIX.md.
 
-  // anggota
-  { kode: "anggota.lihat", nama: "Lihat data anggota", domain: "anggota", deskripsi: "Melihat profil dan riwayat pelanggan/anggota." },
-  { kode: "anggota.kelola", nama: "Kelola data anggota", domain: "anggota", deskripsi: "Mendaftarkan/mengubah data pelanggan dan keanggotaan." },
-  { kode: "anggota.tukar-poin", nama: "Tukar poin anggota", domain: "anggota", deskripsi: "Memproses penukaran poin loyalitas pelanggan." },
+  // anggota (ALT-DEF-040: seluruh 3 kode LAMA di bawah - anggota.lihat/
+  // kelola/tukar-poin - dihapus di batch keanggotaan (correction-loop). Kode
+  // itu TIDAK PERNAH direferensikan MASTER-CHECKLIST.md di manapun (dangling
+  // sejak seed granularisasi awal); checklist domain ALT-MBR (baik 13 baris
+  // lama maupun 6 baris baru ALT-MBR-014 s.d. 019 dari ALT-DEF-039) SELALU
+  // memakai kode granular `pelanggan.*`/`keanggotaan.*` di bawah ini. Domain
+  // tag `anggota` DIPERTAHANKAN (bukan diganti `pelanggan`/`keanggotaan`)
+  // murni sebagai pengelompokan PERMISSION-MATRIX.md yang sudah ada.
+  { kode: "pelanggan.kelola", nama: "Kelola data pelanggan", domain: "anggota", deskripsi: "Mendaftarkan/mengubah data dasar pelanggan (ALT-MBR-001)." },
+  { kode: "pelanggan.duplikat.lihat", nama: "Lihat kandidat duplikat pelanggan", domain: "anggota", deskripsi: "Melihat kandidat pelanggan duplikat hasil deteksi otomatis (ALT-MBR-002)." },
+  { kode: "pelanggan.merge", nama: "Gabungkan profil pelanggan", domain: "anggota", deskripsi: "Menggabungkan dua profil pelanggan duplikat menjadi satu (ALT-MBR-003)." },
+  { kode: "pelanggan.consent.kelola", nama: "Kelola consent pelanggan", domain: "anggota", deskripsi: "Mencatat/mencabut persetujuan komunikasi marketing/penyimpanan data pelanggan (ALT-MBR-004)." },
+  { kode: "keanggotaan.tier.kelola", nama: "Kelola tier keanggotaan", domain: "anggota", deskripsi: "CRUD tier keanggotaan (Silver/Gold/Platinum) beserta syarat kenaikannya (ALT-MBR-005)." },
+  { kode: "keanggotaan.daftar", nama: "Daftarkan keanggotaan", domain: "anggota", deskripsi: "Mengaktifkan program keanggotaan untuk pelanggan tertentu (ALT-MBR-006)." },
+  { kode: "keanggotaan.poin.lihat", nama: "Lihat poin dan riwayatnya", domain: "anggota", deskripsi: "Melihat saldo poin dan riwayat ledger PoinRiwayat (ALT-MBR-007)." },
+  { kode: "keanggotaan.saldo.rekonsiliasi", nama: "Jalankan rekonsiliasi saldo poin", domain: "anggota", deskripsi: "Memicu/memverifikasi job rekonsiliasi cache poinAktif terhadap agregasi PoinRiwayat (ALT-MBR-008)." },
+  { kode: "keanggotaan.poin.kedaluwarsa", nama: "Proses kedaluwarsa poin", domain: "anggota", deskripsi: "Menjalankan/mengaudit job kedaluwarsa poin terjadwal (ALT-MBR-009)." },
+  { kode: "keanggotaan.poin.tukar", nama: "Tukar poin", domain: "anggota", deskripsi: "Memproses penukaran poin loyalitas pelanggan (ALT-MBR-010)." },
+  // ALT-DEF-018 (ADR-027 Keputusan 2): reversal PoinRiwayat - pola sama
+  // persediaan.mutasi.balik. Tidak punya baris ALT-MBR tersendiri (bagian
+  // dari hardening ledger ALT-DEF-018), tetap diseed karena aksinya nyata
+  // dibutuhkan endpoint /poin-riwayat/{id}/balik (docs/api/API-CONTRACT.md 13.2).
+  { kode: "keanggotaan.poin.balik", nama: "Balikkan baris ledger poin", domain: "anggota", deskripsi: "Membalik baris PoinRiwayat yang salah/terkait pesanan dibatalkan, tanpa menghapus baris asal (ALT-DEF-018)." },
+  { kode: "keanggotaan.saldo-toko.lihat", nama: "Lihat saldo toko dan riwayatnya", domain: "anggota", deskripsi: "Melihat saldo toko (store credit) dan riwayat LedgerSaldoToko (ALT-MBR-011/ALT-MBR-012)." },
+  { kode: "keanggotaan.saldo-toko.kelola", nama: "Kelola saldo toko", domain: "anggota", deskripsi: "Menambah saldo toko pelanggan secara manual, mis. refund ke saldo (ALT-DEF-018)." },
+  { kode: "keanggotaan.saldo-toko.balik", nama: "Balikkan baris ledger saldo toko", domain: "anggota", deskripsi: "Membalik baris LedgerSaldoToko yang salah, tanpa menghapus baris asal (ALT-DEF-018)." },
+  { kode: "keanggotaan.anti-fraud", nama: "Kelola deteksi penyalahgunaan poin/saldo", domain: "anggota", deskripsi: "Meninjau flag pola pemakaian mencurigakan pada poin/stempel/saldo toko (ALT-MBR-013)." },
+  // ALT-DEF-039 (Step 0 audit, program stempel/punch-card - ALT-MBR-014 s.d. ALT-MBR-019).
+  { kode: "keanggotaan.stempel.kelola", nama: "Kelola hadiah stempel", domain: "anggota", deskripsi: "CRUD definisi HadiahStempel - hadiah yang bisa ditukar dengan sejumlah stempel (ALT-MBR-014)." },
+  { kode: "keanggotaan.stempel.lihat", nama: "Lihat stempel dan riwayatnya", domain: "anggota", deskripsi: "Melihat saldo stempel dan riwayat ledger LedgerStempel (ALT-MBR-018)." },
+  { kode: "keanggotaan.stempel.tukar", nama: "Tukar stempel", domain: "anggota", deskripsi: "Memproses penukaran stempel dengan hadiah tertentu (ALT-MBR-016)." },
+  { kode: "keanggotaan.stempel.balik", nama: "Balikkan baris ledger stempel", domain: "anggota", deskripsi: "Membalik baris LedgerStempel yang salah/terkait pesanan dibatalkan, tanpa menghapus baris asal (ALT-MBR-017)." },
+  // ALT-MBR-015 (perolehan stempel otomatis saat pesanan selesai) SENGAJA
+  // TIDAK diseed - aktor "sistem"/event internal, bukan keputusan otorisasi
+  // yang dipegang aktor manusia, pola sama resep.pemakaian.otomatis.
 
   // karyawan
   { kode: "karyawan.lihat", nama: "Lihat data karyawan", domain: "karyawan", deskripsi: "Melihat profil dan jabatan karyawan." },

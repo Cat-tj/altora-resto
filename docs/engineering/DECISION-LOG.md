@@ -2021,5 +2021,158 @@ Semua ADR di atas berstatus **DITERIMA sebagai keputusan desain**, tetapi
 implementasinya di kode berstatus **BELUM DIKERJAKAN** kecuali skema Prisma awal
 (ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015, ADR-016,
 ADR-017, ADR-018, ADR-019, ADR-020, ADR-021, ADR-022, ADR-023, ADR-024, ADR-025,
-ADR-026 sudah tercermin di
+ADR-026, ADR-027 sudah tercermin di
 `prisma/schema/schema.prisma`).
+
+## ADR-027: Ledger keanggotaan lengkap - stempel, saldo toko, consent, merge (ALT-DEF-018, ALT-DEF-023, ALT-DEF-039)
+
+- **Status:** DITERIMA
+- **Konteks:** Batch correction-loop domain Pelanggan & Keanggotaan menutup tiga
+  defect sekaligus karena saling terkait erat pada model yang sama:
+  `ALT-DEF-018` (poin/saldo tidak didokumentasikan sebagai cache, tidak ada
+  `LedgerSaldoToko`), `ALT-DEF-023` (tidak ada consent maupun merge history),
+  dan `ALT-DEF-039` (Step 0 audit: program stempel/punch-card - "Stempel"/
+  "Hadiah" pada Fitur Keanggotaan master spec - hilang total dari checklist
+  DAN schema). Model `Keanggotaan`/`PoinRiwayat` sebelum batch ini bahkan
+  TIDAK PUNYA `tenantId` sama sekali - gap tenant-safety yang sama seperti
+  `ALT-DEF-010` di domain lain, ditemukan saat mendesain composite-FK untuk
+  ledger baru.
+
+- **Keputusan 1 - Rename `TierMembership` -> `TierKeanggotaan`; `PoinRiwayat`
+  DIPERTAHANKAN (bukan `LedgerPoin`).** `MASTER-CHECKLIST.md` (`ALT-MBR-005`)
+  sudah memakai nama `TierKeanggotaan` sejak checklist pertama kali
+  digranularkan - schema di-rename untuk selaras dengan dokumen yang sudah
+  settled (bukan sebaliknya), churn minimal karena satu-satunya dependent
+  adalah `Keanggotaan.tierKeanggotaanId`. Sebaliknya, checklist (`ALT-MBR-007`
+  dst.) KONSISTEN memakai nama `PoinRiwayat` di kolom Model Data - rename ke
+  `LedgerPoin` (mengikuti konvensi penamaan model BARU `LedgerStempel`/
+  `LedgerSaldoToko`) akan membuat schema dan checklist berbeda nama untuk
+  model yang SAMA, kebalikan dari tujuan rename `TierMembership`. Asimetri
+  penamaan ini SENGAJA: `Ledger*` adalah konvensi untuk model BARU pada batch
+  ini, bukan aturan wajib untuk model LAMA yang sudah punya nama mapan di
+  dokumen lain.
+
+- **Keputusan 2 - `PoinRiwayat` diperkeras mengikuti pola persis
+  `MutasiStok`/ADR-023.** Ditambahkan: `tenantId` (sebelumnya TIDAK ADA sama
+  sekali), `dibalikOlehId String? @unique` + self-relation `PoinRiwayatPembalik`
+  (reversal - kolom tunggal + `@unique` = satu baris dibalik paling banyak
+  sekali, satu pembalik membalik paling banyak satu baris asal, identik
+  `MutasiStok.dibalikOlehId`), `kadaluarsaPada DateTime?` (hanya terisi pada
+  baris PEROLEHAN, dibaca job kedaluwarsa terjadwal `ALT-MBR-009`),
+  `dicatatOlehId String?` (nullable - baris sistem seperti perolehan otomatis
+  saat pesanan selesai tidak punya aktor manusia), `catatan String?`. Enum
+  `JenisPoinRiwayat` mendapat nilai baru `PEMBALIKAN` (sebelumnya reversal
+  hanya bisa lewat `PENYESUAIAN` generik yang kehilangan jejak "ini pembalik
+  dari baris mana"). Sama seperti `MutasiStok`, "append-only" TIDAK
+  ditegakkan database pada batch ini (ALT-DEF-029) - disiplin level-aplikasi
+  semata sampai migrasi manual + trigger ditulis dan dijalankan.
+
+- **Keputusan 3 - `LedgerSaldoToko` digantung ke `Pelanggan` LANGSUNG, BUKAN
+  `Keanggotaan`.** Dipertimbangkan dua opsi: (a) `Keanggotaan.id` sebagai FK
+  saldo toko (mensyaratkan pelanggan sudah jadi anggota program loyalitas
+  tier), atau (b) `Pelanggan.id` langsung. **Dipilih (b).** Rasional: saldo
+  toko (store credit) adalah kewajiban finansial tenant ke pelanggan (mis.
+  dari refund pesanan yang tidak dikembalikan tunai) - ini TIDAK bergantung
+  pada apakah pelanggan tersebut terdaftar sebagai anggota program tier/poin.
+  Mensyaratkan `Keanggotaan` sebagai prasyarat akan MENOLAK kasus pakai yang
+  sah: pelanggan yang belum pernah daftar membership tapi pernah komplain dan
+  di-refund ke saldo toko. Konsekuensi: `Pelanggan` mendapat kolom cache
+  `saldoTokoCache Int @default(0)` (didokumentasikan sebagai cache, bukan
+  sumber kebenaran, pola sama `Keanggotaan.poinAktif`) - TIDAK ditaruh di
+  `Keanggotaan` karena `Keanggotaan` sendiri opsional per pelanggan.
+  `LedgerSaldoToko.pembayaranId` (nullable) menutup jalur "dihasilkan OLEH
+  satu peristiwa `Pembayaran` metode `SALDO_TOKO`" - saat pelanggan BAYAR
+  pakai saldo toko (bukan menambah saldo), baris `PEMAKAIAN` di ledger ini
+  menunjuk balik ke `Pembayaran` yang memicunya, menutup jalur yang
+  disinggung `ALT-MBR-011` ("terhubung ke pembayaran SALDO_TOKO").
+
+- **Keputusan 4 - Merge pelanggan: profil korban TIDAK dihapus; transfer
+  saldo lewat ENTRI LEDGER baru, bukan repointing FK.** `RiwayatGabungPelanggan`
+  mencatat `pelangganUtamaId` (penyintas) dan `pelangganGabunganId` (korban,
+  `@@unique` - satu profil hanya bisa jadi korban SEKALI). Profil korban
+  ditandai `Pelanggan.status = DIGABUNGKAN`, baris TIDAK PERNAH dihapus (ADR-006
+  no-hard-delete) - `Pesanan`/`Reservasi`/ledger LAMA yang menunjuk profil
+  tersebut tetap punya referential integrity dan tetap merepresentasikan
+  histori APA ADANYA (siapa yang benar-benar bertransaksi saat itu).
+  **Dipertimbangkan dua pendekatan untuk memindahkan SALDO (poin/stempel/saldo
+  toko) korban ke penyintas:** (a) repoint FK `keanggotaanId`/`pelangganId`
+  pada baris ledger lama milik korban ke penyintas secara langsung, atau (b)
+  tulis PASANGAN entri ledger baru (`PENYESUAIAN` negatif di ledger korban,
+  `PENYESUAIAN` positif di ledger penyintas) yang merepresentasikan
+  "transfer akibat merge". **Direkomendasikan dan didokumentasikan (b),
+  BUKAN diterapkan sebagai constraint schema** (ini keputusan PROSES/service-
+  layer, bukan sesuatu yang bisa dipaksakan Prisma) karena repointing FK
+  (a) MERUSAK riwayat: baris ledger PEROLEHAN lama akan terlihat seolah-olah
+  terjadi di keanggotaan penyintas padahal sebenarnya terjadi di korban -
+  persis kelas masalah yang prinsip "ledger sebagai catatan peristiwa yang
+  sudah terjadi" (ADR-023) ada untuk mencegah. Field bebas `catatan String?`
+  yang ditambahkan ke `PoinRiwayat`/`LedgerStempel`/`LedgerSaldoToko` (bukan
+  FK terstruktur ke `RiwayatGabungPelanggan`) dipakai untuk mereferensikan ID
+  baris `RiwayatGabungPelanggan` terkait secara tekstual - trade-off desain
+  sadar: FK terstruktur akan mensyaratkan SETIAP baris ledger (mayoritas yang
+  tidak pernah tersentuh merge) membawa kolom nullable ekstra hanya untuk
+  kasus langka ini.
+
+- **Keputusan 5 - `LedgerStempel`/`HadiahStempel` (program stempel, ALT-DEF-039)
+  didesain MINIMAL tapi lengkap, enum TERPISAH dari poin, TANPA kedaluwarsa.**
+  `HadiahStempel` hanya memodelkan "hadiah = deskripsi bebas + item gratis
+  opsional" (bentuk paling umum kartu stempel), BUKAN katalog reward kompleks
+  (voucher/diskon persen) - itu scope creep di luar apa yang master spec
+  minta. `JenisLedgerStempel` adalah enum SENDIRI (PEROLEHAN/PENUKARAN/
+  PEMBALIKAN/PENYESUAIAN), bukan reuse `JenisPoinRiwayat`, karena stempel dan
+  poin adalah DUA program loyalitas independen dengan siklus hidup berbeda -
+  menyatukan enum akan memaksa satu model ledger melayani dua konsep
+  berbeda dengan aturan bisnis berbeda (poin dan stempel bisa dikonversi
+  dengan rasio berbeda, dsb). **Sengaja TIDAK ada nilai `KADALUARSA` pada
+  stempel** (beda dari poin, `ALT-MBR-009`) - master spec TIDAK menyebutkan
+  kebijakan kedaluwarsa stempel secara eksplisit; menambahkannya akan
+  menjadi keputusan produk yang belum ada dasarnya, sama seperti alasan
+  batch `ALT-DEF-004` melarang menambah metode bayar tanpa dasar. Bila
+  kebutuhan kedaluwarsa stempel muncul di kemudian hari, ini requirement
+  produk baru yang butuh keputusan tersendiri, dicatat sebagai `ALT-MBR-019`
+  (placeholder "bila kolom cache/kedaluwarsa ditambahkan" di
+  `MASTER-CHECKLIST.md`).
+
+- **Keputusan 6 - `PersetujuanPelanggan` (bukan `ConsentPelanggan`), dan
+  `WHATSAPP_NOTIFIKASI` sebagai nilai enum ASPIRASIONAL.** Nama model
+  Indonesia dipilih konsisten dengan seluruh model lain di domain ini
+  (`Pelanggan`, `Keanggotaan`, `RiwayatGabungPelanggan`), bukan
+  `ConsentPelanggan` seperti yang disebut rencana korektif awal/kolom Model
+  Data `ALT-MBR-004` (nama itu adalah label ringkas requirement, bukan
+  keharusan literal nama model - pola sama dengan `TierMembership` yang
+  diperbaiki KE arah dokumen pada Keputusan 1, di sini schema memakai
+  penamaan yang lebih konsisten daripada mengikuti literal checklist).
+  `JenisPersetujuanPelanggan` memuat nilai `WHATSAPP_NOTIFIKASI` - PENTING:
+  ini HANYA mencatat bahwa pelanggan *menyetujui* dihubungi lewat kanal
+  tersebut BILA kanal itu kelak dibangun; ini TIDAK membatalkan keputusan
+  `ALT-DEF-017` bahwa notifikasi sistem HANYA in-app/internal pada batch ini.
+  Consent bersifat pernyataan status yang berlaku sampai dicabut (`dicabutPada`
+  diisi pada baris YANG SAMA), berbeda pola dari ledger keuangan
+  (`PoinRiwayat`/`LedgerStempel`/`LedgerSaldoToko`) yang tidak pernah
+  di-UPDATE - consent BARU (mencabut lalu menyetujui lagi) tetap menjadi
+  baris BARU, bukan menghidupkan kembali baris lama.
+
+- **Model yang mendapat composite-FK (mengikuti ADR-013):** `Keanggotaan`
+  (ke `Pelanggan`, ke `TierKeanggotaan` - keduanya BARU, model ini sebelumnya
+  tidak punya `tenantId` sama sekali), `PoinRiwayat` (ke `Keanggotaan`, ke
+  `Pesanan` - BARU), `LedgerStempel` (ke `Keanggotaan`, `Pesanan`,
+  `HadiahStempel` - seluruhnya BARU), `LedgerSaldoToko` (ke `Pelanggan`,
+  `Pesanan`, `Pembayaran` - seluruhnya BARU), `PersetujuanPelanggan` (ke
+  `Pelanggan` - BARU), `RiwayatGabungPelanggan` (ke `Pelanggan` DUA KALI
+  dengan nama relasi berbeda `RiwayatGabungUtama`/`RiwayatGabungGabungan` -
+  BARU), `HadiahStempel` (ke `ItemMenu` - BARU). Relasi ke `Pengguna`
+  (`dicatatOlehId`/`digabungOlehId`) TETAP FK ID TUNGGAL, tidak pernah
+  di-composite-kan (ADR-013 poin 5, identitas global).
+
+- **Cakupan batch ini vs. yang BELUM dikerjakan:** schema, dokumen
+  (`docs/database/11-pelanggan-keanggotaan.md`, `docs/api/API-CONTRACT.md`,
+  `docs/keamanan/PERMISSION-MATRIX.md`, `prisma/seed/izin.seed.ts`,
+  `docs/engineering/TRACEABILITY-MATRIX.md`), dan test struktur arsitektur.
+  **BELUM dikerjakan (di luar scope batch ini):** handler/endpoint nyata
+  (perolehan poin/stempel otomatis saat pesanan selesai, job rekonsiliasi
+  cache, job kedaluwarsa poin, endpoint merge/consent), migrasi Postgres
+  nyata dan trigger append-only untuk `PoinRiwayat`/`LedgerStempel`/
+  `LedgerSaldoToko` (DIBLOKIR, ALT-DEF-029 - tidak ada file SQL manual baru
+  ditulis pada batch ini karena pola triggernya identik `MutasiStok`/file 005
+  yang sudah ada sebagai precedent, menulis salinannya tanpa Postgres nyata
+  untuk mengujinya dinilai tidak menambah nilai verifikasi).

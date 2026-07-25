@@ -101,7 +101,16 @@ model Tenant {
   purchaseOrder              PurchaseOrder[]
   returPembelian             ReturPembelian[]
   pelanggan                  Pelanggan[]
-  tierMembership             TierMembership[]
+  tierKeanggotaan            TierKeanggotaan[]
+  keanggotaan                Keanggotaan[]
+  poinRiwayat                PoinRiwayat[]
+  // ALT-DEF-039: model baru domain keanggotaan (ADR-027, program stempel).
+  hadiahStempel              HadiahStempel[]
+  ledgerStempel              LedgerStempel[]
+  // ALT-DEF-018/ALT-DEF-023: model baru domain keanggotaan (ADR-027).
+  ledgerSaldoToko            LedgerSaldoToko[]
+  persetujuanPelanggan       PersetujuanPelanggan[]
+  riwayatGabungPelanggan     RiwayatGabungPelanggan[]
   promo                      Promo[]
   kupon                      Kupon[]
   promoPemakaian             PromoPemakaian[]
@@ -323,6 +332,13 @@ model Pengguna {
   // ALT-DEF-006: aktor (nullable) yang mengubah status TiketDapur / memicu GelombangDapur.
   riwayatStatusTiketDapurDiubah   RiwayatStatusTiketDapur[]
   gelombangDapurDipicu            GelombangDapur[]
+  // ALT-DEF-018/ALT-DEF-039/ALT-DEF-023: aktor (nullable untuk baris sistem)
+  // domain keanggotaan/loyalitas - ledger poin/stempel/saldo toko dan merge
+  // pelanggan (ADR-027).
+  poinRiwayatDicatat              PoinRiwayat[]             @relation("PoinRiwayatDicatatOleh")
+  ledgerStempelDicatat            LedgerStempel[]           @relation("LedgerStempelDicatatOleh")
+  ledgerSaldoTokoDicatat          LedgerSaldoToko[]         @relation("LedgerSaldoTokoDicatatOleh")
+  riwayatGabungPelangganDilakukan RiwayatGabungPelanggan[]  @relation("RiwayatGabungDigabungOleh")
 
   @@map("pengguna")
 }
@@ -822,21 +838,23 @@ model ItemMenu {
   status          StatusItemMenu @default(AKTIF)
   createdAt       DateTime       @default(now())
 
-  tenant                Tenant                  @relation(fields: [tenantId], references: [id])
+  tenant                  Tenant                  @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, kategoriId) -> KategoriMenu(tenantId, id)
   // agar kategori yang dirujuk dijamin milik tenant yang sama dengan ItemMenu.
-  kategori              KategoriMenu            @relation(fields: [tenantId, kategoriId], references: [tenantId, id])
-  varian                VarianMenu[]
-  modifierGrup          ItemModifierGrup[]
-  hargaOutlet           HargaItemOutlet[]       @relation("HargaItemOutletItemMenu")
+  kategori                KategoriMenu            @relation(fields: [tenantId, kategoriId], references: [tenantId, id])
+  varian                  VarianMenu[]
+  modifierGrup            ItemModifierGrup[]
+  hargaOutlet             HargaItemOutlet[]       @relation("HargaItemOutletItemMenu")
   // ALT-DEF-007: BUKAN LAGI `Resep?` - `Resep.itemMenuId @unique` dihapus,
   // satu item menu boleh punya lebih dari satu kontainer resep (ADR-022).
-  resep                 Resep[]
-  itemPesanan           ItemPesanan[]
-  rmPenjualanItemHarian RmPenjualanItemHarian[]
-  aturanRoutingDapur    AturanRoutingDapur[]
+  resep                   Resep[]
+  itemPesanan             ItemPesanan[]
+  rmPenjualanItemHarian   RmPenjualanItemHarian[]
+  aturanRoutingDapur      AturanRoutingDapur[]
   // ALT-DEF-009: item yang dijadikan hadiah gratis oleh reward BOGO/ITEM_GRATIS.
-  promoRewardItemGratis PromoReward[]
+  promoRewardItemGratis   PromoReward[]
+  // ALT-DEF-039: item yang dijadikan hadiah gratis oleh HadiahStempel (program stempel).
+  hadiahStempelItemGratis HadiahStempel[]
 
   @@unique([tenantId, id])
   @@map("item_menu")
@@ -2422,6 +2440,9 @@ model Pesanan {
   gelombangDapur    GelombangDapur[]
   transaksiKasir    TransaksiKasir[]
   poinRiwayat       PoinRiwayat[]
+  // ALT-DEF-039/ALT-DEF-018: model baru domain keanggotaan (ADR-027).
+  ledgerStempel     LedgerStempel[]
+  ledgerSaldoToko   LedgerSaldoToko[]
 
   @@unique([outletId, nomorPesanan])
   // ALT-DEF-010: agar TiketDapur/Pembayaran bisa memakai composite-FK
@@ -2969,12 +2990,15 @@ model Pembayaran {
   outlet           Outlet    @relation(fields: [tenantId, outletId], references: [tenantId, id])
   dikonfirmasiOleh Pengguna? @relation("PembayaranDikonfirmasiOleh", fields: [dikonfirmasiOlehId], references: [id])
 
-  alokasi        AlokasiPembayaran[]
-  metodeBaris    PembayaranMetodeBaris[]
-  koreksi        KoreksiPembayaran[]
-  qrisKonfirmasi QrisKonfirmasiManual?
-  struk          Struk?
-  refund         PembayaranRefund[]
+  alokasi         AlokasiPembayaran[]
+  metodeBaris     PembayaranMetodeBaris[]
+  koreksi         KoreksiPembayaran[]
+  qrisKonfirmasi  QrisKonfirmasiManual?
+  struk           Struk?
+  refund          PembayaranRefund[]
+  // ALT-DEF-018: baris LedgerSaldoToko yang dihasilkan OLEH pembayaran metode
+  // SALDO_TOKO ini (lihat LedgerSaldoToko.pembayaranId, ADR-027 Keputusan 3).
+  ledgerSaldoToko LedgerSaldoToko[]
 
   // ALT-DEF-014/ADR-013: diperlukan agar AlokasiPembayaran/KoreksiPembayaran/
   // PembayaranMetodeBaris/QrisKonfirmasiManual/Struk/PembayaranRefund bisa
@@ -3674,41 +3698,125 @@ model PromoSimulasi {
 // =====================================================================================
 // 11. PELANGGAN & KEANGGOTAAN (docs/database/11-pelanggan-keanggotaan.md)
 // =====================================================================================
+//
+// ATURAN EMAS (ALT-DEF-018/ALT-DEF-023/ALT-DEF-039, correction-loop batch
+// keanggotaan, lihat ADR-027 di DECISION-LOG.md): SELURUH saldo pelanggan
+// (poin, stempel, saldo toko) WAJIB bersumber dari ledger append-only
+// masing-masing (`PoinRiwayat`, `LedgerStempel`, `LedgerSaldoToko`). Kolom
+// `Keanggotaan.poinAktif`/`poinKumulatif` dan `Pelanggan.saldoTokoCache`
+// adalah CACHE TERDOKUMENTASI, BUKAN sumber kebenaran - pola identik dengan
+// `StokBahan` sebagai cache dari `MutasiStok` (ADR-023/ALT-DEF-008). Bila
+// cache dan ledger berbeda, LEDGER YANG BENAR.
 
 enum StatusKeanggotaan {
   AKTIF
   NONAKTIF
 }
 
+// ALT-DEF-023/ALT-MBR-003: status Pelanggan setelah merge. DIGABUNGKAN berarti
+// profil ini digabung KE profil lain (lihat RiwayatGabungPelanggan) - baris
+// TIDAK PERNAH dihapus (no hard-delete, konsisten ADR-006), hanya ditandai
+// nonaktif untuk pendaftaran/transaksi BARU; histori Pesanan/Reservasi/ledger
+// LAMA yang menunjuk ke profil ini tetap utuh apa adanya (representasi
+// historis - lihat ADR-027 Keputusan 4 untuk pendekatan transfer saldo).
+enum StatusPelanggan {
+  AKTIF
+  DIGABUNGKAN
+}
+
 enum JenisPoinRiwayat {
   PEROLEHAN
   PENUKARAN
   PENYESUAIAN
+  // ALT-DEF-018/ADR-027 Keputusan 2: reversal eksplisit (pola sama dengan
+  // MutasiStok/ADR-023) - sebelumnya TIDAK ADA, koreksi hanya bisa lewat
+  // PENYESUAIAN generik yang kehilangan jejak "ini pembalik dari baris mana".
+  PEMBALIKAN
   KADALUARSA
 }
 
-model Pelanggan {
-  id           String   @id
-  tenantId     String
-  namaLengkap  String
-  nomorTelepon String
-  email        String?
-  createdAt    DateTime @default(now())
+// ALT-DEF-039 (Step 0 audit correction-loop, program stempel/punch-card
+// loyalty - ALT-MBR-014 s.d. ALT-MBR-019): jenis baris ledger stempel.
+// Dipisah dari `JenisPoinRiwayat` (enum sendiri, BUKAN reuse) karena stempel
+// dan poin adalah DUA program loyalitas berbeda dengan siklus hidup berbeda -
+// lihat ADR-027 Keputusan 5. Sengaja TIDAK ada nilai KADALUARSA: kebijakan
+// produk belum menetapkan aturan kedaluwarsa stempel (beda dengan poin yang
+// eksplisit di ALT-MBR-009) - didokumentasikan sebagai keputusan sadar, bukan
+// kelalaian, di ADR-027 Keputusan 5.
+enum JenisLedgerStempel {
+  PEROLEHAN
+  PENUKARAN
+  PEMBALIKAN
+  PENYESUAIAN
+}
 
-  tenant      Tenant       @relation(fields: [tenantId], references: [id])
-  keanggotaan Keanggotaan?
-  pesanan     Pesanan[]
-  reservasi   Reservasi[]
-  kupon       Kupon[]
+// ALT-DEF-018/ALT-MBR-011/ALT-MBR-012 (saldo toko/store credit): jenis baris
+// ledger saldo toko.
+enum JenisLedgerSaldoToko {
+  PENAMBAHAN
+  PEMAKAIAN
+  REFUND
+  PENYESUAIAN
+  PEMBALIKAN
+}
+
+// ALT-DEF-023/ALT-MBR-004 (consent): jenis persetujuan. `WHATSAPP_NOTIFIKASI`
+// bersifat ASPIRASIONAL - mencatat *persetujuan* pelanggan untuk kanal
+// tersebut sah dimodelkan sekarang (mis. untuk kepatuhan bila kanal ini
+// dibangun kelak), tetapi TIDAK berarti kanal pengiriman WhatsApp/SMS
+// sungguhan sudah/akan dibangun. Keputusan ALT-DEF-017 bahwa notifikasi
+// HANYA in-app/internal TIDAK dibatalkan oleh enum ini - lihat ADR-027
+// Keputusan 6.
+enum JenisPersetujuanPelanggan {
+  PEMASARAN
+  DATA_PRIBADI
+  WHATSAPP_NOTIFIKASI
+}
+
+model Pelanggan {
+  id             String          @id
+  tenantId       String
+  namaLengkap    String
+  nomorTelepon   String
+  email          String?
+  status         StatusPelanggan @default(AKTIF)
+  // ALT-DEF-018/ADR-027 Keputusan 3: CACHE terdokumentasi dari
+  // SUM(LedgerSaldoToko.jumlah) milik pelanggan ini - BUKAN sumber kebenaran.
+  // Saldo toko digantung di Pelanggan (bukan Keanggotaan) karena pelanggan
+  // bisa punya saldo toko (mis. dari refund-ke-saldo) TANPA pernah mendaftar
+  // program loyalitas/tier - keduanya independen, lihat ADR-027 Keputusan 3.
+  saldoTokoCache Int             @default(0)
+  createdAt      DateTime        @default(now())
+
+  tenant                       Tenant                   @relation(fields: [tenantId], references: [id])
+  keanggotaan                  Keanggotaan?
+  pesanan                      Pesanan[]
+  reservasi                    Reservasi[]
+  kupon                        Kupon[]
+  ledgerSaldoToko              LedgerSaldoToko[]
+  persetujuan                  PersetujuanPelanggan[]
+  // ALT-DEF-023: merge - baris tempat pelanggan ini adalah profil PENYINTAS/UTAMA.
+  riwayatGabungSebagaiUtama    RiwayatGabungPelanggan[] @relation("RiwayatGabungUtama")
+  // ALT-DEF-023: merge - baris tempat pelanggan ini adalah profil yang DIGABUNG (korban).
+  // @@unique([pelangganGabunganId]) di RiwayatGabungPelanggan menjamin relasi
+  // ini paling banyak SATU baris (satu profil hanya bisa jadi korban sekali).
+  riwayatGabungSebagaiGabungan RiwayatGabungPelanggan[] @relation("RiwayatGabungGabungan")
 
   @@unique([tenantId, nomorTelepon])
-  // ALT-DEF-010: agar Pesanan/Reservasi bisa memakai composite-FK
+  // ALT-DEF-010: agar Pesanan/Reservasi/LedgerSaldoToko/PersetujuanPelanggan/
+  // RiwayatGabungPelanggan bisa memakai composite-FK
   // (tenantId, pelangganId) -> Pelanggan(tenantId, id).
   @@unique([tenantId, id])
   @@map("pelanggan")
 }
 
-model TierMembership {
+// ALT-DEF-018/ADR-027 Keputusan 1: schema lama bernama `TierMembership`,
+// tetapi `MASTER-CHECKLIST.md` (ALT-MBR-005) SUDAH memakai nama
+// `TierKeanggotaan` sejak granularisasi checklist awal - schema DIRENAMES di
+// batch ini untuk selaras dengan dokumen yang sudah settled (bukan
+// sebaliknya). Churn minimal: satu-satunya dependent adalah
+// `Keanggotaan.tierKeanggotaanId`, di-rename bersamaan.
+model TierKeanggotaan {
   id               String @id
   tenantId         String
   nama             String
@@ -3718,37 +3826,267 @@ model TierMembership {
   tenant      Tenant        @relation(fields: [tenantId], references: [id])
   keanggotaan Keanggotaan[]
 
-  @@map("tier_membership")
+  // ALT-DEF-018/ADR-013: agar Keanggotaan bisa memakai composite-FK
+  // (tenantId, tierKeanggotaanId) -> TierKeanggotaan(tenantId, id).
+  @@unique([tenantId, id])
+  @@map("tier_keanggotaan")
 }
 
 model Keanggotaan {
-  id               String            @id
-  pelangganId      String            @unique
-  tierMembershipId String
-  poinAktif        Int               @default(0)
-  poinKumulatif    Int               @default(0)
-  status           StatusKeanggotaan @default(AKTIF)
-  bergabungPada    DateTime          @default(now())
+  id                String            @id
+  // ALT-DEF-018/ADR-013: sebelumnya model ini TIDAK PUNYA `tenantId` sama
+  // sekali - gap tenant-safety yang sama seperti ALT-DEF-010 di domain lain.
+  // Ditambahkan agar PoinRiwayat/LedgerStempel bisa memakai composite-FK
+  // (tenantId, keanggotaanId) -> Keanggotaan(tenantId, id).
+  tenantId          String
+  pelangganId       String            @unique
+  tierKeanggotaanId String
+  // ALT-DEF-018/ALT-MBR-008/ADR-027 Keputusan 1: CACHE terdokumentasi dari
+  // SUM(PoinRiwayat.jumlah) milik keanggotaan ini - BUKAN sumber kebenaran.
+  // Direkonsiliasi berkala oleh job terpisah (internal, di luar scope schema
+  // pada batch ini - lihat ALT-MBR-008).
+  poinAktif         Int               @default(0)
+  // CACHE terdokumentasi dari SUM(PoinRiwayat.jumlah WHERE jenis = PEROLEHAN)
+  // sepanjang masa - dipakai HANYA untuk evaluasi kenaikan tier terhadap
+  // `TierKeanggotaan.minPoinKumulatif`, BUKAN sumber kebenaran.
+  poinKumulatif     Int               @default(0)
+  status            StatusKeanggotaan @default(AKTIF)
+  bergabungPada     DateTime          @default(now())
 
-  pelanggan      Pelanggan      @relation(fields: [pelangganId], references: [id])
-  tierMembership TierMembership @relation(fields: [tierMembershipId], references: [id])
-  poinRiwayat    PoinRiwayat[]
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-018/ADR-013: composite-FK (tenantId, pelangganId) -> Pelanggan(tenantId, id).
+  pelanggan       Pelanggan       @relation(fields: [tenantId, pelangganId], references: [tenantId, id])
+  // ALT-DEF-018/ADR-013: composite-FK (tenantId, tierKeanggotaanId) -> TierKeanggotaan(tenantId, id).
+  tierKeanggotaan TierKeanggotaan @relation(fields: [tenantId, tierKeanggotaanId], references: [tenantId, id])
+  poinRiwayat     PoinRiwayat[]
+  ledgerStempel   LedgerStempel[]
 
+  // ALT-DEF-018/ADR-013: agar PoinRiwayat/LedgerStempel bisa memakai
+  // composite-FK (tenantId, keanggotaanId) -> Keanggotaan(tenantId, id).
+  @@unique([tenantId, id])
+  // Prisma mensyaratkan sisi 1:1 (Pelanggan.keanggotaan) memakai kolom unik -
+  // pelangganId sudah @unique sendiri, tambahan ini hanya memenuhi syarat
+  // composite-FK (tenantId, pelangganId) di atas.
+  @@unique([tenantId, pelangganId])
   @@map("keanggotaan")
 }
 
+// ALT-DEF-018/ALT-MBR-007 (harden `PoinRiwayat` - nama DIPERTAHANKAN, bukan
+// di-rename ke `LedgerPoin`, lihat ADR-027 Keputusan 1 untuk rasional
+// asimetri penamaan dengan `LedgerStempel`/`LedgerSaldoToko` yang baru):
+// ledger append-only poin loyalitas, sumber kebenaran TUNGGAL untuk
+// `Keanggotaan.poinAktif`/`poinKumulatif`.
+//
+// KEJUJURAN YANG WAJIB DINYATAKAN (sama seperti MutasiStok/ADR-023):
+// "append-only" TIDAK ditegakkan database pada batch ini - penegak
+// sebenarnya (revoke UPDATE/DELETE + trigger penolak) belum ditulis sebagai
+// migrasi manual untuk model ini dan, seandainya ditulis, tetap BELUM PERNAH
+// DIJALANKAN (ALT-DEF-029, tidak ada Postgres nyata). Sampai saat itu,
+// append-only adalah disiplin level-aplikasi semata.
 model PoinRiwayat {
-  id            String           @id
-  keanggotaanId String
-  pesananId     String?
-  jenis         JenisPoinRiwayat
-  jumlah        Int
-  createdAt     DateTime         @default(now())
+  id             String           @id
+  // ALT-DEF-018/ADR-013: sebelumnya TIDAK ADA tenantId sama sekali. Ditambah
+  // agar composite-FK (tenantId, keanggotaanId)/(tenantId, pesananId) bisa dipakai.
+  tenantId       String
+  keanggotaanId  String
+  pesananId      String?
+  jenis          JenisPoinRiwayat
+  jumlah         Int
+  // ALT-DEF-018/ALT-MBR-009: hanya terisi pada baris PEROLEHAN - tanggal poin
+  // tersebut kedaluwarsa jika belum dipakai. Job kedaluwarsa terjadwal
+  // (internal, ALT-MBR-009, di luar scope schema) membaca kolom ini untuk
+  // menulis baris KADALUARSA baru begitu tanggal ini terlewati.
+  kadaluarsaPada DateTime?
+  // ALT-DEF-018/ADR-027 Keputusan 2: pola reversal identik
+  // `MutasiStok.dibalikOlehId` (ADR-006/ADR-023) - kolom tunggal + @unique =
+  // satu baris dibalik PALING BANYAK sekali, satu baris pembalik membalik
+  // PALING BANYAK satu baris asal. Yang TIDAK ditegakkan Prisma: tanda
+  // jumlah berlawanan, kesamaan keanggotaanId, dan larangan rantai
+  // pembalik-dari-pembalik (sama seperti keterbatasan MutasiStok).
+  dibalikOlehId  String?          @unique
+  // Nullable - baris SISTEM (mis. perolehan poin otomatis saat pesanan
+  // selesai) tidak punya aktor manusia.
+  dicatatOlehId  String?
+  catatan        String?
+  createdAt      DateTime         @default(now())
 
-  keanggotaan Keanggotaan @relation(fields: [keanggotaanId], references: [id])
-  pesanan     Pesanan?    @relation(fields: [pesananId], references: [id])
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-018/ADR-013: composite-FK (tenantId, keanggotaanId) -> Keanggotaan(tenantId, id).
+  keanggotaan  Keanggotaan  @relation(fields: [tenantId, keanggotaanId], references: [tenantId, id])
+  // ALT-DEF-018/ADR-013: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
+  pesanan      Pesanan?     @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  dicatatOleh  Pengguna?    @relation("PoinRiwayatDicatatOleh", fields: [dicatatOlehId], references: [id])
+  dibalikOleh  PoinRiwayat? @relation("PoinRiwayatPembalik", fields: [dibalikOlehId], references: [id])
+  pembalikDari PoinRiwayat? @relation("PoinRiwayatPembalik")
 
   @@map("poin_riwayat")
+}
+
+// ALT-DEF-039 (Step 0 audit correction-loop, ALT-MBR-018/019): definisi
+// hadiah yang bisa ditukar dengan sejumlah stempel. Minimal tapi lengkap -
+// sengaja TIDAK memodelkan katalog reward kompleks (voucher/diskon persen),
+// hanya "hadiah = item gratis tertentu (opsional) + deskripsi bebas", bentuk
+// paling umum untuk kartu stempel. Lihat ADR-027 Keputusan 5.
+model HadiahStempel {
+  id                      String   @id
+  tenantId                String
+  jumlahStempelDibutuhkan Int
+  deskripsi               String
+  // Nullable - hadiah bisa berupa deskripsi bebas (mis. "diskon 10rb") tanpa
+  // terikat item menu tertentu; bila terisi, menukar hadiah ini berarti
+  // memberi satu unit item ini gratis.
+  itemGratisId            String?
+  aktif                   Boolean  @default(true)
+  createdAt               DateTime @default(now())
+
+  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-039/ADR-013: composite-FK (tenantId, itemGratisId) -> ItemMenu(tenantId, id).
+  itemGratis    ItemMenu?       @relation(fields: [tenantId, itemGratisId], references: [tenantId, id])
+  ledgerStempel LedgerStempel[]
+
+  // ALT-DEF-039/ADR-013: agar LedgerStempel bisa memakai composite-FK
+  // (tenantId, hadiahStempelId) -> HadiahStempel(tenantId, id).
+  @@unique([tenantId, id])
+  @@map("hadiah_stempel")
+}
+
+// ALT-DEF-039 (Step 0 audit correction-loop, ALT-MBR-014 s.d. ALT-MBR-019 -
+// program stempel kunjungan/punch-card): ledger append-only stempel, pola
+// identik `PoinRiwayat` (perolehan/penukaran/pembalikan/penyesuaian) tetapi
+// enum dan model TERPISAH karena stempel dan poin adalah dua program
+// loyalitas independen - lihat ADR-027 Keputusan 5.
+//
+// KEJUJURAN YANG WAJIB DINYATAKAN: sama seperti PoinRiwayat/MutasiStok,
+// "append-only" TIDAK ditegakkan database pada batch ini (ALT-DEF-029).
+model LedgerStempel {
+  id              String             @id
+  tenantId        String
+  keanggotaanId   String
+  jenis           JenisLedgerStempel
+  jumlah          Int
+  // Terisi bila stempel diperoleh/dibalikkan sehubungan dengan satu pesanan.
+  pesananId       String?
+  // Terisi HANYA pada baris PENUKARAN - hadiah mana yang diklaim.
+  hadiahStempelId String?
+  // ALT-DEF-039/ADR-027 Keputusan 5: pola reversal identik PoinRiwayat/MutasiStok.
+  dibalikOlehId   String?            @unique
+  // Nullable - baris SISTEM (mis. perolehan stempel otomatis saat pesanan
+  // selesai) tidak punya aktor manusia.
+  dicatatOlehId   String?
+  catatan         String?
+  createdAt       DateTime           @default(now())
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-039/ADR-013: composite-FK (tenantId, keanggotaanId) -> Keanggotaan(tenantId, id).
+  keanggotaan   Keanggotaan    @relation(fields: [tenantId, keanggotaanId], references: [tenantId, id])
+  // ALT-DEF-039/ADR-013: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
+  pesanan       Pesanan?       @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  // ALT-DEF-039/ADR-013: composite-FK (tenantId, hadiahStempelId) -> HadiahStempel(tenantId, id).
+  hadiahStempel HadiahStempel? @relation(fields: [tenantId, hadiahStempelId], references: [tenantId, id])
+  dicatatOleh   Pengguna?      @relation("LedgerStempelDicatatOleh", fields: [dicatatOlehId], references: [id])
+  dibalikOleh   LedgerStempel? @relation("LedgerStempelPembalik", fields: [dibalikOlehId], references: [id])
+  pembalikDari  LedgerStempel? @relation("LedgerStempelPembalik")
+
+  @@map("ledger_stempel")
+}
+
+// ALT-DEF-018/ALT-MBR-011/ALT-MBR-012 (saldo toko/store credit - BARU): ledger
+// append-only saldo toko, pola identik PoinRiwayat/LedgerStempel. Digantung
+// LANGSUNG ke Pelanggan (BUKAN Keanggotaan) - lihat ADR-027 Keputusan 3 untuk
+// rasional lengkap: pelanggan bisa punya saldo toko (mis. dari
+// refund-ke-saldo) tanpa pernah menjadi anggota program loyalitas/tier sama
+// sekali, sehingga mensyaratkan Keanggotaan sebagai prasyarat akan menolak
+// kasus pakai yang sah.
+//
+// KEJUJURAN YANG WAJIB DINYATAKAN: sama seperti ledger lain, "append-only"
+// TIDAK ditegakkan database pada batch ini (ALT-DEF-029).
+model LedgerSaldoToko {
+  id            String               @id
+  tenantId      String
+  pelangganId   String
+  jenis         JenisLedgerSaldoToko
+  // Rupiah bulat (ADR-005) - positif = saldo bertambah, negatif = berkurang.
+  jumlah        Int
+  // Terisi bila saldo dipakai/ditambah sehubungan dengan satu pesanan.
+  pesananId     String?
+  // Terisi bila baris ini dihasilkan OLEH satu peristiwa `Pembayaran` metode
+  // SALDO_TOKO (lihat `PembayaranMetodeBaris`/`KodeMetodeBayar`) - menutup
+  // jalur "bayar pakai saldo toko" ke ledgernya sendiri. Nullable karena
+  // banyak baris (mis. PENAMBAHAN dari refund, PENYESUAIAN manual) sama
+  // sekali tidak berasal dari sebuah Pembayaran.
+  pembayaranId  String?
+  dibalikOlehId String?              @unique
+  dicatatOlehId String?
+  catatan       String?
+  createdAt     DateTime             @default(now())
+
+  tenant       Tenant           @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-018/ADR-013: composite-FK (tenantId, pelangganId) -> Pelanggan(tenantId, id).
+  pelanggan    Pelanggan        @relation(fields: [tenantId, pelangganId], references: [tenantId, id])
+  // ALT-DEF-018/ADR-013: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
+  pesanan      Pesanan?         @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  // ALT-DEF-018/ADR-013: composite-FK (tenantId, pembayaranId) -> Pembayaran(tenantId, id).
+  pembayaran   Pembayaran?      @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
+  dicatatOleh  Pengguna?        @relation("LedgerSaldoTokoDicatatOleh", fields: [dicatatOlehId], references: [id])
+  dibalikOleh  LedgerSaldoToko? @relation("LedgerSaldoTokoPembalik", fields: [dibalikOlehId], references: [id])
+  pembalikDari LedgerSaldoToko? @relation("LedgerSaldoTokoPembalik")
+
+  @@map("ledger_saldo_toko")
+}
+
+// ALT-DEF-023/ALT-MBR-004 (consent - BARU): mencatat persetujuan pelanggan
+// untuk komunikasi marketing/penyimpanan data. Append-only by convention -
+// mencabut consent yang sudah ada TIDAK meng-UPDATE baris lama secara
+// destruktif (kolom `dicabutPada` diisi di baris yang SAMA karena consent
+// adalah pernyataan status yang berlaku sampai dicabut, bukan peristiwa
+// diskrit seperti ledger keuangan - beda pola dari PoinRiwayat/LedgerStempel/
+// LedgerSaldoToko dengan sengaja, lihat ADR-027 Keputusan 6). Consent BARU
+// (mis. mencabut lalu menyetujui lagi di kemudian hari) selalu menjadi baris
+// BARU, bukan menghidupkan kembali baris lama.
+model PersetujuanPelanggan {
+  id               String                    @id
+  tenantId         String
+  pelangganId      String
+  jenisPersetujuan JenisPersetujuanPelanggan
+  disetujui        Boolean
+  disetujuiPada    DateTime
+  dicabutPada      DateTime?
+  createdAt        DateTime                  @default(now())
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-023/ADR-013: composite-FK (tenantId, pelangganId) -> Pelanggan(tenantId, id).
+  pelanggan Pelanggan @relation(fields: [tenantId, pelangganId], references: [tenantId, id])
+
+  @@map("persetujuan_pelanggan")
+}
+
+// ALT-DEF-023/ALT-MBR-002/ALT-MBR-003 (merge history - BARU): jejak audit
+// setiap merge dua profil Pelanggan duplikat. `pelangganGabunganId` (profil
+// yang digabung/korban) TIDAK PERNAH dihapus setelah merge - hanya ditandai
+// `Pelanggan.status = DIGABUNGKAN` (no hard-delete, ADR-006) agar baris ini
+// dan seluruh histori Pesanan/Reservasi/ledger lama milik profil tersebut
+// tetap punya referential integrity. Lihat ADR-027 Keputusan 4 untuk
+// pendekatan TRANSFER saldo (bukan repointing FK) saat merge terjadi.
+model RiwayatGabungPelanggan {
+  id                  String   @id
+  tenantId            String
+  pelangganUtamaId    String
+  pelangganGabunganId String
+  digabungOlehId      String
+  alasan              String?
+  createdAt           DateTime @default(now())
+
+  tenant            Tenant    @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-023/ADR-013: composite-FK (tenantId, pelangganUtamaId) -> Pelanggan(tenantId, id).
+  pelangganUtama    Pelanggan @relation("RiwayatGabungUtama", fields: [tenantId, pelangganUtamaId], references: [tenantId, id])
+  // ALT-DEF-023/ADR-013: composite-FK (tenantId, pelangganGabunganId) -> Pelanggan(tenantId, id).
+  pelangganGabungan Pelanggan @relation("RiwayatGabungGabungan", fields: [tenantId, pelangganGabunganId], references: [tenantId, id])
+  digabungOleh      Pengguna  @relation("RiwayatGabungDigabungOleh", fields: [digabungOlehId], references: [id])
+
+  // Satu profil hanya bisa digabung (jadi korban) SEKALI - setelah digabung,
+  // statusnya DIGABUNGKAN permanen (tidak ada un-merge dalam scope batch ini).
+  @@unique([pelangganGabunganId])
+  @@map("riwayat_gabung_pelanggan")
 }
 
 // =====================================================================================

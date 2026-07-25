@@ -9,7 +9,9 @@ sudah diverifikasi lulus** - semua masih `BELUM DIKERJAKAN` per penulisan dokume
 yang belum ada di `prisma/schema/schema.prisma` saat ini - lihat `docs/engineering/DEFECT-LEDGER.md`
 untuk kesenjangan yang perlu dikoreksi sebelum sebagian requirement ini bisa mulai dikerjakan).
 
-**Total requirement: 249** (target 200-250).
+**Total requirement: 255** (target 200-250; melebihi target karena ALT-DEF-039
+menambahkan 6 requirement program stempel/punch-card yang sebelumnya hilang
+sama sekali dari checklist - lihat `docs/engineering/DEFECT-LEDGER.md`).
 
 Format ID: `ALT-{DOMAIN}-{urut 3 digit}`, dimulai ulang dari 001 di tiap domain.
 
@@ -29,12 +31,12 @@ Format ID: `ALT-{DOMAIN}-{urut 3 digit}`, dimulai ulang dari 001 di tiap domain.
 | ALT-KSR | Kasir | 13 |
 | ALT-QRS | QRIS | 10 |
 | ALT-PRM | Promo & BOGO | 17 |
-| ALT-MBR | Pelanggan & Keanggotaan | 13 |
+| ALT-MBR | Pelanggan & Keanggotaan | 19 |
 | ALT-HR | Karyawan & Absensi | 18 |
 | ALT-ANL | Analitik | 12 |
 | ALT-UX | UI/UX & Platform | 15 |
 | ALT-SEC | Security | 10 |
-| **Total** | | **249** |
+| **Total** | | **255** |
 
 Kolom tabel requirement di bawah:
 
@@ -293,7 +295,7 @@ Kolom tabel requirement di bawah:
 | ALT-PRM-016 | Snapshot hasil promo pada pesanan | Menyimpan rincian promo yang benar-benar diterapkan (nama, potongan) pada saat commit. | Promo & BOGO | ALT-PRM-015 | Perubahan promo di kemudian hari tidak mengubah nilai potongan historis pesanan. | PromoPemakaian | POST /api/v1/pesanan/{id}/promo | promo.terapkan | /kasir/pesanan/{id} | Unit, Integration | BELUM DIKERJAKAN | - |
 | ALT-PRM-017 | Pembatalan/retur promo mengikuti retur pesanan | Saat pesanan diretur, kuota promo yang terpakai dikembalikan sesuai proporsi retur. | Promo & BOGO | ALT-PES-021, ALT-PRM-016 | Kuota promo dan poin terkait dikoreksi konsisten dengan nilai retur. | PromoPemakaian | internal (event retur pesanan) | `-` (dikoreksi ALT-DEF-009/ALT-DEF-034 dari `promo.retur.sinkron` - Aktor kolom ini "sistem"/event internal, bukan keputusan otorisasi yang dipegang aktor manusia, pola sama dengan `resep.pemakaian.otomatis`/`persediaan.alokasi.otomatis`; kode ini SENGAJA TIDAK diseed) | - | Integration | BELUM DIKERJAKAN | - |
 
-## Pelanggan & Keanggotaan (`ALT-MBR`) - 13 requirement
+## Pelanggan & Keanggotaan (`ALT-MBR`) - 19 requirement
 
 | ID | Nama | Deskripsi | Domain | Ketergantungan | Acceptance Criteria | Model Data | Endpoint/Command | Permission | Route UI | Test Wajib | Status | Bukti |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -310,6 +312,12 @@ Kolom tabel requirement di bawah:
 | ALT-MBR-011 | Saldo toko (store credit) pelanggan | Model saldo uang tersimpan milik pelanggan (mis. dari refund ke saldo, bukan tunai). | Pelanggan & Keanggotaan | ALT-MBR-001 | Saldo toko terpisah dari poin loyalitas, memiliki ledger sendiri. | LedgerSaldoToko | GET /api/v1/pelanggan/{id}/saldo-toko | keanggotaan.saldo-toko.lihat | /pelanggan/{id} | Unit, Integration | BELUM DIKERJAKAN | - |
 | ALT-MBR-012 | Ledger saldo toko append-only | Setiap penambahan/pengurangan saldo toko dicatat sebagai baris ledger baru. | Pelanggan & Keanggotaan | ALT-MBR-011 | Saldo toko yang ditampilkan adalah agregasi LedgerSaldoToko, bukan kolom mutable. | LedgerSaldoToko | GET /api/v1/pelanggan/{id}/saldo-toko/riwayat | keanggotaan.saldo-toko.lihat | /pelanggan/{id} | Unit, Integration | BELUM DIKERJAKAN | - |
 | ALT-MBR-013 | Pencegahan penyalahgunaan poin/saldo | Deteksi pola pemakaian mencurigakan (mis. penukaran poin berulang dalam waktu singkat). | Pelanggan & Keanggotaan | ALT-MBR-010, ALT-MBR-012 | Aksi mencurigakan memicu flag review, tidak langsung memblokir tanpa alasan. | - | internal (rule engine) | keanggotaan.anti-fraud | - | Integration, Security | BELUM DIKERJAKAN | - |
+| ALT-MBR-014 | Program stempel kunjungan (punch-card) | Mendefinisikan hadiah yang bisa ditukar dengan sejumlah stempel kunjungan (Fitur Keanggotaan "Stempel"/"Hadiah" - ditemukan hilang total dari checklist saat audit Step 0 correction-loop, lihat DEFECT-LEDGER.md ALT-DEF-039). | Pelanggan & Keanggotaan | ALT-MBR-001 | HadiahStempel tersimpan tenant-scoped dengan jumlah stempel yang dibutuhkan dan deskripsi/hadiah yang jelas. | HadiahStempel | GET/POST /api/v1/hadiah-stempel | keanggotaan.stempel.kelola | /pengaturan/membership | Unit, Integration | BELUM DIKERJAKAN | - |
+| ALT-MBR-015 | Perolehan stempel | Pelanggan memperoleh stempel otomatis saat pesanan selesai (mis. 1 stempel per kunjungan/transaksi). | Pelanggan & Keanggotaan | ALT-MBR-006, ALT-MBR-014 | Baris ledger PEROLEHAN tercatat terhubung ke pesananId, saldo stempel bertambah. | LedgerStempel | internal (event pesanan selesai) | `-` (Aktor "sistem"/event internal, bukan keputusan otorisasi yang dipegang aktor manusia - pola sama `resep.pemakaian.otomatis`/`persediaan.alokasi.otomatis`; kode ini SENGAJA TIDAK diseed) | - | Integration | BELUM DIKERJAKAN | - |
+| ALT-MBR-016 | Penukaran stempel | Pelanggan menukar sejumlah stempel dengan hadiah (HadiahStempel) tertentu. | Pelanggan & Keanggotaan | ALT-MBR-015 | Penukaran ditolak jika saldo stempel aktif kurang dari jumlahStempelDibutuhkan hadiah yang dipilih. | LedgerStempel | POST /api/v1/keanggotaan/{id}/tukar-stempel | keanggotaan.stempel.tukar | /kasir/pembayaran | Unit, Integration | BELUM DIKERJAKAN | - |
+| ALT-MBR-017 | Pembalikan stempel | Membalik baris perolehan/penukaran stempel yang salah/terkait pesanan yang dibatalkan, tanpa menghapus baris asal. | Pelanggan & Keanggotaan | ALT-MBR-015, ALT-MBR-016 | Baris pembalik baru tercatat, mereferensikan baris asal lewat dibalikOlehId, saldo bersih terkoreksi. | LedgerStempel | POST /api/v1/ledger-stempel/{id}/balik | keanggotaan.stempel.balik | /pelanggan/{id} | Unit, Integration | BELUM DIKERJAKAN | - |
+| ALT-MBR-018 | Ledger stempel append-only | Setiap perolehan/penukaran/pembalikan stempel dicatat sebagai baris ledger baru, bukan update saldo langsung. | Pelanggan & Keanggotaan | ALT-MBR-015 | Saldo stempel yang ditampilkan adalah agregasi LedgerStempel, bukan kolom mutable. | LedgerStempel | GET /api/v1/pelanggan/{id}/stempel-riwayat | keanggotaan.stempel.lihat | /pelanggan/{id} | Unit, Integration | BELUM DIKERJAKAN | - |
+| ALT-MBR-019 | Saldo stempel sebagai cache terdokumentasi | Bila implementasi kelak menambah kolom cache saldo stempel pada Keanggotaan, kolom itu WAJIB didokumentasikan eksplisit sebagai cache dari LedgerStempel (pola sama ALT-MBR-008); pada batch schema ini SENGAJA belum ada kolom cache stempel di Keanggotaan (saldo dihitung langsung dari ledger sampai kebutuhan performa nyata muncul). | Pelanggan & Keanggotaan | ALT-MBR-018 | Bila kolom cache ditambahkan di masa depan, ada job rekonsiliasi yang memverifikasi kesamaannya dengan agregasi ledger; sebelum itu, saldo SELALU dihitung on-the-fly dari LedgerStempel. | Keanggotaan | internal (job rekonsiliasi, bila kolom cache ditambahkan) | keanggotaan.stempel.lihat | - | Integration | BELUM DIKERJAKAN | - |
 
 ## Karyawan & Absensi (`ALT-HR`) - 18 requirement
 
@@ -388,8 +396,8 @@ Kolom tabel requirement di bawah:
 
 ## Catatan penutup
 
-- Total requirement terdaftar: 249 (248 semula + ALT-PLT-026 ditambahkan hasil rekonsiliasi defect ledger, lihat DEFECT-LEDGER.md ALT-DEF-026).
-- Status `BELUM DIKERJAKAN`: 249 (100%).
+- Total requirement terdaftar: 255 (249 semula [248 + ALT-PLT-026 hasil rekonsiliasi ALT-DEF-026] + 6 requirement ALT-MBR-014 s.d. ALT-MBR-019 hasil audit Step 0 program stempel/punch-card, lihat DEFECT-LEDGER.md ALT-DEF-039).
+- Status `BELUM DIKERJAKAN`: 255 (100%).
 - Status `DIKERJAKAN`/`SELESAI DEV`/`DIUJI`/`LULUS`: 0.
 - Beberapa requirement (terutama domain Persediaan, Pesanan, Platform, Security, QRIS)
   mereferensikan model data yang BELUM ada di `prisma/schema/schema.prisma` saat ini -
