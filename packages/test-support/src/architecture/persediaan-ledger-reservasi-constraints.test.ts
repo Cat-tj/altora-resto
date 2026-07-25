@@ -260,28 +260,46 @@ export function jalankanSemuaAssertion(): void {
   wajibNilaiEnumPersis(schema, "ReferensiJenisMutasi", REFERENSI_JENIS, "ADR-023 Keputusan 2");
 
   // ===================================================================
-  // ADR-023 Keputusan 5: integritas reversal
+  // ADR-032 (redesain dari ADR-023 Keputusan 5): integritas reversal.
+  // Arah pointer DIBALIK - `membalikMutasiId` kini ada di baris PEMBALIK,
+  // menunjuk MUNDUR ke baris ASAL. Baris asal TIDAK PERNAH di-UPDATE.
   // ===================================================================
   assertContains(
     mutasiBody,
-    "dibalikOlehId String? @unique",
-    "MutasiStok.dibalikOlehId harus `String? @unique`. Kolom TUNGGAL = satu mutasi dibalik PALING BANYAK sekali (tidak ada tempat untuk pembalik kedua); @unique = satu pembalik membalik PALING BANYAK satu mutasi asal. HANYA kedua hal itu yang dijamin database - tanda berlawanan, kesamaan tenant/gudang/bahan, dan larangan rantai pembalik-dari-pembalik TIDAK dijamin dan bergantung pada trigger di SQL manual 005 (ADR-023 Keputusan 5).",
+    "membalikMutasiId String?",
+    "MutasiStok.membalikMutasiId harus `String? @unique`. Kolom TUNGGAL di sisi PEMBALIK + @unique = paling banyak SATU baris pembalik per baris asal. Ditegakkan trigger `ledger_validasi_pembalik` (tanda berlawanan, kesamaan tenant/gudang/bahan/satuan/batch/harga/lokasi, larangan rantai pembalik-dari-pembalik, alasan wajib) - lihat ADR-032.",
   );
   assertContains(
     mutasiBody,
-    'dibalikOleh MutasiStok? @relation("MutasiPembalik", fields: [dibalikOlehId], references: [id])',
-    "MutasiStok.dibalikOleh harus self-relation bernama `MutasiPembalik`.",
+    "membalikMutasiId String?              @unique",
+    "MutasiStok.membalikMutasiId harus @unique.",
   );
   assertContains(
     mutasiBody,
-    'pembalikDari MutasiStok? @relation("MutasiPembalik")',
-    "MutasiStok.pembalikDari adalah sisi lain self-relation `MutasiPembalik` - tanpanya tidak ada cara menelusuri dari baris pembalik ke mutasi asalnya.",
+    'membalikMutasi MutasiStok? @relation("MutasiPembalik", fields: [membalikMutasiId], references: [id])',
+    "MutasiStok.membalikMutasi harus self-relation bernama `MutasiPembalik`, menunjuk ke baris ASAL yang dibalikkan baris ini.",
   );
-  // Assertion NEGATIF: `dibalikOlehId` TIDAK boleh menjadi list.
+  assertContains(
+    mutasiBody,
+    'pembalik       MutasiStok? @relation("MutasiPembalik")',
+    "MutasiStok.pembalik adalah sisi lain self-relation `MutasiPembalik` - baris pembalik yang menunjuk KE baris ini (hanya terisi bila baris ini sudah dibalik).",
+  );
+  // Assertion NEGATIF: `membalikMutasi` TIDAK boleh menjadi list.
   assertNotContains(
     mutasiBody,
-    "dibalikOleh MutasiStok[]",
-    "MutasiStok.dibalikOleh TIDAK boleh berupa list `MutasiStok[]` - itu akan mengizinkan satu mutasi dibalik BERKALI-KALI, sehingga saldo bersihnya dikoreksi berlipat (ADR-023 Keputusan 5 poin 1).",
+    "membalikMutasi MutasiStok[]",
+    "MutasiStok.membalikMutasi TIDAK boleh berupa list `MutasiStok[]` - itu akan mengizinkan satu mutasi dibalik BERKALI-KALI, sehingga saldo bersihnya dikoreksi berlipat (ADR-032/ADR-023 Keputusan 5 poin 1).",
+  );
+  // `alasan` WAJIB (bukan nullable) di setiap baris (ADR-032 Keputusan 4).
+  assertContains(
+    mutasiBody,
+    "alasan           String",
+    "MutasiStok.alasan harus WAJIB (bukan nullable) - setiap baris ledger butuh justifikasi tertulis untuk auditabilitas (ADR-032 Keputusan 4).",
+  );
+  assertNotContains(
+    mutasiBody,
+    "alasan           String?",
+    "MutasiStok.alasan TIDAK boleh nullable - alasan wajib untuk SETIAP baris, bukan opsional (ADR-032 Keputusan 4).",
   );
 
   // Kolom baru ALT-DEF-008 pada ledger.

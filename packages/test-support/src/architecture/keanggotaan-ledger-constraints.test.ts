@@ -15,9 +15,10 @@
 //      dua nama untuk satu model yang sama akan menciptakan kebingungan
 //      referensi yang sama seperti kelas defect JenisMutasiStok lama.
 //   3. `PoinRiwayat`/`LedgerStempel`/`LedgerSaldoToko` masing-masing punya
-//      pola reversal `dibalikOlehId String? @unique` + self-relation - kolom
-//      TUNGGAL (bukan list) adalah jaminan "satu baris dibalik paling banyak
-//      sekali".
+//      pola reversal `membalikMutasiId String? @unique` (ADR-032, redesain
+//      dari `dibalikOlehId` ADR-027) + self-relation - kolom TUNGGAL (bukan
+//      list) di sisi PEMBALIK adalah jaminan "paling banyak satu baris
+//      pembalik per baris asal".
 //   4. `LedgerSaldoToko.pelangganId` ada dan `keanggotaanId` TIDAK ada di
 //      model itu - inilah bukti struktural keputusan ADR-027 Keputusan 3
 //      (saldo toko digantung ke Pelanggan, bukan Keanggotaan).
@@ -228,8 +229,8 @@ export function jalankanSemuaAssertion(): void {
   wajibPunyaKolom(
     schema,
     "PoinRiwayat",
-    ["tenantId", "keanggotaanId", "pesananId", "jenis", "jumlah", "kadaluarsaPada", "dibalikOlehId", "dicatatOlehId", "catatan", "createdAt"],
-    "ALT-DEF-018/ADR-027 Keputusan 2",
+    ["tenantId", "keanggotaanId", "pesananId", "jenis", "jumlah", "kadaluarsaPada", "membalikMutasiId", "alasan", "dicatatOlehId", "catatan", "createdAt"],
+    "ALT-DEF-018/ADR-032 (redesain dari ADR-027 Keputusan 2)",
   );
   assertContains(
     poinBody,
@@ -238,26 +239,28 @@ export function jalankanSemuaAssertion(): void {
   );
   assertContains(
     poinBody,
-    "dibalikOlehId String? @unique",
-    "PoinRiwayat.dibalikOlehId harus String? @unique - kolom TUNGGAL + unique = satu baris dibalik paling banyak sekali, pola identik MutasiStok.dibalikOlehId (ADR-023 Keputusan 5).",
+    "membalikMutasiId String? @unique",
+    "PoinRiwayat.membalikMutasiId harus String? @unique - kolom TUNGGAL di sisi PEMBALIK, menunjuk MUNDUR ke baris asal; @unique = paling banyak satu pembalik per baris asal, pola identik MutasiStok.membalikMutasiId (ADR-032).",
   );
   assertContains(
     poinBody,
-    'dibalikOleh PoinRiwayat? @relation("PoinRiwayatPembalik", fields: [dibalikOlehId], references: [id])',
-    "PoinRiwayat.dibalikOleh harus self-relation bernama PoinRiwayatPembalik.",
+    'membalikMutasi PoinRiwayat? @relation("PoinRiwayatPembalik", fields: [membalikMutasiId], references: [id])',
+    "PoinRiwayat.membalikMutasi harus self-relation bernama PoinRiwayatPembalik.",
   );
   assertContains(
     poinBody,
-    'pembalikDari PoinRiwayat? @relation("PoinRiwayatPembalik")',
-    "PoinRiwayat.pembalikDari adalah sisi lain self-relation PoinRiwayatPembalik.",
+    'pembalik PoinRiwayat? @relation("PoinRiwayatPembalik")',
+    "PoinRiwayat.pembalik adalah sisi lain self-relation PoinRiwayatPembalik.",
   );
   assertNotContains(
     poinBody,
-    "dibalikOleh PoinRiwayat[]",
-    "PoinRiwayat.dibalikOleh TIDAK boleh list - itu mengizinkan satu baris dibalik berkali-kali.",
+    "membalikMutasi PoinRiwayat[]",
+    "PoinRiwayat.membalikMutasi TIDAK boleh list - itu mengizinkan satu baris dibalik berkali-kali.",
   );
   assertContains(poinBody, "kadaluarsaPada DateTime?", "PoinRiwayat.kadaluarsaPada harus nullable (ALT-MBR-009).");
   assertContains(poinBody, "dicatatOlehId String?", "PoinRiwayat.dicatatOlehId harus nullable - baris sistem tidak punya aktor manusia.");
+  assertContains(poinBody, "alasan String", "PoinRiwayat.alasan harus WAJIB (bukan nullable) - ADR-032 Keputusan 4.");
+  assertNotContains(poinBody, "alasan String?", "PoinRiwayat.alasan TIDAK boleh nullable - ADR-032 Keputusan 4.");
 
   wajibNilaiEnumPersis(
     schema,
@@ -299,24 +302,26 @@ export function jalankanSemuaAssertion(): void {
   wajibPunyaKolom(
     schema,
     "LedgerStempel",
-    ["id", "tenantId", "keanggotaanId", "jenis", "jumlah", "pesananId", "hadiahStempelId", "dibalikOlehId", "dicatatOlehId", "catatan", "createdAt"],
-    "ALT-DEF-039/ALT-MBR-018",
+    ["id", "tenantId", "keanggotaanId", "jenis", "jumlah", "pesananId", "hadiahStempelId", "membalikMutasiId", "alasan", "dicatatOlehId", "catatan", "createdAt"],
+    "ALT-DEF-039/ALT-MBR-018/ADR-032",
   );
   assertContains(
     stempelBody,
-    "dibalikOlehId String? @unique",
-    "LedgerStempel.dibalikOlehId harus String? @unique - pola reversal identik PoinRiwayat/MutasiStok.",
+    "membalikMutasiId String? @unique",
+    "LedgerStempel.membalikMutasiId harus String? @unique - pola reversal identik PoinRiwayat/MutasiStok (ADR-032).",
   );
   assertContains(
     stempelBody,
-    'dibalikOleh LedgerStempel? @relation("LedgerStempelPembalik", fields: [dibalikOlehId], references: [id])',
-    "LedgerStempel.dibalikOleh harus self-relation bernama LedgerStempelPembalik.",
+    'membalikMutasi LedgerStempel? @relation("LedgerStempelPembalik", fields: [membalikMutasiId], references: [id])',
+    "LedgerStempel.membalikMutasi harus self-relation bernama LedgerStempelPembalik.",
   );
   assertContains(
     stempelBody,
-    'pembalikDari LedgerStempel? @relation("LedgerStempelPembalik")',
-    "LedgerStempel.pembalikDari adalah sisi lain self-relation LedgerStempelPembalik.",
+    'pembalik LedgerStempel? @relation("LedgerStempelPembalik")',
+    "LedgerStempel.pembalik adalah sisi lain self-relation LedgerStempelPembalik.",
   );
+  assertContains(stempelBody, "alasan String", "LedgerStempel.alasan harus WAJIB (bukan nullable) - ADR-032 Keputusan 4.");
+  assertNotContains(stempelBody, "alasan String?", "LedgerStempel.alasan TIDAK boleh nullable - ADR-032 Keputusan 4.");
   assertContains(
     stempelBody,
     "keanggotaan Keanggotaan @relation(fields: [tenantId, keanggotaanId], references: [tenantId, id])",
@@ -353,8 +358,8 @@ export function jalankanSemuaAssertion(): void {
   wajibPunyaKolom(
     schema,
     "LedgerSaldoToko",
-    ["id", "tenantId", "pelangganId", "jenis", "jumlah", "pesananId", "pembayaranId", "dibalikOlehId", "dicatatOlehId", "catatan", "createdAt"],
-    "ALT-DEF-018/ALT-MBR-011/012",
+    ["id", "tenantId", "pelangganId", "jenis", "jumlah", "pesananId", "pembayaranId", "membalikMutasiId", "alasan", "dicatatOlehId", "catatan", "createdAt"],
+    "ALT-DEF-018/ALT-MBR-011/012/ADR-032",
   );
   // Assertion NEGATIF paling penting untuk keputusan ADR-027 Keputusan 3.
   if (fieldSaldoToko.includes("keanggotaanId")) {
@@ -374,9 +379,11 @@ export function jalankanSemuaAssertion(): void {
   );
   assertContains(
     saldoTokoBody,
-    "dibalikOlehId String? @unique",
-    "LedgerSaldoToko.dibalikOlehId harus String? @unique - pola reversal identik ledger lain.",
+    "membalikMutasiId String? @unique",
+    "LedgerSaldoToko.membalikMutasiId harus String? @unique - pola reversal identik ledger lain (ADR-032).",
   );
+  assertContains(saldoTokoBody, "alasan String", "LedgerSaldoToko.alasan harus WAJIB (bukan nullable) - ADR-032 Keputusan 4.");
+  assertNotContains(saldoTokoBody, "alasan String?", "LedgerSaldoToko.alasan TIDAK boleh nullable - ADR-032 Keputusan 4.");
   wajibNilaiEnumPersis(
     schema,
     "JenisLedgerSaldoToko",

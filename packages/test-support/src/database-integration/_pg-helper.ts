@@ -122,6 +122,67 @@ export interface Fixtures {
   penggunaId: string;
 }
 
+/** Fixture keanggotaan: tenant, pelanggan, tier, keanggotaan - untuk test ledger
+ * PoinRiwayat/LedgerStempel. Independen dari `createBaseFixtures` (domain persediaan)
+ * karena keduanya butuh master data yang berbeda sama sekali.
+ */
+export interface KeanggotaanFixtures {
+  tenantId: string;
+  pelangganId: string;
+  tierKeanggotaanId: string;
+  keanggotaanId: string;
+}
+
+export async function createKeanggotaanFixtures(client: pg.PoolClient): Promise<KeanggotaanFixtures> {
+  const tenantId = fixtureId("tenant");
+  const pelangganId = fixtureId("pelanggan");
+  const tierKeanggotaanId = fixtureId("tier");
+  const keanggotaanId = fixtureId("keanggotaan");
+
+  await client.query(
+    `INSERT INTO tenant (id, nama, slug, status, "createdAt") VALUES ($1, $2, $3, 'AKTIF', now())`,
+    [tenantId, `Tenant ${tenantId}`, tenantId],
+  );
+  await client.query(
+    `INSERT INTO pelanggan (id, "tenantId", "namaLengkap", "nomorTelepon", status, "saldoTokoCache", "createdAt")
+     VALUES ($1, $2, 'Pelanggan Uji', $3, 'AKTIF', 0, now())`,
+    [pelangganId, tenantId, pelangganId.slice(0, 12)],
+  );
+  await client.query(
+    `INSERT INTO tier_keanggotaan (id, "tenantId", nama, "minPoinKumulatif", benefit)
+     VALUES ($1, $2, 'Tier Uji', 0, '{}'::jsonb)`,
+    [tierKeanggotaanId, tenantId],
+  );
+  await client.query(
+    `INSERT INTO keanggotaan (id, "tenantId", "pelangganId", "tierKeanggotaanId", "poinAktif", "poinKumulatif", status, "bergabungPada")
+     VALUES ($1, $2, $3, $4, 0, 0, 'AKTIF', now())`,
+    [keanggotaanId, tenantId, pelangganId, tierKeanggotaanId],
+  );
+
+  return { tenantId, pelangganId, tierKeanggotaanId, keanggotaanId };
+}
+
+/** Pelanggan tambahan di tenant yang SAMA - untuk test mismatch pelangganId (LedgerSaldoToko). */
+export async function createPelangganTambahan(client: pg.PoolClient, tenantId: string): Promise<string> {
+  const pelangganId = fixtureId("pelanggan2");
+  await client.query(
+    `INSERT INTO pelanggan (id, "tenantId", "namaLengkap", "nomorTelepon", status, "saldoTokoCache", "createdAt")
+     VALUES ($1, $2, 'Pelanggan Uji 2', $3, 'AKTIF', 0, now())`,
+    [pelangganId, tenantId, pelangganId.slice(0, 12)],
+  );
+  return pelangganId;
+}
+
+/** Tenant kedua (independen) - untuk test mismatch tenantId lintas ledger. */
+export async function createTenantTambahan(client: pg.PoolClient): Promise<string> {
+  const tenantId = fixtureId("tenant2");
+  await client.query(
+    `INSERT INTO tenant (id, nama, slug, status, "createdAt") VALUES ($1, $2, $3, 'AKTIF', now())`,
+    [tenantId, `Tenant ${tenantId}`, tenantId],
+  );
+  return tenantId;
+}
+
 export async function createBaseFixtures(client: pg.PoolClient): Promise<Fixtures> {
   const tenantId = fixtureId("tenant");
   const outletId = fixtureId("outlet");
