@@ -1958,6 +1958,258 @@ kolom Ketergantungan) diperbaiki langsung pada pass ini, `ALT-DEF-042`
 diperbaiki - butuh batch schema terpisah, di luar cakupan pass
 dokumentasi-saja ini.
 
+## Pass correction-loop 2026-07-25 (final): verifikasi konsolidasi loop-wide
+
+Batch ini BUKAN batch perbaikan defect baru. Tujuannya murni menjalankan ulang
+seluruh suite validasi (schema, typecheck, test arsitektur, migrasi,
+grep-scope) satu kali lagi end-to-end di atas HEAD `06541ef`, dan menuliskan
+status penutupan correction loop di `docs/engineering/CORRECTION-LOOP-STATUS.md`.
+Tidak ada perubahan pada `prisma/schema/schema.prisma` pada batch ini.
+
+### 1. `prisma format`
+
+```
+$ npx prisma format --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 113ms 🚀
+```
+
+`git diff --stat prisma/schema/schema.prisma` sesudahnya: **kosong** (tidak ada
+perubahan format tertunda dari batch-batch sebelumnya).
+
+### 2. `prisma validate`
+
+```
+$ DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy?schema=public" \
+  npx prisma validate --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+```
+
+### 3. `prisma generate`
+
+```
+$ npx prisma generate --schema=prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 1.35s
+```
+
+### 4. Typecheck
+
+```
+$ npx tsc --noEmit -p packages/test-support
+(exit 0, tanpa output - tidak ada error tipe)
+```
+
+### 5. Test arsitektur (`packages/test-support/src/architecture/`)
+
+22 file test ditemukan (`find ... -name "*.test.ts" | wc -l` = 22, bukan ~22
+kira-kira - dihitung pasti). Tidak ada single runner script terpusat
+(`package.json` `packages/test-support` tidak punya script `test` yang
+menjalankan direktori ini) - dijalankan satu per satu dengan
+`node --experimental-strip-types`, pola yang sama dipakai batch-batch
+sebelumnya:
+
+```
+PASS: dapur-kds-multi-stasiun.test.ts
+PASS: idempotency-outbox-notification-constraints.test.ts
+PASS: karyawan-absensi-hr-constraints.test.ts
+PASS: keanggotaan-ledger-constraints.test.ts
+PASS: keanggotaan-outlet-constraints.test.ts
+PASS: pembayaran-alokasi-metode-constraints.test.ts
+PASS: persediaan-ledger-reservasi-constraints.test.ts
+PASS: pesanan-state-machine-snapshot-constraints.test.ts
+PASS: prisma-client-shape-auth-pin.test.ts
+PASS: prisma-client-shape-dapur.test.ts
+PASS: prisma-client-shape-pembayaran-qris.test.ts
+PASS: prisma-client-shape-persediaan.test.ts
+PASS: prisma-client-shape-pesanan.test.ts
+PASS: prisma-client-shape-platform-infra.test.ts
+PASS: prisma-client-shape-resep-produksi.test.ts
+PASS: prisma-client-shape-tenant-outlet.test.ts
+PASS: prisma-client-shape.test.ts
+PASS: promo-stacking-reward-constraints.test.ts
+PASS: qris-konfigurasi-constraints.test.ts
+PASS: resep-versi-produksi-constraints.test.ts
+PASS: sesi-auth-pin-constraints.test.ts
+PASS: tenant-outlet-composite-constraints.test.ts
+
+TOTAL PASS=22 FAIL=0
+```
+
+### 6. `prisma migrate dev --create-only` - TEMUAN PENTING, dilaporkan apa adanya
+
+Dengan `DATABASE_URL` menunjuk ke host/kredensial fiktif (`dummy:dummy@localhost:5432/dummy`),
+hasilnya sesuai ekspektasi tiap batch sebelumnya:
+
+```
+$ DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy?schema=public" \
+  npx prisma migrate dev --create-only --schema=prisma/schema/schema.prisma --name final_correction_loop_check
+Error: P1010: User `dummy` was denied access on the database `dummy.public`
+```
+
+Namun `lsof -i :5432` menunjukkan ada instance PostgreSQL LOKAL nyata yang
+berjalan di environment eksekusi batch ini (`postgres` process, user `icat`,
+listening di `localhost:5432`, autentikasi `trust` untuk user OS lokal) -
+sesuatu yang **tidak disebutkan tersedia** di batch-batch correction-loop
+sebelumnya (yang seluruhnya melaporkan `DIBLOKIR` karena tidak ada Postgres
+sama sekali). Demi kejujuran ("jangan memfabrikasi kegagalan" berlaku sama
+seperti "jangan memfabrikasi keberhasilan"), migrasi diuji ulang dengan
+kredensial nyata terhadap database KOSONG yang baru dibuat khusus untuk
+pengujian ini (`altora_resto_correction_check`), lalu database itu
+DIHAPUS setelah pengujian selesai (tidak ada artefak migrasi yang disimpan
+di repo):
+
+```
+$ psql -h localhost -p 5432 -U icat -d postgres -c "CREATE DATABASE altora_resto_correction_check;"
+CREATE DATABASE
+
+$ DATABASE_URL="postgresql://icat@localhost:5432/altora_resto_correction_check?schema=public" \
+  npx prisma migrate dev --create-only --schema=prisma/schema/schema.prisma --name final_correction_loop_check
+Prisma Migrate created the following migration without applying it 20260725145118_final_correction_loop_check
+(migration.sql: 3626 baris, 154799 byte, di prisma/schema/migrations/ - lokasi
+default relatif ke schema.prisma, BUKAN prisma/migrations/)
+
+$ DATABASE_URL="postgresql://icat@localhost:5432/altora_resto_correction_check?schema=public" \
+  npx prisma migrate dev --schema=prisma/schema/schema.prisma
+Applying migration `20260725145118_final_correction_loop_check`
+Your database is now in sync with your schema.
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 1.39s
+
+$ psql -h localhost -p 5432 -U icat -d altora_resto_correction_check -t \
+  -c "select count(*) from information_schema.tables where table_schema='public';"
+134
+```
+
+**Migrasi generated (murni dari `prisma migrate dev`, TANPA SQL manual di
+`prisma/migrations/manual/`) berhasil DIAPPLY ke database Postgres kosong dan
+membuat 134 tabel.** Ini adalah bukti nyata pertama sepanjang correction loop
+bahwa skema `prisma/schema/schema.prisma` itu sendiri valid secara struktural
+terhadap Postgres sungguhan, bukan hanya lolos `prisma validate` (yang tidak
+menyentuh database sama sekali).
+
+**Ini TIDAK mengubah status `DIBLOKIR` ALT-DEF-029 atau membuka jalan closure
+`DITUTUP` untuk defect manapun di batch ini, karena:**
+- Constraint yang ditegakkan lewat 5 file SQL manual di
+  `prisma/migrations/manual/` (partial unique index QRIS/VersiResep/StokBahan,
+  XOR check Resep, append-only+reversal MutasiStok) **masih belum pernah
+  dieksekusi** - diverifikasi ulang dengan query terhadap
+  `altora_resto_correction_check` sebelum database itu dihapus: tidak ada
+  index bernama mengandung `partial`/`xor` di `pg_indexes`. Tanpa file-file
+  ini, sejumlah invariant bisnis kritis (mis. "satu `KonfigurasiQris` AKTIF
+  per outlet") hanya ditegakkan di level aplikasi, bukan database.
+- Belum ada test integrasi/isolasi-tenant/permission-enforcement sungguhan
+  yang dijalankan TERHADAP database yang sudah dimigrasikan ini - test
+  arsitektur di atas seluruhnya adalah test STRUKTUR (membaca teks
+  `schema.prisma`/bentuk tipe Prisma Client), bukan test yang menulis/membaca
+  baris nyata dan memverifikasi perilaku runtime.
+- Environment CI/produksi resmi masih belum dikonfirmasi punya akses
+  Postgres yang sama - temuan ini spesifik pada environment eksekusi batch
+  ini, bukan jaminan environment lain.
+- Tidak ada kode aplikasi (service/handler) di repo ini sama sekali yang bisa
+  diverifikasi terhadap database yang sudah dimigrasikan.
+
+Kesimpulan jujur: **status `DIBLOKIR` untuk kriteria closure (e) "migrasi dari
+database kosong" secara LITERAL sudah berhasil di environment batch ini**,
+tapi kriteria closure lain (test integrasi nyata, constraint SQL manual
+dieksekusi, kode aplikasi ada untuk diverifikasi) tetap belum terpenuhi
+untuk SEMUA 42 defect di ledger - karena itu **tidak ada satupun defect yang
+diubah menjadi `DITUTUP` pada batch ini**, sesuai instruksi eksplisit batch
+ini bahwa closure penuh butuh seluruh 10 kriteria (a-j), bukan hanya (e).
+Direkomendasikan sebagai temuan untuk pemilik project: environment ini
+sekarang punya Postgres lokal yang bisa dipakai untuk mulai menjalankan
+migrasi dev loop dan menulis test integrasi sungguhan, sesuatu yang
+sebelumnya diasumsikan tidak mungkin.
+
+### 7. Migrasi manual (`prisma/migrations/manual/`)
+
+5 file SQL mentah terakumulasi sepanjang correction loop:
+
+```
+001_konfigurasi_qris_partial_unique.sql   (ALT-DEF-015, partial unique index KonfigurasiQris AKTIF per outlet)
+002_resep_target_xor_check.sql            (ALT-DEF-007, XOR check target Resep)
+003_versi_resep_satu_aktif.sql            (ALT-DEF-007, satu VersiResep AKTIF per Resep)
+004_stok_bahan_agregat_gudang_unik.sql    (ALT-DEF-008, agregat StokBahan unik per gudang)
+005_mutasi_stok_append_only_dan_pembalik.sql (ALT-DEF-008, append-only + pembalik MutasiStok)
+```
+
+Dikonfirmasi ulang pada batch ini: TIDAK SATUPUN pernah dieksekusi terhadap
+database manapun (lihat temuan poin 6 di atas - dicek langsung dengan query
+`pg_indexes` terhadap database test yang baru dimigrasikan, hasil kosong).
+Ini didokumentasikan secara jujur di setiap file SQL itu sendiri, di
+`DEFECT-LEDGER.md` (ALT-DEF-007/008/015), dan di `DECISION-LOG.md`
+(ADR-021, ADR-022) - tidak ada klaim tersembunyi bahwa constraint ini aktif.
+
+### 8. Grep scope pembayaran di luar cakupan
+
+```
+$ grep -rn -E 'KARTU_DEBIT|KARTU_KREDIT|EWALLET|PAYMENT_GATEWAY|BANK_API' \
+  --include='*.prisma' --include='*.ts' --include='*.md' .
+$ grep -rniE 'kartu kredit|kartu debit|dompet digital|e-wallet' \
+  --include='*.prisma' --include='*.ts' --include='*.md' .
+$ grep -rniE 'webhook' --include='*.prisma' --include='*.ts' --include='*.md' .
+```
+
+Seluruh hit (schema.prisma komentar negatif, `docs/database/09-pembayaran-kasir.md`,
+`docs/database/16-qris.md`, `docs/api/API-CONTRACT.md`, `DECISION-LOG.md`,
+`DEFECT-LEDGER.md`, `MASTER-CHECKLIST.md` baris `ALT-QRS-010`, dan assertion
+NEGATIF di `qris-konfigurasi-constraints.test.ts`/`pembayaran-alokasi-metode-constraints.test.ts`)
+adalah dokumentasi historis penghapusan atau assertion test yang secara
+eksplisit MELARANG string tersebut muncul. **Nol** referensi aktif di
+schema/kontrak yang benar-benar mengaktifkan integrasi ini.
+
+### 9. `Pengguna` tanpa `tenantId`/`outletId`/role langsung
+
+```
+$ grep -n "^model Pengguna " prisma/schema/schema.prisma
+269:model Pengguna {
+```
+
+Body model dibaca penuh: tidak ada field `tenantId`, `outletId`, atau field
+role/peran langsung (`peran`/`role`) - keanggotaan tenant/outlet/peran
+seluruhnya lewat relasi `keanggotaanTenant KeanggotaanTenant[]` (yang di
+dalamnya membawa `KeanggotaanOutlet`/`KeanggotaanPeran`). Regresi ALT-DEF-001
+**tidak ditemukan** setelah 14 batch domain + 1 batch traceability-sync.
+
+### 10. Jumlah model dan enum
+
+```
+$ grep -c '^model ' prisma/schema/schema.prisma
+133
+$ grep -c '^enum ' prisma/schema/schema.prisma
+71
+```
+
+### 11. Jumlah baris requirement (cross-check `MASTER-CHECKLIST.md`/`TRACEABILITY-MATRIX.md`)
+
+```
+$ grep -oE '^\| ALT-[A-Z]+-[0-9]+' docs/engineering/MASTER-CHECKLIST.md | sort -u | wc -l
+255
+$ grep -oE '^\| ALT-[A-Z]+-[0-9]+' docs/engineering/TRACEABILITY-MATRIX.md | sort -u | wc -l
+255
+```
+
+255/255, konsisten. (Catatan: `grep -c '^| ALT-'` tanpa filter format ID
+menghasilkan angka lebih tinggi karena mencocokkan teks naratif yang
+kebetulan diawali pola serupa, mis. placeholder `ALT-OTR-xxx` di tabel
+rekonsiliasi - dihitung ulang dengan pola ID yang benar dan `sort -u` untuk
+angka yang akurat.)
+
+### 12. Ledger defect - verifikasi ulang jumlah
+
+```
+$ grep -c '^| ALT-DEF-' docs/engineering/DEFECT-LEDGER.md
+42
+```
+
+**42 defect, bukan 44** seperti asumsi draft instruksi batch ini - dihitung
+ulang langsung dari baris tabel (`ALT-DEF-001` s.d. `ALT-DEF-042`, tanpa gap
+nomor). Ini bukan kesalahan pencatatan; ini koreksi terhadap asumsi draft
+instruksi yang salah, dilaporkan apa adanya sesuai aturan "jangan
+memfabrikasi angka". Breakdown status x severity, lihat
+`docs/engineering/CORRECTION-LOOP-STATUS.md`. **Nol defect berstatus
+`DITUTUP`** - dikonfirmasi dengan `awk` atas kolom Status seluruh 42 baris.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```
