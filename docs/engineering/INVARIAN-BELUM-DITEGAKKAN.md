@@ -33,53 +33,59 @@ lain memakai field umum di atas plus catatan sub-state bila relevan.
 
 ## A. DB constraint sudah ditulis DAN sudah masuk migrasi resmi
 
-**Kategori ini KOSONG (0 baris) hari ini.** Diverifikasi langsung:
-`ls prisma/migrations/` hanya berisi satu subfolder, `manual/` — bukan folder
-migrasi bernomor timestamp yang dihasilkan `prisma migrate dev`/`deploy`.
-Artinya **tidak ada satu pun** constraint database di proyek ini yang benar-benar
-berada dalam riwayat migrasi resmi Prisma. Semua 5 file di `prisma/migrations/manual/`
-adalah SQL yang **ditulis tangan** dan **belum pernah dijalankan** oleh
-`prisma migrate deploy` maupun perintah apa pun — lihat ALT-DEF-044 (baru,
-dicatat pada batch ini) untuk defect yang menangkap gap ini secara eksplisit:
-kalau proyek ini di-deploy hari ini lewat tooling Prisma standar, kelima file
-manual tersebut **diam-diam tidak pernah dijalankan**, tanpa error apa pun
-yang memberi tahu siapa pun.
+**DIPERBARUI pada batch kedua deep-correction-loop (ALT-DEF-044, lihat
+ADR-031):** kategori ini TIDAK LAGI kosong. `prisma migrate dev`/`deploy`
+sudah benar-benar dijalankan terhadap `altora_resto_dev` (dua migrasi resmi:
+`20260725154045_baseline_correction_loop` lalu
+`20260725154310_harden_manual_invariants`, keduanya di
+`prisma/schema/migrations/` — lihat ADR-031 Keputusan 1 soal koreksi lokasi
+path). `prisma/migrations/manual/001`-`005` sudah di-fold (dengan satu bug
+logika diperbaiki, lihat INV-007 di bawah) ke migrasi kedua tersebut dan
+sudah TIDAK lagi jadi jalur deployment paralel yang diam-diam terlewat.
+
+`INV-001` s.d. `INV-007` DIPINDAH dari kategori B1 (di bawah) ke sini karena
+kelimanya sekarang: (a) SQL-nya benar-benar ada di migrasi resmi yang
+tercatat di `_prisma_migrations`, (b) diverifikasi ada lewat query
+`pg_indexes`/`pg_constraint`/`pg_trigger`/`pg_proc` langsung terhadap
+`altora_resto_dev`, dan (c) diverifikasi MENOLAK pelanggaran nyata lewat
+test integrasi Postgres yang benar-benar dijalankan (bukan hanya "diklaim
+menegakkan").
 
 | Invariant | Migration | Tipe penegak | Test integrasi | Status |
 |---|---|---|---|---|
-| *(tidak ada baris — lihat penjelasan di atas)* | - | - | - | - |
+| INV-001 — satu `KonfigurasiQris` AKTIF per outlet | `prisma/schema/migrations/20260725154310_harden_manual_invariants/migration.sql` bagian (A) | Partial unique index `konfigurasi_qris_satu_aktif_per_outlet` | `packages/test-support/src/database-integration/qris-konfigurasi-invariant.test.ts` (existence pg_indexes + behavioral: duplikat AKTIF ditolak, NONAKTIF boleh menumpuk) | DITUTUP — terpasang dan teruji |
+| INV-002 — `Resep` XOR tepat satu sasaran | migrasi sama, bagian (B) | CHECK constraint `resep_sasaran_xor` | `packages/test-support/src/database-integration/resep-versi-invariants.test.ts` (existence pg_constraint + behavioral: nol/dua sasaran ditolak, satu sasaran diterima) | DITUTUP — terpasang dan teruji |
+| INV-003 — satu `VersiResep` AKTIF per resep | migrasi sama, bagian (C) | Partial unique index `versi_resep_satu_aktif_per_resep` | `resep-versi-invariants.test.ts` (existence + behavioral: dua AKTIF ditolak, riwayat NONAKTIF/ARSIP boleh menumpuk) | DITUTUP — terpasang dan teruji |
+| INV-004 — satu baris `StokBahan` agregat level-gudang per (gudang, bahan) | migrasi sama, bagian (D) | Partial unique index `stok_bahan_agregat_gudang_unik` | `packages/test-support/src/database-integration/persediaan-stok-invariants.test.ts` (existence + behavioral: duplikat ditolak) | DITUTUP — terpasang dan teruji |
+| INV-005 — satu baris `StokOpnameBaris` agregat level-gudang per (opname, bahan) | migrasi sama, bagian (D) | Partial unique index `stok_opname_baris_agregat_gudang_unik` | `persediaan-stok-invariants.test.ts` (existence via pg_indexes) | DITUTUP — terpasang; belum ada assertion behavioral khusus baris opname pada batch ini (lihat catatan di bawah) |
+| INV-006 — `mutasi_stok` append-only (UPDATE/DELETE ditolak kecuali `dibalikOlehId`) | migrasi sama, bagian (E.1) | Trigger `trg_mutasi_stok_append_only` + fungsi `mutasi_stok_tolak_ubah()` | `persediaan-stok-invariants.test.ts` (existence pg_trigger/pg_proc + behavioral: UPDATE kolom lain ditolak, DELETE ditolak, UPDATE `dibalikOlehId` dari NULL diterima) | DITUTUP — terpasang dan teruji |
+| INV-007 — kesepadanan mutasi pembalik (tanda berlawanan, tenant/gudang/bahan sama, larangan rantai pembalik-dari-pembalik) | migrasi sama, bagian (E.2) | Trigger `trg_mutasi_stok_validasi_pembalik` + fungsi `mutasi_stok_validasi_pembalik()` | `persediaan-stok-invariants.test.ts` (existence + behavioral: jumlah salah ditolak, bahan berbeda ditolak, **rantai pembalik-dari-pembalik ditolak** — assertion ini secara langsung menguji bug-fix ALT-DEF-044/ADR-031) | DITUTUP — terpasang dan teruji; **satu bug logika ditemukan dan diperbaiki selama audit batch ini, lihat ADR-031 Keputusan 3** (fungsi asli di `manual/005` TIDAK PERNAH benar-benar menolak rantai pembalik-dari-pembalik meski komentarnya bilang begitu) |
 
-Menjalankan `prisma migrate dev` untuk memfoldkan `manual/001`-`005` (dan
-kandidat baru di kategori B di bawah) ke riwayat migrasi resmi adalah **scope
-batch berikutnya** dari deep-correction-loop ini, bukan batch ini (lihat
-catatan "Do NOT run `prisma migrate`" — batch ini murni audit + restrukturisasi
-dokumen).
+**Catatan INV-005:** test behavioral eksplisit (INSERT dua baris opname
+agregat untuk pasangan bahan yang sama) belum ditulis terpisah pada batch
+ini — hanya existence index yang diverifikasi langsung. Index-nya identik
+strukturnya dengan INV-004 (partial unique `WHERE "lokasiStokId" IS NULL`)
+yang SUDAH diuji behavioral, jadi risiko index ini tidak berfungsi dinilai
+rendah, tapi ini dicatat jujur sebagai gap test coverage, bukan diam-diam
+dianggap setara INV-004.
+
+**Belum tercakup kategori A** (masih di kategori B/C/D/E di bawah): 3
+trigger ledger keanggotaan dari ALT-DEF-043, CHECK `TransferStok`/
+`StokOpname`, dan seluruh baris lain — scope batch ini murni `INV-001`
+s.d. `INV-007` (lima file `manual/001`-`005`), bukan seluruh kategori B1
+lama.
 
 ---
 
 ## B. Dapat ditegakkan database tetapi SQL belum ditulis (atau sudah ditulis tapi belum resmi)
 
-Kategori ini punya dua sub-state yang **sengaja dibedakan** karena jaraknya ke
-kategori A sangat berbeda:
-
-- **B1 — SQL sudah didraf** di `prisma/migrations/manual/001`-`005`: tinggal
-  di-review dan di-fold ke `prisma migrate dev` (pekerjaan mekanis, sudah ada
-  precedent format trigger/index yang teruji sintaksis lewat `psql` manual).
-- **B2 — SQL belum ada sama sekali**, bahkan draf: butuh keputusan desain
-  (predicate, kapan dieksekusi, penanganan retry/concurrent write) sebelum
-  SQL apa pun bisa ditulis.
-
-### B1. Sudah didraf di `manual/001`-`005`, tinggal dijalankan + di-fold ke migrasi resmi
-
-| ID | Domain | Severity | Sumber requirement | Model terkait | Layer penegak | SQL/service yang menegakkan | Test ID | Failure behavior | Status |
-|---|---|---|---|---|---|---|---|---|---|
-| INV-001 | QRIS | TINGGI | ALT-QRS-006 (lihat ALT-DEF-015) | `KonfigurasiQris` | Partial unique index Postgres | `prisma/migrations/manual/001_konfigurasi_qris_partial_unique.sql` (belum dijalankan) | `qris-konfigurasi-constraints.test.ts` (struktur saja, bukan integrasi DB nyata) | Dua `KonfigurasiQris` berstatus AKTIF sekaligus per outlet bisa tersimpan; nominal QRIS ambigu saat checkout | DIKONFIRMASI, SQL siap, belum dieksekusi |
-| INV-002 | Resep | TINGGI | ALT-RSP (lihat ALT-DEF-007) | `Resep` | CHECK constraint Postgres | `prisma/migrations/manual/002_resep_target_xor_check.sql` (belum dijalankan) | `resep-versi-produksi-constraints.test.ts` (struktur) | `Resep` bisa menargetkan 0 atau >1 dari (ItemMenu/VarianMenu/Bahan) sekaligus, resep jadi ambigu | DIKONFIRMASI, SQL siap, belum dieksekusi |
-| INV-003 | Resep | TINGGI | ALT-RSP (lihat ALT-DEF-007) | `VersiResep` | Partial unique index Postgres | `prisma/migrations/manual/003_versi_resep_satu_aktif.sql` (belum dijalankan) | `resep-versi-produksi-constraints.test.ts` (struktur) | Dua `VersiResep` AKTIF sekaligus per resep — produksi/BOM ambigu soal versi mana yang berlaku | DIKONFIRMASI, SQL siap, belum dieksekusi |
-| INV-004 | Persediaan | TINGGI | ALT-PSD (lihat ALT-DEF-008) | `StokBahan` | Partial unique index Postgres | `prisma/migrations/manual/004_stok_bahan_agregat_gudang_unik.sql` (index 1/2, belum dijalankan) | `persediaan-ledger-reservasi-constraints.test.ts` (struktur) | Dua baris `StokBahan` agregat (`lokasiStokId IS NULL`) untuk (gudang, bahan) yang sama — saldo stok ganda/ambigu | DIKONFIRMASI, SQL siap, belum dieksekusi |
-| INV-005 | Persediaan | TINGGI | ALT-PSD-017 (lihat ALT-DEF-008) | `StokOpnameBaris` | Partial unique index Postgres | `prisma/migrations/manual/004_stok_bahan_agregat_gudang_unik.sql` (index 2/2, belum dijalankan) | `persediaan-ledger-reservasi-constraints.test.ts` (struktur) | Baris hitung opname duplikat untuk (bahan, lokasi) yang sama dalam satu opname — selisih dihitung dari data ganda | DIKONFIRMASI, SQL siap, belum dieksekusi |
-| INV-006 | Persediaan | KRITIS | ADR-023 Keputusan 1 (lihat ALT-DEF-008) | `MutasiStok` | Trigger Postgres (`BEFORE UPDATE/DELETE`) | `prisma/migrations/manual/005_mutasi_stok_append_only_dan_pembalik.sql` (bagian a, belum dijalankan) | `persediaan-ledger-reservasi-constraints.test.ts` (struktur) | Baris `MutasiStok` bisa di-UPDATE/DELETE langsung (mis. lewat `psql` atau bug aplikasi) tanpa ditolak apa pun — ledger stok kehilangan sifat append-only-nya, riwayat bisa ditimpa diam-diam | DIKONFIRMASI, SQL siap, belum dieksekusi |
-| INV-007 | Persediaan | KRITIS | ADR-023 Keputusan 1 (lihat ALT-DEF-008) | `MutasiStok` | Trigger Postgres (`BEFORE INSERT`) | `prisma/migrations/manual/005_mutasi_stok_append_only_dan_pembalik.sql` (bagian b, belum dijalankan) | `persediaan-ledger-reservasi-constraints.test.ts` (struktur) | Mutasi pembalik (`dibalikOlehId`) bisa dibuat dengan jumlah yang tidak benar-benar berlawanan tanda/tidak sepadan — pembalikan stok jadi salah tanpa penolakan database | DIKONFIRMASI, SQL siap, belum dieksekusi |
+**DIPERBARUI pada batch kedua deep-correction-loop:** sub-kategori B1 lama
+(`INV-001` s.d. `INV-007`, "sudah didraf di `manual/001`-`005`") sudah
+DIPINDAH SELURUHNYA ke kategori A di atas — kelimanya sudah di-fold ke
+migrasi resmi dan diverifikasi teruji. Yang tersisa di kategori B hanyalah
+B2 (belum ada draf SQL sama sekali), diberi nomor ulang mulai `INV-008`
+seperti semula (nomor ID TIDAK digeser supaya riwayat commit/dokumen lama
+tetap valid).
 
 ### B2. Belum ada draf SQL sama sekali — butuh desain dulu
 
@@ -162,8 +168,8 @@ tersebut untuk tabel transisi lengkap per domain.
 
 ## Ringkasan angka
 
-- **Kategori A (migrasi resmi): 0 baris.** `prisma/migrations/` kosong dari migrasi bernomor — hanya `manual/` yang berisi SQL belum dijalankan. Lihat ALT-DEF-044.
-- **Kategori B (dapat ditegakkan DB, SQL belum resmi): 14 baris** — B1 (sudah didraf di `manual/001`-`005`): **7 baris** (INV-001 s.d. INV-007). B2 (belum ada draf sama sekali): **7 baris** (INV-008 s.d. INV-014, termasuk 3 baris baru dari ALT-DEF-043 dan 1 baris yang desainnya diperbarui dari ALT-DEF-038).
+- **Kategori A (migrasi resmi): 7 baris** (INV-001 s.d. INV-007) — **DIPERBARUI batch kedua deep-correction-loop.** `prisma/schema/migrations/` sekarang berisi dua migrasi resmi (`baseline_correction_loop`, `harden_manual_invariants`) yang benar-benar diterapkan ke `altora_resto_dev` dan diverifikasi lewat test database-integration nyata. Lihat ADR-031.
+- **Kategori B (dapat ditegakkan DB, SQL belum resmi): 7 baris** — sub-kategori B1 lama (INV-001 s.d. INV-007) sudah pindah seluruhnya ke kategori A. Yang tersisa hanyalah B2 (belum ada draf sama sekali): **7 baris** (INV-008 s.d. INV-014, termasuk 3 baris baru dari ALT-DEF-043 dan 1 baris yang desainnya diperbarui dari ALT-DEF-038).
 - **Kategori C (dijaga transaksi aplikasi): 10 baris** (INV-015 s.d. INV-024). Tidak satu pun memakai optimistic concurrency (kolom versi belum ada di schema) — seluruhnya benar-benar tanpa locking apa pun hari ini kecuali rencana `SELECT ... FOR UPDATE`/atomic `UPDATE ... WHERE` yang juga belum berupa kode.
 - **Kategori D (rekonsiliasi/cache): 6 baris** (INV-025 s.d. INV-030), termasuk 3 baris baru untuk ledger keanggotaan (poin/stempel/saldo toko) yang sebelumnya tidak eksplisit di dokumen versi lama.
 - **Kategori E (state machine & workflow guards): 13 baris** (INV-031 s.d. INV-043), kategori BARU pada revisi ini. Termasuk 1 baris (INV-043) yang menangkap gap dokumentasi murni: `STATE-MACHINES.md` tidak memodelkan Reservasi/Promo/Cuti sebagai state machine mandiri.

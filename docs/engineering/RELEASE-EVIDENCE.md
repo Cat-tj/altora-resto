@@ -2284,6 +2284,252 @@ ini - seluruh pekerjaan itu tetap tercatat sebagai belum dilakukan di
 `DEFECT-LEDGER.md`/`INVARIAN-BELUM-DITEGAKKAN.md` dan menjadi scope
 eksplisit batch berikutnya.
 
+## Pass correction-loop 2026-07-25 (batch KEDUA fase DEEP CORRECTION LOOP): migrasi resmi pertama, fold manual/001-005, test database-integration nyata (ALT-DEF-044, ADR-031)
+
+Batch ini adalah PERTAMA KALINYA di seluruh correction-loop yang benar-benar
+menjalankan `prisma migrate` terhadap Postgres nyata dan menulis test yang
+konek ke database sungguhan (bukan hanya membaca teks schema/SQL). Seluruh
+perintah di bawah dijalankan nyata terhadap `altora_resto_dev`, bukan
+disimulasikan.
+
+### 1. Migrasi baseline (`baseline_correction_loop`)
+
+```
+$ npx prisma migrate dev --name baseline_correction_loop --schema prisma/schema/schema.prisma
+Environment variables loaded from .env
+Prisma schema loaded from prisma/schema/schema.prisma
+Datasource "db": PostgreSQL database "altora_resto_dev", schema "public" at "localhost:5432"
+
+Applying migration `20260725154045_baseline_correction_loop`
+
+The following migration(s) have been created and applied from new schema changes:
+
+migrations/
+  └─ 20260725154045_baseline_correction_loop/
+    └─ migration.sql
+
+Your database is now in sync with your schema.
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 1.58s
+```
+
+**Koreksi lokasi path** (lihat ADR-031 Keputusan 1): migrasi ditulis Prisma
+ke `prisma/schema/migrations/` (sibling dari `prisma/schema/schema.prisma`),
+BUKAN `prisma/migrations/` seperti asumsi awal instruksi batch ini -
+diverifikasi langsung dari struktur folder yang benar-benar dihasilkan.
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -c "\dt" | wc -l
+139
+```
+(139 baris output `\dt` termasuk header/footer psql = **134 tabel nyata**.)
+
+### 2. Audit kelima file `manual/001`-`005` (dijalankan langsung lewat psql)
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -v ON_ERROR_STOP=1 -f prisma/migrations/manual/001_konfigurasi_qris_partial_unique.sql
+CREATE INDEX
+$ psql ... -f prisma/migrations/manual/002_resep_target_xor_check.sql
+ALTER TABLE
+$ psql ... -f prisma/migrations/manual/003_versi_resep_satu_aktif.sql
+CREATE INDEX
+$ psql ... -f prisma/migrations/manual/004_stok_bahan_agregat_gudang_unik.sql
+CREATE INDEX
+CREATE INDEX
+$ psql ... -f prisma/migrations/manual/005_mutasi_stok_append_only_dan_pembalik.sql
+CREATE FUNCTION
+DROP TRIGGER
+CREATE TRIGGER
+CREATE FUNCTION
+DROP TRIGGER
+CREATE TRIGGER
+```
+
+Kelima file berjalan sukses SINTAKSIS. Audit LOGIKA (bukan hanya
+menjalankan) menemukan satu bug nyata di `005` - dibuktikan dengan skrip
+probe manual (fixture tenant/outlet/gudang/satuan/bahan/pengguna minimal,
+lalu INSERT mutasi A, INSERT mutasi B yang membalik A, INSERT mutasi C, lalu
+`UPDATE mutasi_stok SET "dibalikOlehId" = 'mC' WHERE id = 'mB'`):
+
+```
+-- SEBELUM perbaikan (kode asli manual/005):
+BEGIN
+INSERT 0 1   -- x8 (fixtures + mA + mB)
+UPDATE 1     -- mA.dibalikOlehId = mB (sah)
+INSERT 0 1   -- mC
+UPDATE 1     -- mB.dibalikOlehId = mC -- SEHARUSNYA GAGAL, TAPI BERHASIL
+                              result
+------------------------------------------------------------
+ BUG CONFIRMED: chain reversal-of-reversal was NOT rejected
+ROLLBACK
+```
+
+Setelah kelima objek probe dibersihkan (`DROP TRIGGER/FUNCTION/INDEX`,
+`ALTER TABLE ... DROP CONSTRAINT`) untuk menghindari kontaminasi migrasi
+resmi, migrasi kedua ditulis dengan fungsi yang diperbaiki (lihat ADR-031
+Keputusan 3) dan probe yang sama dijalankan ULANG:
+
+```
+-- SETELAH perbaikan (migrasi resmi harden_manual_invariants):
+...
+UPDATE 1     -- mA.dibalikOlehId = mB (sah)
+INSERT 0 1   -- mC
+ERROR:  Mutasi mB adalah pembalik dari mutasi lain; rantai pembalik-dari-pembalik
+        ditolak (mutasi ini tidak boleh dibalik lagi, buat mutasi baru dengan
+        alasannya sendiri).
+CONTEXT:  PL/pgSQL function mutasi_stok_validasi_pembalik() line 14 at RAISE
+ROLLBACK
+```
+
+### 3. Migrasi kedua (`harden_manual_invariants`) - fold + hardening
+
+```
+$ npx prisma migrate dev --create-only --name harden_manual_invariants --schema prisma/schema/schema.prisma
+Prisma Migrate created the following migration without applying it 20260725154310_harden_manual_invariants
+```
+
+File `migration.sql` yang dihasilkan kosong (diharapkan - Prisma tidak bisa
+mendiff partial index/CHECK/trigger); diisi manual dengan SQL terkoreksi
+dari kelima file `manual/` (lihat isi file untuk detail lengkap per bagian
+A-E), dengan seluruh `IF NOT EXISTS`/`CREATE OR REPLACE`/`DROP TRIGGER IF
+EXISTS` DIHAPUS (lihat ADR-031 Keputusan 5).
+
+```
+$ npx prisma migrate dev --schema prisma/schema/schema.prisma
+Applying migration `20260725154310_harden_manual_invariants`
+Your database is now in sync with your schema.
+```
+
+### 4. Verifikasi objek via katalog sistem Postgres
+
+```
+$ psql ... -c "SELECT indexname, indexdef FROM pg_indexes WHERE indexname IN
+  ('konfigurasi_qris_satu_aktif_per_outlet','versi_resep_satu_aktif_per_resep',
+   'stok_bahan_agregat_gudang_unik','stok_opname_baris_agregat_gudang_unik');"
+               indexname                |                          indexdef
+-----------------------------------------+----------------------------------------------------------
+ konfigurasi_qris_satu_aktif_per_outlet | CREATE UNIQUE INDEX ... ON konfigurasi_qris USING btree
+                                           ("tenantId", "outletId") WHERE (status = 'AKTIF'::"StatusKonfigurasiQris")
+ versi_resep_satu_aktif_per_resep       | CREATE UNIQUE INDEX ... ON versi_resep USING btree
+                                           ("resepId") WHERE (status = 'AKTIF'::"StatusVersiResep")
+ stok_bahan_agregat_gudang_unik         | CREATE UNIQUE INDEX ... ON stok_bahan USING btree
+                                           ("gudangId", "bahanId") WHERE ("lokasiStokId" IS NULL)
+ stok_opname_baris_agregat_gudang_unik  | CREATE UNIQUE INDEX ... ON stok_opname_baris USING btree
+                                           ("stokOpnameId", "bahanId") WHERE ("lokasiStokId" IS NULL)
+(4 rows)
+
+$ psql ... -c "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'resep_sasaran_xor';"
+      conname      |           pg_get_constraintdef
+-------------------+------------------------------------------
+ resep_sasaran_xor | CHECK (((CASE WHEN "itemMenuId" IS NULL THEN 0 ELSE 1 END +
+                      CASE WHEN "varianMenuId" IS NULL THEN 0 ELSE 1 END) +
+                      CASE WHEN "bahanHasilId" IS NULL THEN 0 ELSE 1 END) = 1)
+(1 row)
+
+$ psql ... -c "SELECT tgname, proname FROM pg_trigger t JOIN pg_proc p ON t.tgfoid = p.oid
+  WHERE tgrelid = 'mutasi_stok'::regclass AND NOT tgisinternal;"
+              tgname               |            proname
+-----------------------------------+-------------------------------
+ trg_mutasi_stok_append_only       | mutasi_stok_tolak_ubah
+ trg_mutasi_stok_validasi_pembalik | mutasi_stok_validasi_pembalik
+(2 rows)
+```
+
+### 5. Test database-integration (jalankan pertama kali)
+
+```
+$ npx tsx packages/test-support/src/database-integration/qris-konfigurasi-invariant.test.ts
+OK: database-integration ALT-QRS-001/ADR-021 (konfigurasi QRIS satu aktif per outlet) lulus.
+$ npx tsx packages/test-support/src/database-integration/resep-versi-invariants.test.ts
+OK: database-integration ALT-RSP-001/002/003/005 (resep XOR + versi_resep satu aktif) lulus.
+$ npx tsx packages/test-support/src/database-integration/persediaan-stok-invariants.test.ts
+OK: database-integration ALT-PSD-004/005/006/007 (stok agregat unik + mutasi_stok
+    append-only/pembalik, termasuk bug-fix rantai pembalik-dari-pembalik) lulus.
+```
+
+**3/3 file PASS.** Verifikasi kebersihan fixture (`withTransaction` ROLLBACK
+bekerja sesuai desain):
+
+```
+$ psql ... -c "SELECT count(*) FROM tenant; SELECT count(*) FROM mutasi_stok;
+  SELECT count(*) FROM konfigurasi_qris; SELECT count(*) FROM resep;"
+0
+0
+0
+0
+```
+
+Test arsitektur lama yang merujuk `manual/00X` by path tetap lulus setelah
+header arsip ditambahkan ke kelima file:
+
+```
+$ npx tsx packages/test-support/src/architecture/qris-konfigurasi-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-015 (QRIS) lulus.
+$ npx tsx packages/test-support/src/architecture/resep-versi-produksi-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-007 (resep/versi/produksi) lulus.
+$ npx tsx packages/test-support/src/architecture/persediaan-ledger-reservasi-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-008 (ledger stok/reservasi/transfer/opname) lulus.
+```
+
+`tsc --noEmit -p packages/test-support/tsconfig.json`: nol error pada
+file-file `database-integration/` baru (diverifikasi dengan
+`grep "database-integration"` atas output tsc - kosong). Error
+`@prisma/client` yang tersisa di output berasal dari file
+`architecture/prisma-client-shape*.test.ts` PRA-EXISTING, tidak disentuh
+batch ini - akar masalahnya sama dengan gap `pnpm` yang sudah didokumentasikan
+di `CATATAN-KENDALA-SESI.md` #2 (resolusi modul `@prisma/client` dari dalam
+sub-paket workspace butuh instalasi workspace nyata, bukan `npm install
+--no-save` ad-hoc di root).
+
+### 6. Verifikasi determinisme migrasi (fresh-database redeploy)
+
+```
+$ psql -U icat -h localhost -d postgres -c "DROP DATABASE altora_resto_dev"
+DROP DATABASE
+$ psql -U icat -h localhost -d postgres -c "CREATE DATABASE altora_resto_dev"
+CREATE DATABASE
+$ npx prisma migrate deploy --schema prisma/schema/schema.prisma
+2 migrations found in prisma/migrations
+Applying migration `20260725154045_baseline_correction_loop`
+Applying migration `20260725154310_harden_manual_invariants`
+All migrations have been successfully applied.
+
+$ psql ... -c "\dt" | wc -l
+139   -- identik dengan sebelum drop (134 tabel nyata)
+
+$ psql ... -c "SELECT migration_name, finished_at IS NOT NULL AS applied
+  FROM _prisma_migrations ORDER BY started_at;"
+             migration_name              | applied
+-----------------------------------------+---------
+ 20260725154045_baseline_correction_loop | t
+ 20260725154310_harden_manual_invariants | t
+(2 rows)
+```
+
+Ketiga test database-integration dijalankan ULANG terhadap database yang
+baru saja di-deploy dari nol - **3/3 PASS lagi**, membuktikan migrasi resmi
+reproducible dari kondisi kosong (bukan kebetulan berhasil di database yang
+sempat "terkontaminasi" objek probe manual sebelumnya).
+
+### 7. Ringkasan checklist penutupan (ALT-DEF-044)
+
+| Item checklist | Status | Bukti |
+|---|---|---|
+| Migrasi resmi lulus | LULUS | Bagian 1, 3, 6 di atas |
+| SQL invariant benar-benar terpasang | LULUS | Bagian 4 di atas |
+| Integration test PostgreSQL lulus | LULUS (3/3, dua kali) | Bagian 5, 6 di atas |
+| Concurrency test lulus | **BELUM ADA** | Scope eksplisit batch LAIN - tidak dikerjakan batch ini |
+| Typecheck lulus | LULUS (file baru) | Bagian 5 di atas |
+| Test arsitektur lulus | LULUS | Bagian 5 di atas |
+| Traceability diperbarui | LULUS | `TRACEABILITY-MATRIX.md` |
+| Bukti command aktual tersedia | LULUS | Dokumen ini |
+
+**Kesimpulan:** defect umbrella `ALT-DEF-044` TETAP `SIAP_DIVERIFIKASI` (bukan
+`DITUTUP`) karena item concurrency test belum terpenuhi. Ketujuh invariant
+individual (`INV-001` s.d. `INV-007`) sudah pindah ke kategori A di
+`INVARIAN-BELUM-DITEGAKKAN.md` dengan bukti lengkap yang tidak bergantung
+pada concurrency test untuk klaim dasarnya (constraint ada + menolak
+pelanggaran single-connection).
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```

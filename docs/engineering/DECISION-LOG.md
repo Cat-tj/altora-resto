@@ -2539,3 +2539,188 @@ ADR ini). **TIDAK disentuh (sesuai instruksi eksplisit batch ini):**
 apa pun yang dijalankan terhadap `altora_resto_dev` meski koneksinya
 tersedia dan terverifikasi bekerja - itu pekerjaan batch kedua fase
 deep-correction-loop.
+
+---
+
+## ADR-031: Migrasi resmi pertama dijalankan nyata, fold manual/001-005 ke migrasi, satu bug logika ditemukan dan diperbaiki (ALT-DEF-044)
+
+**Konteks.** ADR-030 (batch pertama fase deep-correction-loop) murni
+restrukturisasi dokumen - `ALT-DEF-044` dicatat sebagai master-defect yang
+menangkap fakta bahwa `prisma/migrations/manual/001` s.d. `005` adalah jalur
+deployment paralel yang TIDAK PERNAH dibaca `prisma migrate deploy`. Batch
+ini (batch kedua) mengerjakan penutupannya secara nyata: menjalankan migrasi
+resmi Prisma pertama kali terhadap `altora_resto_dev`, mengaudit kelima file
+manual dengan benar-benar menjalankannya lewat `psql`, memfoldnya ke migrasi
+resmi, dan menulis test integrasi Postgres nyata.
+
+**Keputusan 1 - Lokasi migrasi resmi adalah `prisma/schema/migrations/`,
+BUKAN `prisma/migrations/` seperti asumsi awal batch ini.** Prisma CLI
+menaruh folder `migrations/` sebagai SIBLING dari file schema yang dirujuk
+`--schema`. Karena `schema.prisma` proyek ini berada di `prisma/schema/
+schema.prisma` (bukan `prisma/schema.prisma`), `prisma migrate dev`/`deploy`
+SELALU membaca dan menulis `prisma/schema/migrations/`, tidak ada opsi
+konfigurasi di Prisma 5.x untuk mengarahkannya ke path lain. Ini
+diverifikasi empiris: `npx prisma migrate dev --name baseline_correction_loop`
+menghasilkan `prisma/schema/migrations/20260725154045_baseline_correction_loop/`,
+bukan `prisma/migrations/20260725...`. `prisma/migrations/manual/` (folder
+lama, sudah ada sebelum batch ini) tetap berada di lokasi terpisah dan tidak
+pernah otomatis dibaca tooling apa pun - koreksi lokasi ini TIDAK mengubah
+kesimpulan `ALT-DEF-044` (manual/ tetap bukan jalur deployment yang dibaca
+Prisma), hanya mengoreksi asumsi path yang salah di deskripsi tugas awal.
+
+**Keputusan 2 - Migrasi baseline dibuat dari `schema.prisma` apa adanya,
+tanpa perubahan model.** `npx prisma migrate dev --name
+baseline_correction_loop --schema prisma/schema/schema.prisma` dijalankan
+terhadap `altora_resto_dev` yang kosong total (0 tabel sebelumnya) dan
+menghasilkan 134 tabel (bukan ~133 seperti estimasi awal - `\dt` menghitung
+134 baris persis; angka pasti tidak pernah dicatat presisi di dokumen
+sebelumnya, jadi ini bukan penyimpangan, hanya konfirmasi pertama kalinya
+dihitung nyata). Migrasi ini BERHASIL tanpa error - tidak ada constraint
+yang saling bertentangan atau tipe kolom yang tidak didukung provider,
+membuktikan risiko yang dicatat `ALT-DEF-029` ("belum ada bukti bahwa
+schema saat ini benar-benar bisa diterapkan ke database nyata") tidak
+terwujud pada schema versi ini.
+
+**Keputusan 3 - Audit kelima file `manual/001` s.d. `005`: NOL bug pada
+empat file, SATU bug logika nyata pada file kelima.** Setiap file dijalankan
+langsung lewat `psql -f prisma/migrations/manual/00X_*.sql -v
+ON_ERROR_STOP=1` terhadap `altora_resto_dev` (setelah migrasi baseline
+diterapkan), lalu objek yang dihasilkan dibandingkan terhadap DDL nyata yang
+dihasilkan Prisma pada Keputusan 2.
+
+- `001_konfigurasi_qris_partial_unique.sql`: berjalan sukses tanpa error.
+  Nama tabel (`konfigurasi_qris`) dan kolom (`"tenantId"`, `"outletId"`,
+  `status`) cocok persis dengan DDL baseline. **Nol bug.**
+- `002_resep_target_xor_check.sql`: berjalan sukses tanpa error. Nama tabel
+  (`resep`) dan kolom (`"itemMenuId"`, `"varianMenuId"`, `"bahanHasilId"`)
+  cocok persis. **Nol bug.**
+- `003_versi_resep_satu_aktif.sql`: berjalan sukses tanpa error. Nama tabel
+  (`versi_resep`) dan kolom (`"resepId"`, `status`) cocok persis. **Nol bug.**
+- `004_stok_bahan_agregat_gudang_unik.sql`: kedua index berjalan sukses
+  tanpa error. Nama tabel (`stok_bahan`, `stok_opname_baris`) dan kolom
+  (`"gudangId"`, `"bahanId"`, `"lokasiStokId"`, `"stokOpnameId"`) cocok
+  persis. **Nol bug.**
+- `005_mutasi_stok_append_only_dan_pembalik.sql`: kedua fungsi dan kedua
+  trigger berjalan sukses tanpa error SINTAKSIS - TAPI audit LOGIKA (bukan
+  cuma menjalankannya) menemukan satu bug nyata di fungsi
+  `mutasi_stok_validasi_pembalik()`:
+
+  **Bug: rantai pembalik-dari-pembalik LOLOS, bertentangan dengan komentar
+  file itu sendiri.** Komentar file (baris 87-93 versi asli) menyatakan
+  eksplisit: "Rantai pembalik-dari-pembalik juga ditolak - membalik sebuah
+  pembalikan adalah operasi yang harus ditulis sebagai mutasi baru dengan
+  alasannya sendiri". Kode ASLI TIDAK PERNAH memeriksa hal itu. Satu-satunya
+  pemeriksaan "rantai" yang ada adalah `IF p."dibalikOlehId" IS NOT NULL`,
+  di mana `p` adalah CALON PEMBALIK BARU (mis. mutasi C) - pemeriksaan itu
+  hanya mendeteksi "apakah C sendiri sudah pernah dibalik oleh mutasi lain",
+  BUKAN "apakah baris yang sedang ditandai dibalik (mis. mutasi B) itu
+  sendiri sudah menjadi pembalik bagi mutasi lain (mis. B membalik A)".
+  Dibuktikan dengan skrip probe manual sebelum perbaikan (lihat riwayat git
+  batch ini): INSERT mutasi A (+10), INSERT mutasi B (-10) yang membalik A
+  (`UPDATE mutasi_stok SET "dibalikOlehId" = B WHERE id = A`, berhasil sah),
+  lalu INSERT mutasi C (+10) dan `UPDATE mutasi_stok SET "dibalikOlehId" = C
+  WHERE id = B` - UPDATE ini SEHARUSNYA ditolak (B adalah pembalik, tidak
+  boleh dibalik lagi) tapi pada kode asli **BERHASIL tanpa exception**.
+  **Dampak bila tidak diperbaiki:** rantai A<-B<-C<-D<-... bisa terbentuk
+  tanpa batas, membuat saldo bersih satu bahan di satu gudang sulit
+  ditelusuri persis skenario yang komentar file itu sendiri bilang harus
+  dicegah - kelas bug "constraint yang tampak menegakkan aturan padahal
+  tidak", yang beberapa keputusan lain di ADR-021/022/023 secara eksplisit
+  bilang lebih berbahaya daripada tidak ada constraint sama sekali.
+  **Perbaikan** (di migrasi resmi, lihat Keputusan 4): tambahkan pemeriksaan
+  baru di awal fungsi - sebelum `NEW."dibalikOlehId"` diizinkan terisi, cek
+  `EXISTS (SELECT 1 FROM mutasi_stok WHERE "dibalikOlehId" = NEW.id)`; bila
+  true (artinya `NEW` sudah menjadi pembalik bagi baris lain), tolak dengan
+  pesan yang eksplisit menyebut "rantai pembalik-dari-pembalik ditolak".
+  Diverifikasi ulang dengan skrip probe yang sama setelah perbaikan: UPDATE
+  yang sama sekarang gagal dengan pesan yang benar (lihat
+  `RELEASE-EVIDENCE.md`). Pemeriksaan lama (`p."dibalikOlehId" IS NOT NULL`)
+  DIPERTAHANKAN sebagai guard tambahan (mencegah C yang sudah dipakai
+  membalik sesuatu dipakai lagi) - pesan errornya diperjelas supaya tidak
+  disalahartikan sebagai pemeriksaan rantai yang benar.
+
+**Keputusan 4 - Kelima file di-fold ke SATU migrasi resmi
+`harden_manual_invariants`, dibuat lewat `prisma migrate dev
+--create-only`.** File `migration.sql` yang dihasilkan Prisma kosong
+(diharapkan - partial index/CHECK/trigger tidak bisa direpresentasikan di
+`schema.prisma`, jadi diffing Prisma tidak menghasilkan apa pun secara
+otomatis). Isinya ditulis tangan berisi SQL terkoreksi dari kelima file
+manual (dengan bug Keputusan 3 sudah diperbaiki), dikelompokkan per bagian
+(A) s.d. (E) dengan komentar yang merujuk balik ke `ALT-XXX`/ADR asal
+masing-masing. Diterapkan lewat `prisma migrate dev` (masih fase iterasi
+dev) - lihat `RELEASE-EVIDENCE.md` untuk output lengkap.
+
+**Keputusan 5 - `IF NOT EXISTS`/`CREATE OR REPLACE`/`DROP TRIGGER IF EXISTS`
+DIHAPUS dari migrasi resmi.** File manual asli memakainya sebagai
+defensiveness karena ditulis untuk dijalankan manual berulang kali lewat
+`psql` tanpa pelacakan status (developer bisa saja menjalankannya dua kali
+tanpa sengaja). Migrasi resmi Prisma TIDAK PERNAH punya masalah itu - setiap
+migrasi hanya diterapkan SEKALI per database, dilacak permanen di tabel
+`_prisma_migrations`, dan `prisma migrate deploy` menolak menerapkan ulang
+migrasi yang sudah tercatat sukses. Dengan begitu, defensiveness itu tidak
+pernah dibutuhkan untuk idempotency yang sah - dan berbahaya karena bisa
+MENDIAMKAN drift produksi nyata: bila suatu saat ada object dengan nama
+sama tapi definisi BERBEDA (mis. seseorang membuat index/trigger manual di
+luar Prisma dengan nama kebetulan sama), `CREATE ... IF NOT EXISTS` akan
+diam-diam SKIP (meninggalkan definisi lama yang salah) dan `CREATE OR
+REPLACE FUNCTION` akan diam-diam MENIMPA (mengganti definisi tanpa
+peringatan) - keduanya membuat migrasi "sukses" secara laporan padahal
+keadaan database berbeda dari yang dimaksud. Bentuk polos (`CREATE UNIQUE
+INDEX`, `CREATE FUNCTION`, `CREATE TRIGGER` tanpa modifier apa pun) membuat
+konflik nama GAGAL KERAS - sesuai instruksi eksplisit batch ini ("migrasi
+harus gagal bila object dengan nama sama memiliki definisi berbeda").
+
+**Keputusan 6 - `prisma/migrations/manual/` DIPERTAHANKAN (bukan dihapus),
+dengan header arsip eksplisit di setiap file + `README.md` baru.** Sebelum
+memutuskan, dilakukan `grep -rl "migrations/manual"` ke seluruh
+`docs/`+`packages/`+`apps/` - ditemukan TIGA test arsitektur yang masih
+membaca file-file ini sebagai teks by path
+(`packages/test-support/src/architecture/qris-konfigurasi-constraints.test.ts`,
+`resep-versi-produksi-constraints.test.ts`,
+`persediaan-ledger-reservasi-constraints.test.ts`), plus banyak referensi
+dokumentasi historis (`docs/database/*.md`, `DEFECT-LEDGER.md`, dst).
+Menghapus folder akan mematahkan test-test itu (`readFileSync` akan
+melempar `ENOENT`). Opsi (b) dipilih: setiap file diberi header
+"ARSIP HISTORIS - TIDAK DIJALANKAN OLEH TOOLING APA PUN" yang menunjuk ke
+migrasi resmi, plus `prisma/migrations/manual/README.md` baru dengan
+penjelasan lengkap. Diverifikasi setelah perubahan: ketiga test arsitektur
+di atas tetap lulus (`npx tsx <file>.test.ts` masing-masing mencetak "OK").
+
+**Keputusan 7 - Verifikasi determinisme migrasi: `DROP DATABASE` +
+`CREATE DATABASE` + `prisma migrate deploy` dari nol menghasilkan struktur
+IDENTIK.** `altora_resto_dev` di-drop dan dibuat ulang kosong, lalu `npx
+prisma migrate deploy` dijalankan (bukan `migrate dev` - mensimulasikan
+jalur deployment CI/CD nyata). Kedua migrasi (`baseline_correction_loop`,
+`harden_manual_invariants`) diterapkan berurutan sesuai prefix timestamp,
+sukses tanpa error, menghasilkan 134 tabel yang sama. Ketiga file test
+database-integration (lihat Keputusan 8) dijalankan ulang terhadap database
+yang baru di-deploy ini dan LULUS 3/3 - membuktikan migrasi resmi
+reproducible dari kondisi kosong, bukan hanya "kebetulan berhasil" di
+database yang sempat diaudit manual sebelumnya (yang objeknya sempat dibuat
+lalu di-DROP lagi sebelum migrasi resmi ditulis, persis untuk menghindari
+kontaminasi ini).
+
+**Keputusan 8 - Test database-integration BARU ditulis di
+`packages/test-support/src/database-integration/`, kategori terpisah dari
+`src/architecture/`.** Berbeda dari test arsitektur (membaca teks
+`schema.prisma`/file SQL manual, tidak butuh Postgres), test-test ini konek
+ke Postgres nyata lewat driver `pg` (`DATABASE_URL` dari `.env`), memverifikasi
+EXISTENCE lewat `pg_indexes`/`pg_constraint`/`pg_trigger`/`pg_proc`, DAN
+BEHAVIORAL lewat INSERT/UPDATE yang seharusnya ditolak. Kebersihan data:
+setiap test dibungkus `withTransaction()` yang SELALU `ROLLBACK` di akhir
+(bukan `DELETE` eksplisit) - dipilih karena lebih aman terhadap exception di
+tengah jalan dan karena trigger `mutasi_stok` butuh diuji dalam urutan
+INSERT/UPDATE yang realistis dalam satu transaksi. `expectReject()` memakai
+`SAVEPOINT` supaya statement yang sengaja gagal tidak membatalkan seluruh
+transaksi test. Hasil nyata (lihat `RELEASE-EVIDENCE.md` untuk transkrip
+lengkap): **3 file, 3 PASS**, termasuk assertion eksplisit yang membuktikan
+bug-fix Keputusan 3 (rantai pembalik-dari-pembalik sekarang benar-benar
+ditolak).
+
+**Status ALT-DEF-044 setelah batch ini:** lihat penjelasan lengkap di
+`DEFECT-LEDGER.md` - ringkasnya, invariant individual `INV-001` s.d.
+`INV-007` (yang sebelumnya kategori B1 di
+`INVARIAN-BELUM-DITEGAKKAN.md`) dipindah ke kategori A (tertegakkan +
+teruji), tapi defect umbrella `ALT-DEF-044` sendiri TETAP TIDAK DITUTUP -
+checklist penutupan defect eksplisit meminta "concurrency test lulus" yang
+BELUM ditulis pada batch ini (scope batch berikutnya).
