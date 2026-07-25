@@ -669,18 +669,43 @@ sendiri - lihat ADR-027 untuk catatan pendekatan ini.
 
 ## 14. Karyawan & Absensi (`packages/karyawan`, `packages/absensi`)
 
+Status: **DIROMBAK (ALT-DEF-019/ALT-DEF-024/ALT-DEF-025, ADR-028)** - lihat
+`docs/database/12-karyawan-absensi.md` dan `docs/arsitektur/STATE-MACHINES.md`
+bagian 9 (Koreksi Absensi) dan 10 (Tukar Shift) untuk alur approval lengkap.
+
 | Metode | Path | Deskripsi |
 |---|---|---|
 | GET | `/api/v1/karyawan` | Daftar karyawan. |
 | POST | `/api/v1/karyawan` | Tambah karyawan baru. |
+| GET | `/api/v1/karyawan/{id}` | Detail karyawan, termasuk `HubunganKerja` aktif (jabatan/departemen saat ini). |
+| PATCH | `/api/v1/karyawan/{id}/status` | Ubah status employment (`AKTIF`/`CUTI`/`NONAKTIF`). |
 | GET | `/api/v1/jabatan` | Daftar jabatan. |
-| GET | `/api/v1/jadwal-shift` | Daftar shift per outlet. |
-| POST | `/api/v1/jadwal-shift/{id}/penugasan` | Tugaskan karyawan ke shift pada tanggal tertentu. |
-| POST | `/api/v1/absensi/masuk` | Presensi masuk (QR/PIN/GPS). |
-| POST | `/api/v1/absensi/{id}/pulang` | Presensi pulang. |
-| POST | `/api/v1/absensi/koreksi` | Koreksi manual oleh supervisor (baris absensi baru, `MANUAL_SUPERVISOR`). |
+| GET | `/api/v1/departemen` | Daftar departemen. |
+| PUT | `/api/v1/karyawan/{id}/outlet` | Kelola `KaryawanOutlet` (tambah/hapus outlet, tandai `isUtama`) - **menggantikan** `outletUtamaId` lama (ALT-DEF-019, breaking change). |
+| POST | `/api/v1/karyawan/{id}/hubungan-kerja` | Buka `HubunganKerja` baru (mis. promosi/mutasi departemen); `HubunganKerja` lama otomatis ditutup (`berakhirPada = now()`, `status = NONAKTIF`) oleh service-layer, tidak dihapus. |
+| GET | `/api/v1/template-shift` | Daftar template shift per outlet (rename dari `jadwal-shift`). |
+| POST | `/api/v1/template-shift` | Buat template shift baru (`jamMulai`/`jamSelesai` "HH:mm", `lintasTengahMalam`). |
+| GET | `/api/v1/jadwal-kerja` | Daftar jadwal kerja (penugasan template shift ke karyawan per tanggal, rename dari `penugasan-shift`). |
+| POST | `/api/v1/jadwal-kerja` | Tugaskan karyawan ke template shift pada tanggal tertentu. |
+| POST | `/api/v1/pola-jadwal-berulang` | Buat pola jadwal berulang; job/service-layer men-generate baris `JadwalKerja` individual pada rentang tanggal yang cocok (ADR-028 Keputusan 4). |
+| POST | `/api/v1/jadwal-kerja/tukar` | Ajukan tukar shift (`PermintaanTukarShift`, `DIAJUKAN`). |
+| POST | `/api/v1/jadwal-kerja/tukar/{id}/setujui-rekan` | Rekan (`karyawanPengganti`) menyetujui (`DIAJUKAN -> DISETUJUI_REKAN`). |
+| POST | `/api/v1/jadwal-kerja/tukar/{id}/setujui-manajer` | Manajer menyetujui akhir (`DISETUJUI_REKAN -> DISETUJUI_MANAJER`), memindahkan kepemilikan `JadwalKerja`. |
+| POST | `/api/v1/jadwal-kerja/tukar/{id}/tolak` | Tolak permintaan tukar shift. |
+| POST | `/api/v1/absensi/masuk` | Presensi masuk (QR/PIN/GPS) - **wajib `Idempotency-Key`** (lihat 17.1, cegah duplikat check-in dari tap ganda). Body dapat menyertakan `lokasiLat`/`lokasiLng` (metode `GPS`) dan `perangkatId` (bila tenant mengaktifkan pembatasan perangkat, `ALT-HR-017`). |
+| POST | `/api/v1/absensi/{id}/pulang` | Presensi pulang - **wajib `Idempotency-Key`**. |
+| POST | `/api/v1/absensi/{id}/istirahat/mulai` | Mulai istirahat (`IstirahatAbsensi` baru, `selesaiPada = NULL`). |
+| POST | `/api/v1/absensi/{id}/istirahat/selesai` | Tutup istirahat aktif terakhir (`selesaiPada = now()`). |
+| GET | `/api/v1/absensi/{id}/lembur` | Hitung jam lembur dari durasi kerja aktual vs jadwal shift. |
+| POST | `/api/v1/absensi/koreksi` | Ajukan koreksi absensi (`KoreksiAbsensi` baru, `DIAJUKAN`) - **TIDAK menimpa `Absensi` asli**, lihat ADR-028 Keputusan 5. |
+| POST | `/api/v1/absensi/koreksi/{id}/setujui` | Setujui koreksi (`DIAJUKAN -> DISETUJUI`) - menulis `Absensi.jamMasukEfektif`/`jamPulangEfektif`, `jamMasuk`/`jamPulang` asli tidak berubah. |
+| POST | `/api/v1/absensi/koreksi/{id}/tolak` | Tolak koreksi (`DIAJUKAN -> DITOLAK`) - tidak ada perubahan pada `Absensi`. |
 | POST | `/api/v1/cuti-izin` | Ajukan cuti/izin. |
 | POST | `/api/v1/cuti-izin/{id}/setujui` | Setujui/tolak pengajuan cuti. |
+| POST | `/api/v1/lembur` | Ajukan permintaan lembur (`PermintaanLembur`). |
+| POST | `/api/v1/lembur/{id}/setujui` | Setujui/tolak permintaan lembur. |
+| POST | `/api/v1/karyawan/{id}/target-kinerja` | Tetapkan target kinerja periode tertentu. |
+| POST | `/api/v1/karyawan/{id}/penilaian-kinerja` | Catat penilaian kinerja periode tertentu (tidak menimpa penilaian lama). |
 
 ## 15. Keuangan Internal (`packages/keuangan`)
 
@@ -741,6 +766,9 @@ setiap baris tabel endpoint pada dokumen ini untuk detail per-endpoint):
 | reservasi stok (`ALT-DEF-008`) | `POST /api/v1/reservasi-stok` |
 | penukaran poin | `POST /api/v1/keanggotaan/{id}/tukar-poin` |
 | penerapan promo | `POST /api/v1/pesanan/{id}/promo` |
+| presensi masuk (`ALT-DEF-019`/`ALT-HR-009`) | `POST /api/v1/absensi/masuk` - tap ganda pada layar presensi (jaringan lambat, karyawan menekan ulang) adalah footgun nyata; tanpa idempotensi berpotensi membuat baris `Absensi` ganda untuk satu kedatangan yang sama, merusak perhitungan lembur/keterlambatan |
+| presensi pulang (`ALT-DEF-019`/`ALT-HR-010`) | `POST /api/v1/absensi/{id}/pulang` - retry tanpa idempotensi berisiko menimpa/menggandakan pencatatan `jamPulang` |
+| koreksi absensi (`ALT-DEF-019`/`ALT-HR-015`) | `POST /api/v1/absensi/koreksi` - retry tanpa idempotensi menghasilkan baris `KoreksiAbsensi` ganda untuk satu pengajuan yang sama |
 
 Perilaku wajib (lihat `docs/database/15-platform-infra.md` bagian
 `IdempotencyKey` untuk alur lengkap): key yang sama + payload sama (hash

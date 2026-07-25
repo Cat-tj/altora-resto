@@ -465,6 +465,88 @@ Catatan penting yang TIDAK terlihat langsung di diagram:
 | DITERIMA_SEBAGIAN | DITERIMA | GUDANG outlet tujuan (izin `persediaan.transfer.terima`) + **wajib `Idempotency-Key`** | Sisa baris kini punya `jumlahDiterima == jumlahDikirim` | `MutasiStok` `TRANSFER_MASUK` untuk sisa baris saja - baris yang sudah punya `mutasiMasukId` **tidak** diposting ulang | `inventory.transfer_received` | `transfer_stok_sisa_diterima_tanpa_posting_ganda` |
 | DITERIMA_SEBAGIAN | DIBATALKAN | MANAJER/OWNER (izin `persediaan.transfer.setujui`) | Approval supervisor; `catatan` wajib berisi perlakuan selisih | Selisih (`jumlahDikirim - jumlahDiterima`) **wajib** dicatat sebagai `CatatanWaste` (`AlasanWaste` hilang-dalam-perjalanan) atau `PenyesuaianStok` beralasan - selisih TIDAK boleh menghilang tanpa jejak ledger | `inventory.transfer_cancelled` | `transfer_stok_sisa_dibatalkan_selisih_jadi_waste` |
 
+## 9. Koreksi Absensi
+
+**BARU pada ALT-DEF-019/ALT-DEF-025** (ADR-028 Keputusan 5, crux decision).
+`Absensi.jamMasuk`/`jamPulang` IMMUTABLE - flow ini adalah SATU-SATUNYA cara
+sah mengubah apa yang dianggap "waktu presensi efektif" (`jamMasukEfektif`/
+`jamPulangEfektif` pada baris `Absensi` asli), lewat approval eksplisit.
+
+```mermaid
+stateDiagram-v2
+    [*] --> DIAJUKAN: koreksi diajukan (karyawan/supervisor)
+    DIAJUKAN --> DISETUJUI: supervisor/manajer menyetujui
+    DIAJUKAN --> DITOLAK: supervisor/manajer menolak
+    DISETUJUI --> [*]
+    DITOLAK --> [*]
+```
+
+Catatan penting yang TIDAK terlihat langsung di diagram:
+
+- **`DISETUJUI` dan `DITOLAK` adalah status TERMINAL - tidak ada jalur balik
+  ke `DIAJUKAN`.** Pengajuan koreksi baru atas `Absensi` yang sama (mis.
+  setelah ditolak, diajukan ulang dengan alasan/nilai berbeda) selalu
+  menjadi baris `KoreksiAbsensi` BARU, bukan membuka kembali baris lama -
+  relasi `Absensi -> KoreksiAbsensi` sengaja one-to-many.
+- **`DISETUJUI` adalah SATU-SATUNYA transisi yang punya side effect pada
+  tabel lain.** `DITOLAK` tidak menyentuh `Absensi` sama sekali.
+- `jamMasukSebelum`/`jamPulangSebelum` adalah SNAPSHOT yang diambil saat
+  pengajuan (bukan referensi hidup) - bila `Absensi` berubah lagi sebelum
+  koreksi ini diproses (mis. koreksi lain lebih dulu disetujui), snapshot
+  tetap merepresentasikan apa yang dilihat pengaju saat itu, bukan nilai
+  terkini.
+
+### Tabel transisi lengkap
+
+| statusAsal | statusTujuan | aktorDiizinkan | guard | sideEffect | auditEvent | testRequired |
+|---|---|---|---|---|---|---|
+| (baru) | DIAJUKAN | Karyawan pemilik `Absensi`, atau supervisor (izin `absensi.koreksi.kelola`) | `absensiId` valid dan milik tenant/outlet aktor; minimal satu dari `jamMasukSesudah`/`jamPulangSesudah` diisi; `alasan` wajib | Buat `KoreksiAbsensi` (`jamMasukSebelum`/`jamPulangSebelum` = snapshot nilai `Absensi.jamMasuk`/`jamPulang` ASLI saat ini); notifikasi in-app ke supervisor outlet | `attendance.correction_requested` | `koreksi_absensi_diajukan_snapshot_nilai_asli` |
+| DIAJUKAN | DISETUJUI | MANAJER/SUPERVISOR (izin `absensi.koreksi.kelola`), **`disetujuiOlehId != diajukanOlehId`** (invariant level-aplikasi, cegah self-approval) | Belum ada koreksi lain atas `Absensi` yang sama yang masih `DIAJUKAN` dan tumpang tindih rentang waktu | Set `disetujuiOlehId`, `status = DISETUJUI`; tulis `Absensi.jamMasukEfektif`/`jamPulangEfektif` = nilai `*Sesudah` dari koreksi ini; `Absensi.jamMasuk`/`jamPulang` ASLI TIDAK disentuh | `attendance.correction_approved` | `koreksi_absensi_disetujui_tulis_efektif_bukan_asli` |
+| DIAJUKAN | DITOLAK | MANAJER/SUPERVISOR (izin `absensi.koreksi.kelola`) | `alasan` penolakan wajib diisi (kolom `catatan`/field terpisah, service-layer) | Set `disetujuiOlehId` (penolak), `status = DITOLAK`; **tidak ada perubahan pada `Absensi`** | `attendance.correction_rejected` | `koreksi_absensi_ditolak_tanpa_perubahan_absensi` |
+
+## 10. Tukar Shift
+
+**BARU pada ALT-DEF-024** (ADR-028 Keputusan 3/`ALT-HR-008`). Jadwal ASAL
+(`JadwalKerja`) tidak berubah kepemilikannya sampai `DISETUJUI_MANAJER`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> DIAJUKAN: pemohon mengajukan tukar shift
+    DIAJUKAN --> DISETUJUI_REKAN: rekan (karyawanPengganti) menyetujui
+    DIAJUKAN --> DITOLAK: rekan menolak, atau manajer menolak langsung
+    DIAJUKAN --> DIBATALKAN: pemohon membatalkan sebelum ada persetujuan
+    DISETUJUI_REKAN --> DISETUJUI_MANAJER: manajer/supervisor menyetujui akhir
+    DISETUJUI_REKAN --> DITOLAK: manajer menolak
+    DISETUJUI_REKAN --> DIBATALKAN: pemohon/rekan membatalkan sebelum approval manajer
+    DISETUJUI_MANAJER --> [*]
+    DITOLAK --> [*]
+    DIBATALKAN --> [*]
+```
+
+Catatan penting yang TIDAK terlihat langsung di diagram:
+
+- **Dua tahap approval berurutan** (rekan lalu manajer) - `karyawanPengganti`
+  harus menyetujui SEBELUM manajer memutuskan; manajer tidak bisa
+  menyetujui langsung dari `DIAJUKAN` tanpa `DISETUJUI_REKAN` lebih dulu
+  (kecuali `karyawanPenggantiId` NULL, mis. tukar shift terbuka/"siapa pun
+  bisa ambil" - guard detail adalah keputusan service-layer).
+- **`DISETUJUI_MANAJER` adalah SATU-SATUNYA transisi yang menulis ulang
+  `JadwalKerja`.** Sebelum titik itu, `jadwalKerjaAsalId` tetap milik
+  `karyawanPemohon` sepenuhnya - karyawan lain melihat jadwal lama tidak
+  berubah selama proses approval berjalan.
+
+### Tabel transisi lengkap
+
+| statusAsal | statusTujuan | aktorDiizinkan | guard | sideEffect | auditEvent | testRequired |
+|---|---|---|---|---|---|---|
+| (baru) | DIAJUKAN | Karyawan pemohon (izin `karyawan.tukar-shift.kelola`) | `jadwalKerjaAsalId` milik pemohon; status `JadwalKerja` masih `DIJADWALKAN`/`DIKONFIRMASI` (belum `SELESAI`/`DIBATALKAN`) | Buat `PermintaanTukarShift`; notifikasi ke `karyawanPenggantiId` (bila diisi) atau ke seluruh karyawan eligible outlet tsb | `attendance.shift_swap_requested` | `tukar_shift_diajukan_jadwal_asal_belum_terpakai` |
+| DIAJUKAN | DISETUJUI_REKAN | `karyawanPenggantiId` (izin implisit sebagai pihak yang dituju) | Permintaan belum kadaluarsa/dibatalkan | Set status; notifikasi ke MANAJER outlet untuk approval akhir | `attendance.shift_swap_peer_approved` | `tukar_shift_disetujui_rekan_lanjut_manajer` |
+| DIAJUKAN | DITOLAK | `karyawanPenggantiId`, atau MANAJER (izin `karyawan.tukar-shift.kelola`) | - | Set `disetujuiOlehId` (penolak, nullable bila ditolak rekan bukan manajer) | `attendance.shift_swap_rejected` | `tukar_shift_ditolak_dari_diajukan` |
+| DIAJUKAN | DIBATALKAN | Karyawan pemohon | - | Set status; tidak ada perubahan `JadwalKerja` | `attendance.shift_swap_cancelled` | `tukar_shift_dibatalkan_pemohon` |
+| DISETUJUI_REKAN | DISETUJUI_MANAJER | MANAJER/SUPERVISOR (izin `karyawan.tukar-shift.kelola`) | - | Set `disetujuiOlehId`, `status = DISETUJUI_MANAJER`; `JadwalKerja.karyawanId` (baris asal) ditukar ke `karyawanPenggantiId` - baris `JadwalKerja` TIDAK dihapus/diduplikasi, hanya kepemilikannya berpindah dengan jejak `PermintaanTukarShift` sebagai bukti audit | `attendance.shift_swap_approved` | `tukar_shift_disetujui_manajer_pindah_kepemilikan_jadwal` |
+| DISETUJUI_REKAN | DITOLAK | MANAJER/SUPERVISOR (izin `karyawan.tukar-shift.kelola`) | - | Set `disetujuiOlehId` (penolak), `status = DITOLAK`; `JadwalKerja` TIDAK berubah | `attendance.shift_swap_rejected` | `tukar_shift_ditolak_manajer_setelah_rekan_setuju` |
+| DISETUJUI_REKAN | DIBATALKAN | Karyawan pemohon atau pengganti | - | Set status; `JadwalKerja` TIDAK berubah | `attendance.shift_swap_cancelled` | `tukar_shift_dibatalkan_setelah_rekan_setuju` |
+
 ## Catatan umum
 
 - Semua transisi status wajib dicatat di tabel riwayat/audit terkait (`PESANAN_RIWAYAT_STATUS`, `AUDIT_LOG`, dsb) - lihat `docs/database/`.

@@ -140,13 +140,36 @@ export const IZIN_SEED: readonly IzinSeedEntry[] = [
   // TIDAK diseed - aktor "sistem"/event internal, bukan keputusan otorisasi
   // yang dipegang aktor manusia, pola sama resep.pemakaian.otomatis.
 
-  // karyawan
+  // karyawan (ALT-DEF-019/ALT-DEF-024/ALT-DEF-025, ADR-028: kode granular
+  // ditambahkan mengikuti MASTER-CHECKLIST.md ALT-HR-001 s.d. ALT-HR-018 -
+  // "absensi.koreksi" LAMA diganti "absensi.koreksi.kelola" (checklist
+  // ALT-HR-015 tidak pernah mereferensikan "absensi.koreksi" tanpa akhiran
+  // ".kelola" - sama kelas gap yang ditemukan ALT-DEF-040 di domain
+  // keanggotaan). "karyawan.lihat"/"karyawan.kelola"/"absensi.setujui"
+  // DIPERTAHANKAN - masih dipakai (karyawan.kelola oleh ALT-HR-001, dan
+  // absensi.setujui untuk approval cuti/izin yang tidak punya kode approve
+  // terpisah di checklist).
   { kode: "karyawan.lihat", nama: "Lihat data karyawan", domain: "karyawan", deskripsi: "Melihat profil dan jabatan karyawan." },
-  { kode: "karyawan.kelola", nama: "Kelola data karyawan", domain: "karyawan", deskripsi: "Menambah/mengubah data karyawan dan jabatan." },
+  { kode: "karyawan.kelola", nama: "Kelola data karyawan", domain: "karyawan", deskripsi: "Menambah/mengubah data karyawan dan jabatan (ALT-HR-001)." },
+  { kode: "karyawan.status.kelola", nama: "Kelola status employment karyawan", domain: "karyawan", deskripsi: "Mengubah status AKTIF/CUTI/NONAKTIF karyawan (ALT-HR-002)." },
+  { kode: "karyawan.jabatan.kelola", nama: "Kelola jabatan", domain: "karyawan", deskripsi: "CRUD master jabatan (ALT-HR-003)." },
+  { kode: "karyawan.departemen.kelola", nama: "Kelola departemen", domain: "karyawan", deskripsi: "CRUD master departemen (ALT-HR-004)." },
+  { kode: "karyawan.outlet.kelola", nama: "Kelola outlet karyawan", domain: "karyawan", deskripsi: "Mengatur KaryawanOutlet - karyawan lintas banyak outlet (ALT-HR-005)." },
+  { kode: "karyawan.shift.kelola", nama: "Kelola template shift", domain: "karyawan", deskripsi: "CRUD TemplateShift - pola shift standar per outlet (ALT-HR-006)." },
+  { kode: "karyawan.jadwal.kelola", nama: "Kelola jadwal kerja", domain: "karyawan", deskripsi: "Menugaskan karyawan ke template shift pada tanggal tertentu (ALT-HR-007)." },
+  { kode: "karyawan.tukar-shift.kelola", nama: "Kelola tukar shift", domain: "karyawan", deskripsi: "Mengajukan/menyetujui/menolak tukar jadwal shift antar karyawan (ALT-HR-008)." },
+  { kode: "karyawan.penilaian.kelola", nama: "Kelola penilaian kinerja", domain: "karyawan", deskripsi: "Mencatat target dan penilaian kinerja periodik karyawan (ALT-HR-018)." },
 
   // absensi
-  { kode: "absensi.koreksi", nama: "Koreksi absensi", domain: "absensi", deskripsi: "Mengoreksi catatan absensi karyawan secara manual." },
+  { kode: "absensi.presensi", nama: "Presensi masuk/pulang", domain: "absensi", deskripsi: "Mencatat presensi masuk dan pulang lewat QR/PIN/GPS (ALT-HR-009/ALT-HR-010)." },
+  { kode: "absensi.istirahat", nama: "Catat istirahat", domain: "absensi", deskripsi: "Mencatat mulai/selesai waktu istirahat dalam satu sesi kerja (ALT-HR-011)." },
+  { kode: "absensi.keterlambatan", nama: "Deteksi keterlambatan (internal)", domain: "absensi", deskripsi: "Menandai presensi masuk yang melewati toleransi jadwal shift sebagai terlambat - dipakai proses internal saat presensi masuk (ALT-HR-012)." },
+  { kode: "absensi.lembur.lihat", nama: "Lihat perhitungan lembur", domain: "absensi", deskripsi: "Melihat jam lembur terhitung dari durasi kerja aktual (ALT-HR-013)." },
+  { kode: "cuti-izin.ajukan", nama: "Ajukan cuti/izin", domain: "absensi", deskripsi: "Mengajukan cuti/izin/sakit (ALT-HR-014)." },
+  { kode: "absensi.koreksi.kelola", nama: "Kelola koreksi absensi", domain: "absensi", deskripsi: "Mengajukan dan menyetujui/menolak KoreksiAbsensi - baris baru dengan approval, tidak menimpa data asli (ALT-HR-015)." },
   { kode: "absensi.setujui", nama: "Setujui cuti/izin", domain: "absensi", deskripsi: "Menyetujui/menolak pengajuan cuti atau izin karyawan." },
+  { kode: "absensi.geofence", nama: "Validasi geofence presensi (internal)", domain: "absensi", deskripsi: "Membatasi presensi hanya valid dalam radius geografis outlet - dipakai proses internal saat presensi masuk (ALT-HR-016)." },
+  { kode: "absensi.perangkat.validasi", nama: "Validasi perangkat presensi (internal)", domain: "absensi", deskripsi: "Membatasi presensi hanya dari perangkat terdaftar outlet - dipakai proses internal saat presensi masuk (ALT-HR-017)." },
 
   // laporan
   { kode: "laporan.operasional", nama: "Lihat laporan operasional", domain: "laporan", deskripsi: "Mengakses laporan penjualan/operasional harian." },
