@@ -1657,37 +1657,54 @@ model StokBahan {
 // BELUM PERNAH DIJALANKAN (ALT-DEF-029). Sampai saat itu, append-only adalah
 // disiplin level-aplikasi.
 model MutasiStok {
-  id             String               @id
-  tenantId       String
-  outletId       String
-  gudangId       String
-  bahanId        String
-  jenis          JenisMutasiStok
+  id               String               @id
+  tenantId         String
+  outletId         String
+  gudangId         String
+  bahanId          String
+  jenis            JenisMutasiStok
   // Positif = masuk, negatif = keluar. TIDAK ADA kolom terpisah untuk arah -
   // satu sumber kebenaran tanda, sehingga SUM() langsung menghasilkan saldo.
-  jumlah         Decimal
+  jumlah           Decimal
   // ALT-DEF-008: satuan pada saat mutasi dicatat. Nullable karena baris lama
   // (bila kelak ada) diasumsikan memakai satuan dasar bahan.
-  satuanId       String?
-  referensiJenis ReferensiJenisMutasi
-  referensiId    String
+  satuanId         String?
+  referensiJenis   ReferensiJenisMutasi
+  referensiId      String
   // ALT-DEF-008/ALT-PSD-004: transfer bergerak ANTAR LOKASI - keduanya terisi.
   // Pembelian hanya punya tujuan; penjualan/pemakaian hanya punya sumber.
   // Karena itu KEDUANYA nullable, dan aturan "mana yang wajib untuk jenis apa"
   // adalah invariant LEVEL-APLIKASI (Prisma maupun CHECK sederhana tidak bisa
   // mengekspresikan kondisional per-nilai-enum tanpa CHECK manual).
-  lokasiSumberId String?
-  lokasiTujuanId String?
+  lokasiSumberId   String?
+  lokasiTujuanId   String?
   // ALT-DEF-008/ALT-PSD-011: batch yang dialokasikan FEFO/FIFO. Nullable -
   // tidak semua bahan di-batch (mis. bumbu curah).
-  batchStokId    String?
+  batchStokId      String?
   // ALT-DEF-008: harga perolehan per satuan saat mutasi (rupiah bulat,
   // ADR-005). Nullable - hanya mutasi MASUK yang membawa biaya perolehan.
-  hargaPerolehan Int?
-  catatan        String?
-  dibalikOlehId  String?              @unique
-  dibuatOlehId   String
-  createdAt      DateTime             @default(now())
+  hargaPerolehan   Int?
+  // ADR-032: alasan/justifikasi WAJIB untuk SETIAP baris mutasi_stok (bukan
+  // hanya baris pembalik) demi auditabilitas penuh - lihat catatan ADR-032
+  // Keputusan 4 untuk rasional "wajib untuk semua baris, bukan cuma pembalik".
+  // `catatan` tetap ada terpisah sebagai keterangan bebas TAMBAHAN opsional.
+  alasan           String
+  catatan          String?
+  // ADR-032: redesain arah pointer pembalik - kolom ini kini ada di baris
+  // PEMBALIK (menunjuk MUNDUR ke baris ASAL yang dibalikkannya), BUKAN lagi di
+  // baris asal menunjuk maju ke pembaliknya (`dibalikOlehId` lama, ADR-023).
+  // Baris ASAL TIDAK PERNAH di-UPDATE untuk alasan apa pun (append-only murni,
+  // nol pengecualian) - "sudah dibalik atau belum" kini query turunan:
+  // `SELECT 1 FROM mutasi_stok WHERE "membalikMutasiId" = <id-asal>`.
+  // `@unique` di sini menegakkan "paling banyak SATU baris pembalik per baris
+  // asal" (dua baris pembalik berbeda tidak boleh menunjuk baris asal yang
+  // sama) - lihat ADR-032 Keputusan 1 untuk penjelasan kenapa @unique pada
+  // kolom INI (di sisi pembalik) adalah tempat yang benar untuk constraint
+  // tsb, berbeda dari kesan pertama yang salah ("@unique pada FK apa saja
+  // trivially true").
+  membalikMutasiId String?              @unique
+  dibuatOlehId     String
+  createdAt        DateTime             @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: outlet lewat composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
@@ -1708,13 +1725,16 @@ model MutasiStok {
   batchStok    BatchStok?  @relation(fields: [tenantId, batchStokId], references: [tenantId, id])
   dibuatOleh   Pengguna    @relation("MutasiStokDibuatOleh", fields: [dibuatOlehId], references: [id])
 
-  // Reversal: `dibalikOlehId` menunjuk mutasi PEMBALIK. Kolom tunggal +
-  // @unique = satu mutasi dibalik PALING BANYAK sekali (kolom tunggal), dan
-  // satu mutasi pembalik membalik PALING BANYAK satu mutasi asal (@unique).
-  // Yang TIDAK ditegakkan Prisma: tanda berlawanan, kesamaan tenant/gudang/
-  // bahan, dan larangan rantai pembalik-dari-pembalik - lihat file SQL 005.
-  dibalikOleh  MutasiStok? @relation("MutasiPembalik", fields: [dibalikOlehId], references: [id])
-  pembalikDari MutasiStok? @relation("MutasiPembalik")
+  // Reversal (ADR-032, redesain dari ADR-023): `membalikMutasi` menunjuk
+  // MUNDUR ke mutasi ASAL yang dibalikkan baris ini (hanya terisi pada baris
+  // PEMBALIK). `pembalik` adalah sisi kebalikannya - baris pembalik yang
+  // menunjuk KE baris ini (hanya terisi pada baris yang SUDAH dibalik).
+  // Yang TIDAK ditegakkan Prisma (ditegakkan trigger `ledger_validasi_pembalik`
+  // - lihat migrasi `redesign_ledger_reversal_membalik_pattern`): tanda
+  // berlawanan, kesamaan tenant/gudang/bahan/satuan/batch/harga/lokasi, dan
+  // larangan rantai pembalik-dari-pembalik.
+  membalikMutasi MutasiStok? @relation("MutasiPembalik", fields: [membalikMutasiId], references: [id])
+  pembalik       MutasiStok? @relation("MutasiPembalik")
 
   penyesuaianStok     PenyesuaianStok?
   catatanWaste        CatatanWaste?
@@ -3915,40 +3935,42 @@ model Keanggotaan {
 // DIJALANKAN (ALT-DEF-029, tidak ada Postgres nyata). Sampai saat itu,
 // append-only adalah disiplin level-aplikasi semata.
 model PoinRiwayat {
-  id             String           @id
+  id               String           @id
   // ALT-DEF-018/ADR-013: sebelumnya TIDAK ADA tenantId sama sekali. Ditambah
   // agar composite-FK (tenantId, keanggotaanId)/(tenantId, pesananId) bisa dipakai.
-  tenantId       String
-  keanggotaanId  String
-  pesananId      String?
-  jenis          JenisPoinRiwayat
-  jumlah         Int
+  tenantId         String
+  keanggotaanId    String
+  pesananId        String?
+  jenis            JenisPoinRiwayat
+  jumlah           Int
   // ALT-DEF-018/ALT-MBR-009: hanya terisi pada baris PEROLEHAN - tanggal poin
   // tersebut kedaluwarsa jika belum dipakai. Job kedaluwarsa terjadwal
   // (internal, ALT-MBR-009, di luar scope schema) membaca kolom ini untuk
   // menulis baris KADALUARSA baru begitu tanggal ini terlewati.
-  kadaluarsaPada DateTime?
-  // ALT-DEF-018/ADR-027 Keputusan 2: pola reversal identik
-  // `MutasiStok.dibalikOlehId` (ADR-006/ADR-023) - kolom tunggal + @unique =
-  // satu baris dibalik PALING BANYAK sekali, satu baris pembalik membalik
-  // PALING BANYAK satu baris asal. Yang TIDAK ditegakkan Prisma: tanda
-  // jumlah berlawanan, kesamaan keanggotaanId, dan larangan rantai
-  // pembalik-dari-pembalik (sama seperti keterbatasan MutasiStok).
-  dibalikOlehId  String?          @unique
+  kadaluarsaPada   DateTime?
+  // ADR-032 (redesain dari ADR-027 Keputusan 2/ALT-DEF-043): pola reversal
+  // sama seperti MutasiStok - `membalikMutasiId` di sini ada di baris
+  // PEMBALIK, menunjuk MUNDUR ke baris ASAL. @unique = paling banyak SATU
+  // baris pembalik per baris asal. Yang ditegakkan trigger
+  // `ledger_validasi_pembalik`: tanda jumlah berlawanan, kesamaan tenant/
+  // keanggotaanId, larangan rantai pembalik-dari-pembalik, `alasan` wajib.
+  membalikMutasiId String?          @unique
+  // ADR-032: alasan WAJIB untuk setiap baris (bukan hanya pembalik).
+  alasan           String
   // Nullable - baris SISTEM (mis. perolehan poin otomatis saat pesanan
   // selesai) tidak punya aktor manusia.
-  dicatatOlehId  String?
-  catatan        String?
-  createdAt      DateTime         @default(now())
+  dicatatOlehId    String?
+  catatan          String?
+  createdAt        DateTime         @default(now())
 
-  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  tenant         Tenant       @relation(fields: [tenantId], references: [id])
   // ALT-DEF-018/ADR-013: composite-FK (tenantId, keanggotaanId) -> Keanggotaan(tenantId, id).
-  keanggotaan  Keanggotaan  @relation(fields: [tenantId, keanggotaanId], references: [tenantId, id])
+  keanggotaan    Keanggotaan  @relation(fields: [tenantId, keanggotaanId], references: [tenantId, id])
   // ALT-DEF-018/ADR-013: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
-  pesanan      Pesanan?     @relation(fields: [tenantId, pesananId], references: [tenantId, id])
-  dicatatOleh  Pengguna?    @relation("PoinRiwayatDicatatOleh", fields: [dicatatOlehId], references: [id])
-  dibalikOleh  PoinRiwayat? @relation("PoinRiwayatPembalik", fields: [dibalikOlehId], references: [id])
-  pembalikDari PoinRiwayat? @relation("PoinRiwayatPembalik")
+  pesanan        Pesanan?     @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  dicatatOleh    Pengguna?    @relation("PoinRiwayatDicatatOleh", fields: [dicatatOlehId], references: [id])
+  membalikMutasi PoinRiwayat? @relation("PoinRiwayatPembalik", fields: [membalikMutasiId], references: [id])
+  pembalik       PoinRiwayat? @relation("PoinRiwayatPembalik")
 
   @@map("poin_riwayat")
 }
@@ -3990,33 +4012,37 @@ model HadiahStempel {
 // KEJUJURAN YANG WAJIB DINYATAKAN: sama seperti PoinRiwayat/MutasiStok,
 // "append-only" TIDAK ditegakkan database pada batch ini (ALT-DEF-029).
 model LedgerStempel {
-  id              String             @id
-  tenantId        String
-  keanggotaanId   String
-  jenis           JenisLedgerStempel
-  jumlah          Int
+  id               String             @id
+  tenantId         String
+  keanggotaanId    String
+  jenis            JenisLedgerStempel
+  jumlah           Int
   // Terisi bila stempel diperoleh/dibalikkan sehubungan dengan satu pesanan.
-  pesananId       String?
+  pesananId        String?
   // Terisi HANYA pada baris PENUKARAN - hadiah mana yang diklaim.
-  hadiahStempelId String?
-  // ALT-DEF-039/ADR-027 Keputusan 5: pola reversal identik PoinRiwayat/MutasiStok.
-  dibalikOlehId   String?            @unique
+  hadiahStempelId  String?
+  // ADR-032 (redesain dari ADR-027 Keputusan 5/ALT-DEF-043): pola reversal
+  // identik PoinRiwayat/MutasiStok - `membalikMutasiId` di baris PEMBALIK,
+  // menunjuk MUNDUR ke baris ASAL.
+  membalikMutasiId String?            @unique
+  // ADR-032: alasan WAJIB untuk setiap baris (bukan hanya pembalik).
+  alasan           String
   // Nullable - baris SISTEM (mis. perolehan stempel otomatis saat pesanan
   // selesai) tidak punya aktor manusia.
-  dicatatOlehId   String?
-  catatan         String?
-  createdAt       DateTime           @default(now())
+  dicatatOlehId    String?
+  catatan          String?
+  createdAt        DateTime           @default(now())
 
-  tenant        Tenant         @relation(fields: [tenantId], references: [id])
+  tenant         Tenant         @relation(fields: [tenantId], references: [id])
   // ALT-DEF-039/ADR-013: composite-FK (tenantId, keanggotaanId) -> Keanggotaan(tenantId, id).
-  keanggotaan   Keanggotaan    @relation(fields: [tenantId, keanggotaanId], references: [tenantId, id])
+  keanggotaan    Keanggotaan    @relation(fields: [tenantId, keanggotaanId], references: [tenantId, id])
   // ALT-DEF-039/ADR-013: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
-  pesanan       Pesanan?       @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  pesanan        Pesanan?       @relation(fields: [tenantId, pesananId], references: [tenantId, id])
   // ALT-DEF-039/ADR-013: composite-FK (tenantId, hadiahStempelId) -> HadiahStempel(tenantId, id).
-  hadiahStempel HadiahStempel? @relation(fields: [tenantId, hadiahStempelId], references: [tenantId, id])
-  dicatatOleh   Pengguna?      @relation("LedgerStempelDicatatOleh", fields: [dicatatOlehId], references: [id])
-  dibalikOleh   LedgerStempel? @relation("LedgerStempelPembalik", fields: [dibalikOlehId], references: [id])
-  pembalikDari  LedgerStempel? @relation("LedgerStempelPembalik")
+  hadiahStempel  HadiahStempel? @relation(fields: [tenantId, hadiahStempelId], references: [tenantId, id])
+  dicatatOleh    Pengguna?      @relation("LedgerStempelDicatatOleh", fields: [dicatatOlehId], references: [id])
+  membalikMutasi LedgerStempel? @relation("LedgerStempelPembalik", fields: [membalikMutasiId], references: [id])
+  pembalik       LedgerStempel? @relation("LedgerStempelPembalik")
 
   @@map("ledger_stempel")
 }
@@ -4032,35 +4058,40 @@ model LedgerStempel {
 // KEJUJURAN YANG WAJIB DINYATAKAN: sama seperti ledger lain, "append-only"
 // TIDAK ditegakkan database pada batch ini (ALT-DEF-029).
 model LedgerSaldoToko {
-  id            String               @id
-  tenantId      String
-  pelangganId   String
-  jenis         JenisLedgerSaldoToko
+  id               String               @id
+  tenantId         String
+  pelangganId      String
+  jenis            JenisLedgerSaldoToko
   // Rupiah bulat (ADR-005) - positif = saldo bertambah, negatif = berkurang.
-  jumlah        Int
+  jumlah           Int
   // Terisi bila saldo dipakai/ditambah sehubungan dengan satu pesanan.
-  pesananId     String?
+  pesananId        String?
   // Terisi bila baris ini dihasilkan OLEH satu peristiwa `Pembayaran` metode
   // SALDO_TOKO (lihat `PembayaranMetodeBaris`/`KodeMetodeBayar`) - menutup
   // jalur "bayar pakai saldo toko" ke ledgernya sendiri. Nullable karena
   // banyak baris (mis. PENAMBAHAN dari refund, PENYESUAIAN manual) sama
   // sekali tidak berasal dari sebuah Pembayaran.
-  pembayaranId  String?
-  dibalikOlehId String?              @unique
-  dicatatOlehId String?
-  catatan       String?
-  createdAt     DateTime             @default(now())
+  pembayaranId     String?
+  // ADR-032 (redesain dari ADR-027 Keputusan 2/ALT-DEF-043): pola reversal
+  // identik PoinRiwayat/LedgerStempel/MutasiStok - `membalikMutasiId` di
+  // baris PEMBALIK, menunjuk MUNDUR ke baris ASAL.
+  membalikMutasiId String?              @unique
+  // ADR-032: alasan WAJIB untuk setiap baris (bukan hanya pembalik).
+  alasan           String
+  dicatatOlehId    String?
+  catatan          String?
+  createdAt        DateTime             @default(now())
 
-  tenant       Tenant           @relation(fields: [tenantId], references: [id])
+  tenant         Tenant           @relation(fields: [tenantId], references: [id])
   // ALT-DEF-018/ADR-013: composite-FK (tenantId, pelangganId) -> Pelanggan(tenantId, id).
-  pelanggan    Pelanggan        @relation(fields: [tenantId, pelangganId], references: [tenantId, id])
+  pelanggan      Pelanggan        @relation(fields: [tenantId, pelangganId], references: [tenantId, id])
   // ALT-DEF-018/ADR-013: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
-  pesanan      Pesanan?         @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  pesanan        Pesanan?         @relation(fields: [tenantId, pesananId], references: [tenantId, id])
   // ALT-DEF-018/ADR-013: composite-FK (tenantId, pembayaranId) -> Pembayaran(tenantId, id).
-  pembayaran   Pembayaran?      @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
-  dicatatOleh  Pengguna?        @relation("LedgerSaldoTokoDicatatOleh", fields: [dicatatOlehId], references: [id])
-  dibalikOleh  LedgerSaldoToko? @relation("LedgerSaldoTokoPembalik", fields: [dibalikOlehId], references: [id])
-  pembalikDari LedgerSaldoToko? @relation("LedgerSaldoTokoPembalik")
+  pembayaran     Pembayaran?      @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
+  dicatatOleh    Pengguna?        @relation("LedgerSaldoTokoDicatatOleh", fields: [dicatatOlehId], references: [id])
+  membalikMutasi LedgerSaldoToko? @relation("LedgerSaldoTokoPembalik", fields: [membalikMutasiId], references: [id])
+  pembalik       LedgerSaldoToko? @relation("LedgerSaldoTokoPembalik")
 
   @@map("ledger_saldo_toko")
 }
