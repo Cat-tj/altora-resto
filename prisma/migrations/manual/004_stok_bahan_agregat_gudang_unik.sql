@@ -1,3 +1,16 @@
+-- ============================================================================
+-- ARSIP HISTORIS - TIDAK DIJALANKAN OLEH TOOLING APA PUN.
+-- Konten file ini sudah dipindahkan (diaudit ulang, satu bug diperbaiki - lihat
+-- ADR-031) ke migrasi resmi Prisma:
+--   prisma/schema/migrations/20260725154310_harden_manual_invariants/migration.sql
+-- Folder prisma/migrations/manual/ dipertahankan HANYA sebagai jejak audit siapa
+-- menulis apa dan kapan (dan karena beberapa test arsitektur di
+-- packages/test-support/src/architecture/ masih membaca file ini sebagai teks
+-- untuk memverifikasi draft desain awal). JANGAN jalankan file ini secara manual
+-- terhadap database mana pun - migrasi resmi di atas adalah satu-satunya sumber
+-- kebenaran yang benar-benar diterapkan.
+-- ============================================================================
+
 -- ALT-DEF-008 / ALT-PSD-004 / ALT-PSD-007 / ADR-023 Keputusan 3
 --
 -- Partial unique index: "tepat satu baris StokBahan AGREGAT LEVEL-GUDANG

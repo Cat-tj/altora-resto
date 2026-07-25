@@ -1,3 +1,16 @@
+-- ============================================================================
+-- ARSIP HISTORIS - TIDAK DIJALANKAN OLEH TOOLING APA PUN.
+-- Konten file ini sudah dipindahkan (diaudit ulang, satu bug diperbaiki - lihat
+-- ADR-031) ke migrasi resmi Prisma:
+--   prisma/schema/migrations/20260725154310_harden_manual_invariants/migration.sql
+-- Folder prisma/migrations/manual/ dipertahankan HANYA sebagai jejak audit siapa
+-- menulis apa dan kapan (dan karena beberapa test arsitektur di
+-- packages/test-support/src/architecture/ masih membaca file ini sebagai teks
+-- untuk memverifikasi draft desain awal). JANGAN jalankan file ini secara manual
+-- terhadap database mana pun - migrasi resmi di atas adalah satu-satunya sumber
+-- kebenaran yang benar-benar diterapkan.
+-- ============================================================================
+
 -- ALT-DEF-007 / ALT-RSP-001 / ALT-RSP-003 / ALT-RSP-005 / ADR-022 Keputusan 2
 --
 -- CHECK constraint: sebuah `Resep` menargetkan TEPAT SATU dari tiga sasaran
