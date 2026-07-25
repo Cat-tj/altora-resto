@@ -386,7 +386,7 @@ side-effect/audit-event setiap transisi. `izin.kode` per baris mengacu ke
 | POST | `/api/v1/pesanan/{id}/retur` | `SELESAI -> DIRETUR`. **Model detail retur (`PesananRetur`, alokasi refund) adalah scope `ALT-PES-018`/`ALT-DEF-014`, BELUM DIKERJAKAN pada batch ini** - endpoint didokumentasikan di sini hanya untuk melengkapi kontrak transisi status. | `pesanan.retur.kelola` |
 | GET | `/api/v1/pesanan/{id}/riwayat-status` | Riwayat transisi status (`PesananRiwayatStatus`, enum `StatusPesanan` di kedua kolom, `ALT-DEF-005`/`ALT-PES-009`). | `pesanan.riwayat.lihat` |
 | GET | `/api/v1/pesanan/{id}/perubahan` | Riwayat perubahan pasca-konfirmasi (`PesananPerubahan`, `ALT-PES-010`). | `pesanan.riwayat.lihat` |
-| POST | `/api/v1/pesanan/{id}/promo` | Terapkan kode promo/kupon ke pesanan. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "penerapan promo" di master spec). | `promo.kelola` (KASIR/PELAYAN, lihat `PERMISSION-MATRIX.md`) |
+| POST | `/api/v1/pesanan/{id}/promo` | Terapkan kode promo/kupon ke pesanan - menulis `PromoPemakaian` + `PromoPemakaianBaris` + `PromoSnapshot` (ALT-DEF-009/ADR-026). Boleh dipanggil berkali-kali untuk promo berbeda (stacking) selama lolos resolusi konflik `stackingPolicy`/`conflictGroup`/`prioritas` (lihat ADR-026 Keputusan 1). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "penerapan promo" di master spec). | `promo.terapkan` (KASIR/PELAYAN, lihat `PERMISSION-MATRIX.md`) - ALT-DEF-034: kode ini menggantikan `promo.kelola` yang dipakai sebelum ADR-026 untuk aksi ini, `promo.kelola` sekarang HANYA untuk CRUD definisi promo (ALT-PRM-001). |
 
 Contoh request `POST /api/v1/pesanan`:
 
@@ -562,12 +562,32 @@ dan **tidak aman terhadap race condition**. Jangan menganggapnya sudah terjamin.
 
 ## 12. Promo (`packages/promo`)
 
-| Metode | Path | Deskripsi |
-|---|---|---|
-| GET | `/api/v1/promo` | Daftar promo (filter status/tanggal). |
-| POST | `/api/v1/promo` | Buat promo baru + aturan. |
-| POST | `/api/v1/promo/{id}/kupon` | Terbitkan kupon untuk promo. |
-| POST | `/api/v1/promo/validasi` | Validasi kode promo/kupon terhadap isi pesanan (dry-run, tanpa efek samping). |
+ALT-DEF-009/ALT-DEF-030 (ADR-026): domain promo dirancang ulang untuk
+stacking, reward terpisah dari kondisi, jadwal, dan cakupan outlet. Endpoint
+di bawah memetakan `PromoKondisi`/`PromoReward`/`PromoJadwal`/`PromoOutlet`
+sebagai sub-resource `Promo`, dan membedakan **simulasi** (dry-run murni,
+tidak menulis apa pun, boleh tanpa pesanan nyata) dari **evaluasi/penerapan**
+(menulis `PromoPemakaian`, terikat pesanan nyata).
+
+| Metode | Path | Deskripsi | Permission |
+|---|---|---|---|
+| GET | `/api/v1/promo` | Daftar promo (filter status/tanggal/outlet). | `promo.lihat` |
+| POST | `/api/v1/promo` | Buat promo dasar (nama, periode berlaku). `ALT-PRM-001`. | `promo.kelola` |
+| GET | `/api/v1/promo/{id}` | Detail satu promo (termasuk kondisi/reward/jadwal/outlet). | `promo.lihat` |
+| PUT | `/api/v1/promo/{id}` | Ubah data dasar promo (nama, periode, status AKTIF/NONAKTIF). | `promo.kelola` |
+| POST | `/api/v1/promo/{id}/aktifkan` | `NONAKTIF -> AKTIF`. | `promo.kelola` |
+| POST | `/api/v1/promo/{id}/nonaktifkan` | `AKTIF -> NONAKTIF` (bukan hapus - promo yang sudah pernah dipakai tidak boleh dihapus, hanya dinonaktifkan, demi integritas `PromoSnapshot`/riwayat). | `promo.kelola` |
+| PUT | `/api/v1/promo/{id}/kondisi` | Ganti seluruh baris `PromoKondisi` promo ini. `ALT-PRM-002`. | `promo.kondisi.kelola` |
+| PUT | `/api/v1/promo/{id}/reward` | Ganti seluruh baris `PromoReward` promo ini. `ALT-PRM-003`. | `promo.reward.kelola` |
+| PUT | `/api/v1/promo/{id}/jadwal` | Ganti seluruh baris `PromoJadwal` (hari/jam berlaku). `ALT-PRM-004`. | `promo.jadwal.kelola` |
+| PUT | `/api/v1/promo/{id}/outlet` | Ganti cakupan outlet (`PromoOutlet`) - kosongkan array = berlaku semua outlet (lihat konvensi di `10-promo.md`). `ALT-PRM-005`. | `promo.outlet.kelola` |
+| PUT | `/api/v1/promo/{id}/prioritas` | Ubah `stackingPolicy`/`conflictGroup`/`prioritas`. `ALT-PRM-007`/`ALT-PRM-008`. | `promo.prioritas.kelola` |
+| PUT | `/api/v1/promo/{id}/kuota` | Ubah `maximumDiscount`/`usageQuota`/`usageLimitPerOrder`. `ALT-PRM-013`. | `promo.kuota.kelola` |
+| PUT | `/api/v1/promo/{id}/batas-pelanggan` | Ubah `usageLimitPerCustomer`. `ALT-PRM-014`. | `promo.batas-pelanggan.kelola` |
+| POST | `/api/v1/promo/{id}/kupon` | Terbitkan kupon untuk promo. | `promo.kelola` |
+| POST | `/api/v1/promo/simulasi` | **Simulasi/dry-run** (`ALT-PRM-015`): hitung efek promo pada `inputKeranjang` bebas bentuk TANPA pesanan nyata dan TANPA efek samping - menulis `PromoSimulasi` (jejak audit hasil hitung), TIDAK menulis `PromoPemakaian`, TIDAK mengurangi kuota. `promoId` opsional (kosong = "promo mana saja yang berlaku"). | `promo.validasi` |
+| POST | `/api/v1/promo/validasi` | **Evaluasi terhadap pesanan nyata** (`ALT-PRM-009`): validasi kode promo/kupon + jalankan resolusi konflik (ADR-026 Keputusan 1) terhadap isi `Pesanan` yang sudah ada. Sama seperti `/promo/simulasi`, TIDAK menulis `PromoPemakaian` - hanya mengembalikan hasil (promo mana yang lolos, kombinasi mana yang menang, estimasi potongan). Beda dari `/promo/simulasi`: WAJIB `pesananId` nyata (bukan keranjang bebas bentuk), dan mempertimbangkan kuota/batas-pelanggan pesanan itu sendiri. | `promo.validasi` |
+| POST | `/api/v1/pesanan/{id}/promo` | **Penerapan/commit** - lihat bagian 7 (Pesanan) di atas untuk detail lengkap (Idempotency-Key wajib, menulis `PromoPemakaian`+`PromoPemakaianBaris`+`PromoSnapshot`). | `promo.terapkan` |
 
 ## 13. Pelanggan & Keanggotaan (`packages/keanggotaan`)
 

@@ -79,9 +79,30 @@ export const IZIN_SEED: readonly IzinSeedEntry[] = [
   { kode: "pembelian.setujui", nama: "Setujui pembelian", domain: "pembelian", deskripsi: "Menyetujui purchase order sebelum dikirim ke supplier." },
   { kode: "pembelian.terima", nama: "Terima pembelian", domain: "pembelian", deskripsi: "Mencatat penerimaan barang dari purchase order." },
 
-  // promo
+  // promo (ALT-DEF-009/ADR-026: kode dipecah per sub-domain karena Promo kini
+  // punya kondisi/reward/jadwal/outlet/prioritas/kuota terpisah, bukan lagi
+  // satu blok "aturan" tunggal. Hanya kode yang DIREFERENSIKAN
+  // MASTER-CHECKLIST.md (ALT-PRM-*) yang ditambahkan - tidak ada kode
+  // spekulatif, sesuai instruksi correction-loop.)
   { kode: "promo.lihat", nama: "Lihat promo", domain: "promo", deskripsi: "Melihat daftar promo/kupon aktif." },
-  { kode: "promo.kelola", nama: "Kelola promo", domain: "promo", deskripsi: "Membuat/mengubah promo, aturan, dan kupon." },
+  { kode: "promo.kelola", nama: "Kelola promo", domain: "promo", deskripsi: "Membuat/mengubah promo dasar (nama, tipe, periode berlaku) dan kupon." },
+  { kode: "promo.kondisi.kelola", nama: "Kelola kondisi promo", domain: "promo", deskripsi: "Mengatur syarat berlaku promo (PromoKondisi): minimum belanja, item/kategori tertentu, dsb." },
+  { kode: "promo.reward.kelola", nama: "Kelola reward promo", domain: "promo", deskripsi: "Mengatur jenis dan nilai potongan promo (PromoReward): persen, nominal, item gratis, harga paket." },
+  { kode: "promo.jadwal.kelola", nama: "Kelola jadwal promo", domain: "promo", deskripsi: "Mengatur hari/jam berlaku promo (PromoJadwal), mis. happy hour." },
+  { kode: "promo.outlet.kelola", nama: "Kelola cakupan outlet promo", domain: "promo", deskripsi: "Membatasi promo ke outlet tertentu (PromoOutlet) - menutup ALT-DEF-030." },
+  { kode: "promo.kanal.kelola", nama: "Kelola cakupan kanal promo", domain: "promo", deskripsi: "Membatasi promo ke kanal pesanan tertentu (mis. hanya QR pelanggan) lewat PromoKondisi.KANAL_TERTENTU." },
+  { kode: "promo.prioritas.kelola", nama: "Kelola prioritas promo", domain: "promo", deskripsi: "Mengatur urutan prioritas antar promo saat stacking/konflik (Promo.prioritas)." },
+  { kode: "promo.kuota.kelola", nama: "Kelola kuota promo", domain: "promo", deskripsi: "Mengatur batas total pemakaian dan batas per pelanggan (Promo.usageQuota/usageLimitPerCustomer)." },
+  { kode: "promo.terapkan", nama: "Terapkan promo ke pesanan", domain: "promo", deskripsi: "Menerapkan kode promo/kupon ke pesanan (menulis PromoPemakaian)." },
+  { kode: "promo.validasi", nama: "Validasi/simulasi promo", domain: "promo", deskripsi: "Menjalankan validasi/dry-run promo terhadap isi pesanan atau keranjang (PromoSimulasi) tanpa efek samping." },
+  { kode: "promo.batas-pelanggan.kelola", nama: "Kelola batas pemakaian per pelanggan", domain: "promo", deskripsi: "Mengatur berapa kali satu pelanggan boleh memakai promo/kupon tertentu." },
+  // ALT-DEF-034 (pola yang sama, dicatat di sini alih-alih membuka defect
+  // baru): `promo.retur.sinkron` di MASTER-CHECKLIST ALT-PRM-017 punya
+  // kolom Aktor "sistem" (dipicu event retur pesanan, bukan aksi pengguna).
+  // Sama seperti `resep.pemakaian.otomatis`, ini SENGAJA TIDAK ditambahkan
+  // ke seed karena bukan keputusan otorisasi yang dipegang aktor manusia -
+  // lihat MASTER-CHECKLIST.md ALT-PRM-017 (kolom Permission dikoreksi jadi
+  // `-` di batch ini) dan PERMISSION-MATRIX.md.
 
   // anggota
   { kode: "anggota.lihat", nama: "Lihat data anggota", domain: "anggota", deskripsi: "Melihat profil dan riwayat pelanggan/anggota." },

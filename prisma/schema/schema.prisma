@@ -105,6 +105,13 @@ model Tenant {
   promo                      Promo[]
   kupon                      Kupon[]
   promoPemakaian             PromoPemakaian[]
+  // ALT-DEF-009: model baru domain promo (stacking/kondisi/reward/jadwal/outlet).
+  promoReward                PromoReward[]
+  promoJadwal                PromoJadwal[]
+  promoOutlet                PromoOutlet[]
+  promoPemakaianBaris        PromoPemakaianBaris[]
+  promoSnapshot              PromoSnapshot[]
+  promoSimulasi              PromoSimulasi[]
   jabatan                    Jabatan[]
   karyawan                   Karyawan[]
   jadwalShift                JadwalShift[]
@@ -211,6 +218,7 @@ model Outlet {
   rmStokKritis               RmStokKritis[]
   rmKinerjaKaryawanHarian    RmKinerjaKaryawanHarian[]
   AturanRoutingDapur         AturanRoutingDapur[]
+  PromoOutlet                PromoOutlet[]
 
   @@unique([tenantId, kode])
   // Diperlukan (bukan sekadar @id) agar KeanggotaanOutlet bisa memakai composite FK
@@ -300,6 +308,8 @@ model Pengguna {
   koreksiPembayaranDikoreksi      KoreksiPembayaran[]       @relation("KoreksiPembayaranDikoreksiOleh")
   konfigurasiQrisDibuat           KonfigurasiQris[]         @relation("KonfigurasiQrisDibuatOleh")
   konfigurasiQrisDiverifikasi     KonfigurasiQris[]         @relation("KonfigurasiQrisDiverifikasiOleh")
+  // ALT-DEF-009: aktor yang menjalankan simulasi/dry-run promo (ALT-PRM-015).
+  promoSimulasiDijalankan         PromoSimulasi[]           @relation("PromoSimulasiDijalankanOleh")
   riwayatKonfigurasiQrisDilakukan RiwayatKonfigurasiQris[]  @relation("RiwayatKonfigurasiQrisDilakukanOleh")
   cutiIzinDisetujui               CutiIzin[]                @relation("CutiDisetujuiOleh")
   rekapKasHarianDiverifikasi      RekapKasHarian[]          @relation("RekapDiverifikasiOleh")
@@ -825,6 +835,8 @@ model ItemMenu {
   itemPesanan           ItemPesanan[]
   rmPenjualanItemHarian RmPenjualanItemHarian[]
   aturanRoutingDapur    AturanRoutingDapur[]
+  // ALT-DEF-009: item yang dijadikan hadiah gratis oleh reward BOGO/ITEM_GRATIS.
+  promoRewardItemGratis PromoReward[]
 
   @@unique([tenantId, id])
   @@map("item_menu")
@@ -2400,7 +2412,10 @@ model Pesanan {
   // pesanan ini = SUM(alokasiPembayaran.jumlah) atas Pembayaran berstatus
   // DIBAYAR. Lihat ADR-019.
   alokasiPembayaran AlokasiPembayaran[]
-  promoPemakaian    PromoPemakaian?
+  // ALT-DEF-009: relasi diubah dari 1:1 (`PromoPemakaian?`) menjadi 1:N -
+  // menghapus @unique pada PromoPemakaian.pesananId berarti satu pesanan
+  // kini bisa memakai lebih dari satu promo (stacking). Lihat ADR-026.
+  promoPemakaian    PromoPemakaian[]
   // ALT-DEF-006: TiketDapur? (1:1) -> TiketDapur[] (1:N) - satu pesanan dapat
   // menghasilkan banyak tiket dapur (satu per stasiun/gelombang tujuan).
   tiketDapur        TiketDapur[]
@@ -2468,8 +2483,9 @@ model ItemPesanan {
   // melepas reservasi baris lain di pesanan yang sama.
   reservasiStok ReservasiStok[]
 
-  modifier        ItemPesananModifier[]
-  tiketDapurBaris TiketDapurBaris?
+  modifier            ItemPesananModifier[]
+  tiketDapurBaris     TiketDapurBaris?
+  PromoPemakaianBaris PromoPemakaianBaris[]
 
   @@map("item_pesanan")
 }
@@ -3226,15 +3242,20 @@ model RiwayatKonfigurasiQris {
 }
 
 // =====================================================================================
-// 10. PROMO (docs/database/10-promo.md)
+// 10. PROMO (docs/database/10-promo.md) - ALT-DEF-009/ALT-DEF-030, lihat ADR-026
 // =====================================================================================
-
-enum JenisPromo {
-  DISKON_PERSEN
-  DISKON_NOMINAL
-  BELI_X_GRATIS_Y
-  HARGA_PAKET
-}
+//
+// ALT-DEF-009: model lama hanya punya `Promo`/`PromoAturan`/`Kupon`/
+// `PromoPemakaian`, dan `PromoPemakaian.pesananId` dulu `@unique` sehingga
+// satu pesanan hanya bisa memakai SATU promo (stacking mustahil). Batch ini
+// mendesain ulang domain promo penuh (ADR-026): `PromoKondisi` (rename
+// `PromoAturan` - KAPAN promo berlaku), `PromoReward` (BARU - BAGAIMANA
+// diskon dihitung, menggantikan `Promo.jenis`), `PromoJadwal` (BARU - jadwal
+// hari/jam), `PromoOutlet` (BARU - menutup ALT-DEF-030, cakupan outlet),
+// `PromoPemakaian` (header pemakaian, `pesananId` TIDAK LAGI unik),
+// `PromoPemakaianBaris` (BARU - rincian per baris diskon, mis. BOGO 2 item),
+// `PromoSnapshot` (BARU - salinan definisi promo saat diterapkan),
+// `PromoSimulasi` (BARU - dry-run tanpa pesanan nyata).
 
 enum StatusPromo {
   AKTIF
@@ -3242,12 +3263,30 @@ enum StatusPromo {
   KADALUARSA
 }
 
+// ALT-DEF-009/ADR-026 Keputusan 3: OUTLET_TERTENTU DIHAPUS dari enum ini -
+// `PromoOutlet` adalah SATU-SATUNYA mekanisme cakupan outlet (ternormalisasi,
+// composite-FK tenant-safe, bisa divalidasi di level data). Menyimpan syarat
+// outlet lagi lewat `nilaiSyarat Json` di sini akan menciptakan DUA sumber
+// kebenaran yang bisa saling menyimpang - persis pola kesalahan yang sudah
+// dikoreksi di domain lain (mis. ALT-DEF-034). HARI_TERTENTU/KANAL_TERTENTU/
+// PELANGGAN_ANGGOTA/PELANGGAN_BARU/ULANG_TAHUN ditambahkan karena dijanjikan
+// eksplisit oleh MASTER-CHECKLIST.md (ALT-PRM-004, ALT-PRM-006, ALT-PRM-014)
+// dan docs/database/10-promo.md sebelum batch ini. HARI_TERTENTU sengaja
+// TETAP ada meski `PromoJadwal.hariDalamMinggu` juga membawa hari - lihat
+// catatan pada `PromoJadwal` di bawah untuk pembagian tanggung jawab
+// keduanya (jadwal = KAPAN dalam minggu/jam promo aktif; kondisi ini dipakai
+// untuk syarat lain yang bukan penjadwalan, mis. dikombinasikan dengan
+// MIN_BELANJA pada hari tertentu tanpa mengaktifkan/menonaktifkan promo).
 enum JenisSyaratPromo {
   MIN_BELANJA
   ITEM_TERTENTU
   KATEGORI_TERTENTU
-  OUTLET_TERTENTU
   JAM_TERTENTU
+  HARI_TERTENTU
+  KANAL_TERTENTU
+  PELANGGAN_ANGGOTA
+  PELANGGAN_BARU
+  ULANG_TAHUN
 }
 
 enum StatusKupon {
@@ -3256,36 +3295,114 @@ enum StatusKupon {
   HABIS
 }
 
-// ALT-DEF-010: Promo hanya punya relasi langsung ke Tenant (fields: [tenantId])
-// - itu SUDAH aman tanpa composite-FK karena Tenant.id ADALAH identitas tenant
-// itu sendiri, tidak ada perantara yang bisa menyimpang. CATATAN GAP (di luar
-// scope batch ini): Promo TIDAK punya relasi outlet sama sekali saat ini -
-// enum JenisSyaratPromo punya nilai OUTLET_TERTENTU yang menyiratkan promo
-// semestinya bisa dibatasi per outlet, tetapi tidak ada model
-// PromoOutlet/kolom outletId yang mendukungnya. Ini BUKAN defect composite-FK
-// (tidak ada relasi outlet untuk dibuat composite-safe), melainkan gap desain
-// domain promo yang harus ditangani di batch domain promo berikutnya - lihat
-// DECISION-LOG.md ADR-013 dan DEFECT-LEDGER.md.
+// ALT-DEF-009/ADR-026 Keputusan 1: menggantikan `Promo.bisaDigabung Boolean`.
+// Boolean lama hanya bisa menjawab ya/tidak, tidak bisa menjawab "digabung
+// dengan promo mana" (conflictGroup) atau "kalau digabung, promo mana yang
+// menang" (prioritas/AMBIL_DISKON_TERBAIK). Lihat ADR-026 untuk algoritma
+// resolusi konflik lengkap.
+enum StackingPolicyPromo {
+  TIDAK_BOLEH_DIGABUNG
+  BOLEH_DIGABUNG
+  AMBIL_DISKON_TERBAIK
+  BERDASARKAN_PRIORITAS
+}
+
+// ALT-DEF-009/ADR-026 Keputusan 2: menggantikan `Promo.jenis JenisPromo`.
+// `Promo.jenis` lama mencampur "apa promo ini" (identitas) dengan "bagaimana
+// diskonnya dihitung" (reward) dalam satu enum tunggal, dan hanya
+// mengizinkan SATU jenis reward per promo. `PromoReward` memisahkan
+// keduanya: `Promo` kini murni definisi "kapan/untuk siapa" (kondisi +
+// jadwal + outlet + stacking), dan satu promo boleh punya SATU ATAU LEBIH
+// baris `PromoReward` (mis. promo ulang tahun yang sekaligus memberi diskon
+// persen DAN satu item gratis).
+enum JenisRewardPromo {
+  DISKON_PERSEN
+  DISKON_NOMINAL
+  ITEM_GRATIS
+  HARGA_PAKET
+  BELI_X_BAYAR_Y
+}
+
+enum StatusPemakaianPromo {
+  DITERAPKAN
+  DIBATALKAN
+  DIRETUR
+}
+
+// ALT-DEF-010/ADR-013 (regresi dijaga): relasi `Promo.tenant` tetap FK
+// tunggal ke Tenant - itu SUDAH aman tanpa composite-FK karena Tenant.id
+// ADALAH identitas tenant itu sendiri.
+// ALT-DEF-030 DITUTUP oleh batch ini: `PromoOutlet` di bawah menutup gap
+// "Promo tidak punya relasi outlet sama sekali" - lihat model PromoOutlet.
 model Promo {
-  id            String      @id
-  tenantId      String
-  nama          String
-  jenis         JenisPromo
-  berlakuSejak  DateTime
-  berlakuSampai DateTime
-  status        StatusPromo @default(AKTIF)
-  bisaDigabung  Boolean     @default(false)
-  createdAt     DateTime    @default(now())
+  id                    String              @id
+  tenantId              String
+  nama                  String
+  berlakuSejak          DateTime
+  berlakuSampai         DateTime
+  status                StatusPromo         @default(AKTIF)
+  // ALT-DEF-009/ADR-026 Keputusan 1.
+  stackingPolicy        StackingPolicyPromo @default(TIDAK_BOLEH_DIGABUNG)
+  // Hanya bermakna ketika stackingPolicy != TIDAK_BOLEH_DIGABUNG - promo yang
+  // BERBEDA tapi berbagi conflictGroup yang sama tetap saling eksklusif
+  // (mis. "diskon-persen-member" dan "diskon-persen-newuser" boleh sama-sama
+  // BOLEH_DIGABUNG dengan promo lain, tapi tidak boleh digabung SATU SAMA
+  // LAIN karena keduanya ada di grup "diskon-dasar"). null = tidak ikut grup
+  // konflik apa pun (hanya dibatasi stackingPolicy-nya sendiri).
+  conflictGroup         String?
+  // Tie-breaker BERDASARKAN_PRIORITAS - angka lebih tinggi dievaluasi/menang
+  // lebih dulu (ALT-PRM-007).
+  prioritas             Int                 @default(0)
+  // Batas potongan dalam rupiah walau hasil hitung reward lebih besar (mis.
+  // DISKON_PERSEN 50% tanpa batas bisa menghabiskan subtotal - maximumDiscount
+  // memotongnya). null = tidak ada batas.
+  maximumDiscount       Int?
+  // Kuota total pemakaian LINTAS SEMUA pelanggan (ALT-PRM-013). null = tak
+  // terbatas.
+  usageQuota            Int?
+  // Batas pemakaian per pelanggan (ALT-PRM-014). null = tak terbatas.
+  usageLimitPerCustomer Int?
+  // Batas berapa kali promo YANG SAMA boleh diterapkan pada SATU pesanan.
+  // Default 1 (perilaku lama, satu penerapan). Bila `repeatable = true`,
+  // batas ini adalah PAGU ATAS jumlah repeat (bukan penyebab repeat itu
+  // sendiri) - lihat catatan pada PromoPemakaian di bawah untuk keputusan
+  // constraint terkait.
+  usageLimitPerOrder    Int?                @default(1)
+  // ALT-PRM-010: bisakah promo YANG SAMA berlaku berkali-kali dalam SATU
+  // pesanan (mis. "tiap kelipatan 2 kopi, 1 gratis" pada pesanan 6 kopi =
+  // berlaku 3x). false = perilaku lama (paling banyak satu kali per pesanan).
+  repeatable            Boolean             @default(false)
+  createdAt             DateTime            @default(now())
 
   tenant    Tenant           @relation(fields: [tenantId], references: [id])
-  aturan    PromoAturan[]
+  kondisi   PromoKondisi[]
+  reward    PromoReward[]
+  jadwal    PromoJadwal[]
+  outlet    PromoOutlet[]
   kupon     Kupon[]
   pemakaian PromoPemakaian[]
+  simulasi  PromoSimulasi[]
 
+  // ALT-DEF-009: dibutuhkan agar PromoReward/PromoJadwal/PromoOutlet/
+  // PromoPemakaian bisa memakai composite-FK (tenantId, promoId) ->
+  // Promo(tenantId, id) mengikuti pola ADR-013.
+  @@unique([tenantId, id])
   @@map("promo")
 }
 
-model PromoAturan {
+// ALT-DEF-009/ADR-026 Keputusan 4: rename bersih dari `PromoAturan` ->
+// `PromoKondisi` (tidak ada kode lain yang bergantung pada nama lama,
+// diverifikasi lewat grep sebelum rename). Bentuk `jenisSyarat`+`nilaiSyarat
+// Json` DIPERTAHANKAN apa adanya (tidak diformalkan lebih jauh) - cukup
+// fleksibel untuk syarat heterogen (angka min belanja, daftar id item/
+// kategori, rentang jam) tanpa perlu satu kolom nullable per jenis syarat
+// yang kebanyakan akan NULL. Trade-off yang disadari: tidak ada validasi
+// bentuk `nilaiSyarat` di level database, hanya di app-level - sama seperti
+// keterbatasan Prisma/Postgres lain yang dicatat di DECISION-LOG.md.
+// TIDAK membawa `tenantId` sendiri - baris murni di bawah Promo, tidak ada
+// jalur akses independen, konsisten dengan keputusan ADR-013 untuk tabel
+// baris/junction (lihat "Model yang DIJUDGE AMAN tanpa composite-FK").
+model PromoKondisi {
   id          String           @id
   promoId     String
   jenisSyarat JenisSyaratPromo
@@ -3293,7 +3410,117 @@ model PromoAturan {
 
   promo Promo @relation(fields: [promoId], references: [id])
 
-  @@map("promo_aturan")
+  @@map("promo_kondisi")
+}
+
+// ALT-DEF-009/ADR-026 Keputusan 2: BARU. Satu promo boleh punya lebih dari
+// satu baris reward (mis. promo ulang tahun = DISKON_PERSEN 10% + satu
+// ITEM_GRATIS) - reward-stacking DI DALAM satu promo berbeda dari
+// promo-stacking ANTAR promo (yang diatur `stackingPolicy`/`conflictGroup`
+// di `Promo`). Kolom reward-spesifik sengaja semuanya nullable pada satu
+// tabel lebar (bukan tabel per jenis reward) - pola yang sama seperti
+// `PromoKondisi.nilaiSyarat`, dipilih karena jumlah kombinasi kolom yang
+// benar-benar dipakai bersamaan kecil dan tabel per-jenis akan memaksa JOIN
+// bercabang di setiap query evaluasi promo.
+model PromoReward {
+  id       String           @id
+  tenantId String
+  promoId  String
+  jenis    JenisRewardPromo
+
+  // --- DISKON_PERSEN ---
+  nilaiPersen         Decimal?
+  // --- DISKON_NOMINAL ---
+  nilaiNominal        Int?
+  // --- ITEM_GRATIS / BELI_X_BAYAR_Y (target hadiah) ---
+  itemGratisId        String?
+  jumlahGratis        Int?
+  // --- HARGA_PAKET ---
+  hargaPaket          Int?
+  // --- BELI_X_BAYAR_Y ---
+  syaratJumlahBeliX   Int?
+  bayarJumlahY        Int?
+  // Berlaku kelipatan (mis. beli 6 = 3x lipat "beli 2 gratis 1") - dipakai
+  // bersama `Promo.repeatable` untuk BOGO berulang (ALT-PRM-010): kolom ini
+  // adalah IZIN pada level reward, `Promo.repeatable` adalah SAKLAR pada
+  // level promo yang benar-benar mengizinkan pengulangan pada satu pesanan.
+  berlakuKelipatan    Boolean  @default(false)
+  // Apakah harga modifier (mis. extra cheese) ikut digratiskan saat item
+  // dasarnya digratiskan (ALT-PRM-012).
+  modifierIkutGratis  Boolean  @default(false)
+  // Batas berapa baris hadiah yang boleh dihasilkan reward ini per pesanan -
+  // beda dari `Promo.usageLimitPerOrder` (itu membatasi berapa kali PROMO
+  // diterapkan; ini membatasi berapa BARIS HADIAH satu reward boleh
+  // menghasilkan, relevan ketika satu reward memberi >1 item per aktivasi).
+  batasHadiahPerOrder Int?
+
+  tenant     Tenant    @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-009/ADR-013: composite-FK (tenantId, promoId) -> Promo(tenantId, id).
+  promo      Promo     @relation(fields: [tenantId, promoId], references: [tenantId, id])
+  // ALT-DEF-009/ADR-013: composite-FK (tenantId, itemGratisId) -> ItemMenu(tenantId, id).
+  // Nullable - hanya bermakna untuk jenis ITEM_GRATIS/BELI_X_BAYAR_Y.
+  itemGratis ItemMenu? @relation(fields: [tenantId, itemGratisId], references: [tenantId, id])
+
+  @@map("promo_reward")
+}
+
+// ALT-DEF-009: BARU - penjadwalan hari/jam, TERPISAH dari
+// `berlakuSejak`/`berlakuSampai` milik `Promo` (itu rentang TANGGAL promo
+// hidup sama sekali, mis. "1-31 Juli 2026"; PromoJadwal adalah jendela
+// BERULANG di dalam rentang itu, mis. "Senin-Jumat jam 14:00-17:00" untuk
+// happy hour, ALT-PRM-004). `jamMulai`/`jamSelesai` memakai `String` (bukan
+// `DateTime`) mengikuti presisi yang SAMA dengan `JadwalShift.jamMulai`/
+// `jamSelesai` yang sudah ada di domain HR (lihat model JadwalShift) - pola
+// itu sendiri sudah dicatat sebagai keterbatasan/defect-era (ALT-DEF-018)
+// tapi PERBAIKANNYA di luar scope batch domain promo ini; konsistensi
+// dengan precedent yang ada lebih penting daripada memperkenalkan pola
+// waktu KETIGA yang berbeda ke skema.
+model PromoJadwal {
+  id              String @id
+  tenantId        String
+  promoId         String
+  // Hari dalam minggu (0 = Minggu .. 6 = Sabtu), Postgres native array
+  // (Prisma `Int[]` didukung untuk provider postgresql - diverifikasi lewat
+  // `prisma validate`/`prisma generate` sungguhan, lihat RELEASE-EVIDENCE.md).
+  // Array KOSONG = berlaku SETIAP hari (konvensi "kosong berarti semua",
+  // sama seperti PromoOutlet di bawah) - list scalar Prisma tidak bisa
+  // dibuat nullable/opsional, jadi array kosong adalah representasi satu-
+  // satunya untuk "tidak ada pembatasan hari".
+  hariDalamMinggu Int[]
+  jamMulai        String
+  jamSelesai      String
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-009/ADR-013: composite-FK (tenantId, promoId) -> Promo(tenantId, id).
+  promo  Promo  @relation(fields: [tenantId, promoId], references: [tenantId, id])
+
+  @@map("promo_jadwal")
+}
+
+// ALT-DEF-009/ALT-DEF-030 (MENUTUP ALT-DEF-030): BARU - satu-satunya
+// mekanisme cakupan outlet untuk Promo, menggantikan
+// `JenisSyaratPromo.OUTLET_TERTENTU` yang dihapus di atas. KONVENSI PENTING
+// ("kosong berarti semua" - jebakan umum, didokumentasikan eksplisit):
+// promo TANPA baris PromoOutlet sama sekali berlaku di SEMUA outlet tenant
+// tersebut. Menambahkan baris PromoOutlet mempersempit cakupan ke outlet
+// yang disebut SAJA. Ini SAMA seperti konvensi `PromoJadwal.hariDalamMinggu`
+// kosong = semua hari.
+model PromoOutlet {
+  id       String @id
+  tenantId String
+  promoId  String
+  outletId String
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-009/ADR-013: composite-FK (tenantId, promoId) -> Promo(tenantId, id).
+  promo  Promo  @relation(fields: [tenantId, promoId], references: [tenantId, id])
+  // ALT-DEF-009/ADR-013: composite-FK (tenantId, outletId) -> Outlet(tenantId, id) -
+  // inilah yang menutup ALT-DEF-030 (outlet yang dirujuk dijamin database
+  // milik tenant yang sama dengan Promo).
+  outlet Outlet @relation(fields: [tenantId, outletId], references: [tenantId, id])
+
+  @@unique([promoId, outletId])
+  @@map("promo_outlet")
 }
 
 model Kupon {
@@ -3314,21 +3541,134 @@ model Kupon {
   @@map("kupon")
 }
 
+// ALT-DEF-009 (INTI DEFECT): `pesananId` TIDAK LAGI `@unique` - inilah
+// perbaikan defect utama batch ini. `PromoPemakaian` sekarang HEADER
+// "promo ini diterapkan ke pesanan ini", dengan rincian nilai per baris
+// dipindah ke `PromoPemakaianBaris` (satu header bisa punya banyak baris,
+// mis. BOGO yang menggratiskan 2 item = 2 baris).
+//
+// KEPUTUSAN CONSTRAINT (tension repeatable vs unique, didokumentasikan
+// eksplisit sesuai instruksi correction-loop): draft awal berencana
+// `@@unique([promoId, pesananId])` ("promo yang sama tidak boleh dipakai
+// dua kali di pesanan yang sama, KECUALI repeatable=true"). Itu TIDAK BISA
+// diekspresikan sebagai constraint database apa pun - baik Prisma `@@unique`
+// (statis, tidak bisa bersyarat) MAUPUN partial unique index Postgres biasa
+// (predicate index parsial hanya boleh merujuk KOLOM PADA TABEL YANG SAMA,
+// bukan JOIN ke `Promo.repeatable` di tabel lain). Ini kategori keterbatasan
+// BARU dan lebih dalam daripada precedent XOR/partial-unique di
+// `prisma/migrations/manual/002`/`003` (keduanya predicate STATIS dalam satu
+// tabel) - satu-satunya cara benar-benar menjaminnya di level database
+// adalah TRIGGER, yang di luar scope "SQL manual terdokumentasi" yang sudah
+// dipakai batch-batch sebelumnya. Keputusan: TIDAK ada unique constraint DB
+// pada (promoId, pesananId) sama sekali; aturan "paling banyak
+// usageLimitPerOrder baris PromoPemakaian per (promo, pesanan) kecuali
+// repeatable" ditegakkan MURNI di application-level, dan gap ini dicatat
+// sebagai ALT-DEF-038 (lihat DEFECT-LEDGER.md) - BUKAN sekadar catatan
+// komentar, karena berbeda kategori dari precedent yang sudah pernah
+// ditutup dengan SQL manual.
 model PromoPemakaian {
-  id          String   @id
-  tenantId    String
-  promoId     String
-  kuponId     String?
-  pesananId   String   @unique
-  nilaiDiskon Int
-  createdAt   DateTime @default(now())
+  id        String               @id
+  tenantId  String
+  promoId   String
+  kuponId   String?
+  pesananId String
+  status    StatusPemakaianPromo @default(DITERAPKAN)
+  createdAt DateTime             @default(now())
 
   tenant  Tenant  @relation(fields: [tenantId], references: [id])
-  promo   Promo   @relation(fields: [promoId], references: [id])
+  // ALT-DEF-009/ADR-013: composite-FK (tenantId, promoId) -> Promo(tenantId, id).
+  promo   Promo   @relation(fields: [tenantId, promoId], references: [tenantId, id])
   kupon   Kupon?  @relation(fields: [kuponId], references: [id])
-  pesanan Pesanan @relation(fields: [pesananId], references: [id])
+  // ALT-DEF-009/ADR-013: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
+  pesanan Pesanan @relation(fields: [tenantId, pesananId], references: [tenantId, id])
 
+  baris    PromoPemakaianBaris[]
+  snapshot PromoSnapshot?
+
+  // Dibutuhkan agar PromoPemakaianBaris/PromoSnapshot bisa memakai
+  // composite-FK (tenantId, promoPemakaianId) -> PromoPemakaian(tenantId, id).
+  @@unique([tenantId, id])
+  // Indeks non-unik (BUKAN constraint) untuk query "promo apa saja yang
+  // sudah dipakai di pesanan ini" - lihat catatan keputusan constraint di
+  // atas untuk alasan tidak ada @@unique di sini.
+  @@index([promoId, pesananId])
   @@map("promo_pemakaian")
+}
+
+// ALT-DEF-009: BARU - rincian per baris diskon di bawah satu header
+// PromoPemakaian. `itemPesananId` nullable: diskon level-order (mis.
+// DISKON_NOMINAL Rp10.000 dari total) tidak menunjuk baris item tertentu;
+// diskon level-item (mis. ITEM_GRATIS) menunjuk baris ItemPesanan yang
+// digratiskan. BOGO yang menggratiskan 2 item menghasilkan 2 baris di sini
+// (satu per item), bukan satu baris dengan kuantitas 2 - membuat retur
+// parsial per item bisa mengoreksi promo secara presisi (ALT-PRM-017).
+model PromoPemakaianBaris {
+  id               String   @id
+  tenantId         String
+  promoPemakaianId String
+  itemPesananId    String?
+  nilaiDiskon      Int
+  createdAt        DateTime @default(now())
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-009/ADR-013: composite-FK (tenantId, promoPemakaianId) -> PromoPemakaian(tenantId, id).
+  promoPemakaian PromoPemakaian @relation(fields: [tenantId, promoPemakaianId], references: [tenantId, id])
+  // ItemPesanan TIDAK membawa tenantId sendiri (baris di bawah Pesanan, lihat
+  // ADR-013), jadi FK ini ID tunggal - konsisten dengan pola
+  // ItemPesananModifier.itemPesanan di atas.
+  itemPesanan    ItemPesanan?   @relation(fields: [itemPesananId], references: [id])
+
+  @@map("promo_pemakaian_baris")
+}
+
+// ALT-DEF-009: BARU - salinan definisi promo (kondisi+reward+jadwal) PERSIS
+// pada saat diterapkan, prinsip yang sama dengan kolom `*Snapshot` di
+// ItemPesanan (ALT-DEF-005/ADR-017 Keputusan 2): perubahan Promo di
+// kemudian hari (mis. admin mengedit persentase diskon) TIDAK PERNAH
+// menulis ulang histori pesanan lama. `definisiPromo Json` dipilih (bukan
+// kolom per field) karena bentuknya harus menampung struktur
+// kondisi+reward+jadwal yang bervariasi per jenis promo - membuat kolom
+// individual di sini berarti menduplikasi seluruh skema PromoKondisi/
+// PromoReward/PromoJadwal sebagai snapshot, yang tidak proporsional.
+model PromoSnapshot {
+  id               String   @id
+  tenantId         String
+  promoPemakaianId String   @unique
+  definisiPromo    Json
+  createdAt        DateTime @default(now())
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-009/ADR-013: composite-FK (tenantId, promoPemakaianId) -> PromoPemakaian(tenantId, id).
+  // @unique di atas menjamin 1:1 - satu penerapan promo, satu snapshot.
+  promoPemakaian PromoPemakaian @relation(fields: [tenantId, promoPemakaianId], references: [tenantId, id])
+
+  @@unique([tenantId, promoPemakaianId])
+  @@map("promo_snapshot")
+}
+
+// ALT-DEF-009: BARU - dry-run "apa efek promo ini pada keranjang ini" tanpa
+// menyentuh pesanan nyata (ALT-PRM-015). SENGAJA TIDAK terhubung ke
+// `Pesanan` sama sekali - `inputKeranjang` adalah representasi keranjang
+// bebas bentuk (Json), bukan FK ke ItemPesanan, karena simulasi bisa
+// terjadi SEBELUM pesanan dibuat sama sekali (mis. kalkulator promo di
+// halaman menu publik). `promoId` nullable: simulasi bisa mengevaluasi
+// "promo mana saja yang berlaku" (tanpa target promo tertentu) atau
+// "apa efek SATU promo spesifik ini" (dengan target).
+model PromoSimulasi {
+  id                  String   @id
+  tenantId            String
+  promoId             String?
+  inputKeranjang      Json
+  hasilSimulasi       Json
+  disimulasikanOlehId String
+  createdAt           DateTime @default(now())
+
+  tenant            Tenant   @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-009/ADR-013: composite-FK (tenantId, promoId) -> Promo(tenantId, id), nullable.
+  promo             Promo?   @relation(fields: [tenantId, promoId], references: [tenantId, id])
+  disimulasikanOleh Pengguna @relation("PromoSimulasiDijalankanOleh", fields: [disimulasikanOlehId], references: [id])
+
+  @@map("promo_simulasi")
 }
 
 // =====================================================================================

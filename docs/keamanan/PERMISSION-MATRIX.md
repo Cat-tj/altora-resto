@@ -38,7 +38,10 @@ ALT-DEF-016 + 11 kode `dapur.*` baru pada batch ALT-DEF-006 + 8 kode
 `pembayaran.*` dan 4 kode `kasir.*` baru serta 3 kode `qris.*` tambahan pada
 batch ALT-DEF-004/ALT-DEF-014/ALT-DEF-015 + 10 kode `resep.*` baru pada batch
 ALT-DEF-007 + **penggantian 4 kode `persediaan.*` koarse dengan 18 kode
-granular pada batch ALT-DEF-008** = **93 kode** - lihat catatan di bawah
+granular pada batch ALT-DEF-008** + 10 kode `promo.*` baru (dipecah dari 2
+kode kasar `promo.lihat`/`promo.kelola` menjadi granular per sub-domain
+kondisi/reward/jadwal/outlet/kanal/prioritas/kuota/batas-pelanggan/terapkan/
+validasi) pada batch ALT-DEF-009 = **103 kode** - lihat catatan di bawah
 tabel), dikelompokkan per `domain`:
 
 > **ALT-DEF-008:** empat kode persediaan lama (`persediaan.lihat`,
@@ -75,7 +78,7 @@ tabel), dikelompokkan per `domain`:
 | giliran | `giliran.buka`, `giliran.tutup`, `giliran.tutup-paksa` |
 | persediaan | `persediaan.bahan.kelola`, `persediaan.satuan.kelola`, `persediaan.gudang.kelola`, `persediaan.lokasi.kelola`, `persediaan.mutasi.lihat`, `persediaan.mutasi.balik`, `persediaan.saldo.lihat`, `persediaan.reservasi.kelola`, `persediaan.reservasi.lepas`, `persediaan.batch.kelola`, `persediaan.transfer.kelola`, `persediaan.transfer.setujui`, `persediaan.transfer.terima`, `persediaan.waste.kelola`, `persediaan.alasan-waste.kelola`, `persediaan.opname.kelola`, `persediaan.opname.setujui`, `persediaan.reorder.kelola` |
 | pembelian | `pembelian.buat`, `pembelian.setujui`, `pembelian.terima` |
-| promo | `promo.lihat`, `promo.kelola` |
+| promo | `promo.lihat`, `promo.kelola`, `promo.kondisi.kelola`, `promo.reward.kelola`, `promo.jadwal.kelola`, `promo.outlet.kelola`, `promo.kanal.kelola`, `promo.prioritas.kelola`, `promo.kuota.kelola`, `promo.batas-pelanggan.kelola`, `promo.terapkan`, `promo.validasi` |
 | anggota | `anggota.lihat`, `anggota.kelola`, `anggota.tukar-poin` |
 | karyawan | `karyawan.lihat`, `karyawan.kelola` |
 | absensi | `absensi.koreksi`, `absensi.setujui` |
@@ -297,9 +300,13 @@ Legenda: `M` = boleh (Miliki akses penuh), `B` = boleh dengan approval Bertingka
 | Kelola konfigurasi QRIS outlet (`qris.konfigurasi.kelola`) | M | B | - | - | - | - | - | - | - |
 | Hasilkan QR bernominal saat pembayaran (`qris.generate`) | M | M | M | M | - | - | - | - | - |
 | Lihat riwayat perubahan konfigurasi QRIS (`qris.audit.lihat`) | M | M | L | - | - | - | - | - | - |
-| **Promo** |
-| Kelola promo & kupon | M | B | - | - | - | - | - | - | - |
-| Terapkan promo ke pesanan | M | M | M | M | M | - | - | - | - |
+| **Promo** (ALT-DEF-009/ADR-026) |
+| Kelola promo dasar & kupon (`promo.kelola`) | M | B | - | - | - | - | - | - | - |
+| Kelola kondisi/reward/jadwal promo (`promo.kondisi.kelola`, `promo.reward.kelola`, `promo.jadwal.kelola`) | M | B | - | - | - | - | - | - | - |
+| Kelola cakupan outlet & kanal promo (`promo.outlet.kelola`, `promo.kanal.kelola`) | M | B | - | - | - | - | - | - | - |
+| Kelola prioritas/stacking & kuota promo (`promo.prioritas.kelola`, `promo.kuota.kelola`, `promo.batas-pelanggan.kelola`) | M | B | - | - | - | - | - | - | - |
+| Validasi/simulasi promo (`promo.validasi`) | M | M | M | M | M | - | - | - | - |
+| Terapkan promo ke pesanan (`promo.terapkan`) | M | M | M | M | M | - | - | - | - |
 | **Pelanggan & Keanggotaan** |
 | Kelola data pelanggan | M | M | M | M | M | - | - | - | - |
 | Kelola tier & poin manual | M | B | - | - | - | - | - | - | - |

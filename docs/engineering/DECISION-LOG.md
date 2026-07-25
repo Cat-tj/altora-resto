@@ -319,11 +319,16 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
     `PengaturanOutlet`, tidak ada FK kedua untuk dibandingkan.
   - `Promo` - hanya punya relasi ke `Tenant` langsung (lihat poin 4 di atas),
     otomatis aman tanpa composite. **CATATAN GAP terpisah (bukan defect
-    composite-FK):** `Promo` belum punya relasi/kolom outlet sama sekali
-    meskipun `JenisSyaratPromo.OUTLET_TERTENTU` menyiratkan promo seharusnya
-    bisa dibatasi per outlet - **sengaja TIDAK** ditambahkan `PromoOutlet` di
-    batch ini (di luar scope `ALT-DEF-010`/`ALT-DEF-014`, akan ditangani di
-    batch domain promo berikutnya per instruksi correction-loop).
+    composite-FK) - DITUTUP oleh ADR-026/`ALT-DEF-030`:** pada batch ini
+    (ADR-013), `Promo` belum punya relasi/kolom outlet sama sekali meskipun
+    `JenisSyaratPromo.OUTLET_TERTENTU` menyiratkan promo seharusnya bisa
+    dibatasi per outlet - **sengaja TIDAK** ditambahkan `PromoOutlet` di
+    batch ini (di luar scope `ALT-DEF-010`/`ALT-DEF-014`). Model
+    `PromoOutlet` (composite-FK `(tenantId, outletId) -> Outlet(tenantId,
+    id)`, konvensi "kosong berarti semua outlet") kemudian ditambahkan di
+    batch domain promo (`ALT-DEF-009`/`ALT-DEF-030`, lihat ADR-026), dan
+    `OUTLET_TERTENTU` DIHAPUS dari `JenisSyaratPromo` karena `PromoOutlet`
+    menjadi satu-satunya mekanisme cakupan outlet.
   - Semua tabel baris/junction murni (mis. `ResepBahan`, `ItemPesanan`,
     `ItemPesananModifier`, `PurchaseOrderBaris`, `PenerimaanBarangBaris`,
     `StokOpnameBaris`, `TiketDapurBaris`, `PembayaranMetodeBaris`,
@@ -1813,11 +1818,208 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
   jangkauan constraint deklaratif. Ini dinyatakan agar pembaca berikutnya tidak
   menganggap "jalankan migrasi" sebagai penutup seluruh daftar ini.
 
+## ADR-026: Domain Promo - stacking, PromoReward vs Promo.jenis, PromoOutlet, dan resolusi konflik (ALT-DEF-009, ALT-DEF-030)
+
+- **Status:** DITERIMA
+- **Konteks:** `ALT-DEF-009` di `DEFECT-LEDGER.md` mencatat bahwa
+  `PromoPemakaian.pesananId` dulu `@unique`, membuat satu pesanan hanya bisa
+  memakai SATU promo - stacking (mis. diskon anggota + BOGO sekaligus) tidak
+  mungkin secara struktural, padahal `ALT-PRM-007` s.d. `ALT-PRM-010` di
+  `MASTER-CHECKLIST.md` secara eksplisit menjanjikan prioritas, stacking, best
+  discount, dan BOGO berulang. `ALT-DEF-030` mencatat gap terpisah: `Promo`
+  tidak punya relasi/kolom outlet sama sekali meski enum `JenisSyaratPromo`
+  sudah punya nilai `OUTLET_TERTENTU` yang menyiratkan sebaliknya (ditemukan
+  saat audit composite-FK ADR-013, sengaja TIDAK dikerjakan di batch itu
+  karena murni business-logic domain promo). Domain promo lama juga hanya
+  punya EMPAT model (`Promo`, `PromoAturan`, `Kupon`, `PromoPemakaian`) tanpa
+  cara memisahkan "kapan promo berlaku" dari "bagaimana diskon dihitung",
+  tanpa penjadwalan hari/jam, dan tanpa cara menyimpan >1 baris hasil diskon
+  per pesanan.
+
+- **Keputusan 1 - `stackingPolicy`+`conflictGroup`+`prioritas` menggantikan
+  `bisaDigabung Boolean`:** Boolean lama hanya menjawab ya/tidak untuk "boleh
+  digabung dengan promo LAIN apa pun". Itu tidak cukup untuk memenuhi
+  `ALT-PRM-007`/`ALT-PRM-009`. Diganti (bukan ditambah di samping - satu
+  sumber kebenaran) dengan:
+  - `stackingPolicy` (enum `StackingPolicyPromo`): `TIDAK_BOLEH_DIGABUNG`
+    (promo ini mengeksklusi SEMUA promo lain pada pesanan yang sama -
+    setara `bisaDigabung = false` lama, dan dijadikan `@default` supaya
+    perilaku default tetap sama amannya dengan sebelumnya),
+    `BOLEH_DIGABUNG` (boleh digabung dengan promo lain, tunduk pada
+    `conflictGroup`), `AMBIL_DISKON_TERBAIK` (bila beberapa promo kandidat
+    lolos, engine memilih SATU kombinasi bernilai diskon tertinggi -
+    `ALT-PRM-009`), `BERDASARKAN_PRIORITAS` (promo `prioritas` tertinggi
+    dievaluasi dan diterapkan lebih dulu, sisanya dievaluasi lagi terhadap
+    keranjang yang sudah dipotong - `ALT-PRM-007`).
+  - `conflictGroup` (`String?`): promo yang BERBAGI grup yang sama saling
+    eksklusif WALAU keduanya sendiri-sendiri `stackingPolicy =
+    BOLEH_DIGABUNG` (mis. dua promo "diskon dasar" yang berbeda kondisi
+    tapi tidak boleh dobel). `null` = promo tidak ikut grup konflik apa pun.
+  - `prioritas` (`Int`, default 0): tie-breaker untuk `BERDASARKAN_PRIORITAS`
+    dan input pengurutan evaluasi untuk semua strategi lain.
+  - **Algoritma resolusi konflik (didokumentasikan, TIDAK diimplementasikan
+    business-logic-nya di batch ini - itu `packages/promo`):**
+    1. Kumpulkan seluruh promo yang LOLOS kondisi (`PromoKondisi`, jadwal
+       `PromoJadwal`, outlet `PromoOutlet`) untuk pesanan ini - disebut
+       "kandidat".
+    2. Bila ADA kandidat dengan `stackingPolicy = TIDAK_BOLEH_DIGABUNG`:
+       kandidat tersebut MENGEKSKLUSI seluruh kandidat lain sepenuhnya. Bila
+       ada LEBIH DARI SATU kandidat `TIDAK_BOLEH_DIGABUNG` yang lolos
+       bersamaan (mis. dua promo Header sama-sama eksklusif), keduanya
+       saling eksklusif juga - pilih SATU berdasarkan `prioritas` tertinggi
+       (fallback dari definisi "tidak boleh gabung dengan APA PUN").
+    3. Kandidat sisa (semuanya `BOLEH_DIGABUNG`/`AMBIL_DISKON_TERBAIK`/
+       `BERDASARKAN_PRIORITAS`) dikelompokkan per `conflictGroup` (grup
+       `null` dianggap masing-masing grup sendiri berisi satu promo, tidak
+       saling mengeksklusi promo `null` lain). Dalam SATU grup yang sama,
+       hanya SATU promo yang menang.
+    4. Pemenang dalam satu grup ditentukan oleh `stackingPolicy` milik
+       promo-promo di grup itu: bila ada yang `BERDASARKAN_PRIORITAS`,
+       menangkan `prioritas` tertinggi; bila `AMBIL_DISKON_TERBAIK`, hitung
+       hasil diskon tiap kandidat dan menangkan nilai rupiah tertinggi;
+       campuran strategi dalam satu grup adalah kesalahan konfigurasi yang
+       divalidasi saat `Promo` dibuat/diubah (application-level), bukan
+       kasus runtime normal.
+    5. Seluruh pemenang lintas grup (yang tidak saling mengeksklusi) BOLEH
+       diterapkan bersamaan - masing-masing menghasilkan satu baris
+       `PromoPemakaian` pada pesanan yang sama.
+    6. `usageLimitPerOrder`/`repeatable` (Keputusan 4 di bawah) mengatur
+       berapa kali PROMO YANG SAMA (bukan promo berbeda) boleh menghasilkan
+       baris `PromoPemakaian` pada satu pesanan.
+  - `maximumDiscount`/`usageQuota`/`usageLimitPerCustomer` adalah batas
+    tambahan yang independen dari algoritma di atas (dicek terpisah saat
+    validasi/penerapan, bukan bagian dari resolusi konflik antar-promo).
+
+- **Keputusan 2 - `PromoReward` menggantikan `Promo.jenis`:** `Promo.jenis`
+  (enum `JenisPromo`) lama mencampur identitas promo dengan mekanisme
+  hitung diskon, dan hanya mengizinkan SATU jenis reward per promo. `Promo`
+  sekarang murni "kapan/untuk siapa" (kondisi+jadwal+outlet+stacking);
+  `PromoReward` (model baru, relasi 1:N dari `Promo`) adalah "bagaimana
+  diskon dihitung", dengan enum `JenisRewardPromo` (`DISKON_PERSEN`,
+  `DISKON_NOMINAL`, `ITEM_GRATIS`, `HARGA_PAKET`, `BELI_X_BAYAR_Y` -
+  `BELI_X_BAYAR_Y` ditambahkan karena `HARGA_PAKET`/`BELI_X_GRATIS_Y` lama
+  tidak cukup umum untuk kasus "beli 3 bayar 2" yang levelnya harga per unit,
+  bukan paket tetap maupun gratis penuh). Satu promo BOLEH punya lebih dari
+  satu baris `PromoReward` (reward-stacking DI DALAM satu promo, mis. promo
+  ulang tahun = diskon persen + satu item gratis sekaligus) - ini BERBEDA
+  dari promo-stacking ANTAR promo yang diatur Keputusan 1. `Promo.jenis` dan
+  enum `JenisPromo` DIHAPUS SEPENUHNYA (tidak dipertahankan sebagai kolom
+  usang di samping `PromoReward`) - mempertahankan keduanya akan menciptakan
+  dua sumber kebenaran yang bisa saling menyimpang, persis pola kesalahan
+  yang sudah dikoreksi di domain lain (lihat `ALT-DEF-034`).
+
+- **Keputusan 3 - `PromoOutlet` menutup `ALT-DEF-030`, `OUTLET_TERTENTU`
+  dihapus dari `JenisSyaratPromo`:** Model baru `PromoOutlet` (junction
+  `Promo` <-> `Outlet`, composite-FK tenant-safe mengikuti ADR-013) adalah
+  SATU-SATUNYA mekanisme cakupan outlet. Nilai enum
+  `JenisSyaratPromo.OUTLET_TERTENTU` yang lama DIHAPUS (bukan dipertahankan
+  di samping `PromoOutlet`) - alasan sama seperti Keputusan 2: dua mekanisme
+  untuk makna yang sama akan menyimpang, dan `nilaiSyarat Json` bebas pada
+  `PromoAturan`/`PromoKondisi` lama sama sekali tidak bisa divalidasi di
+  level database bahwa outlet yang disebut benar-benar milik tenant yang
+  sama - `PromoOutlet` bisa. **Konvensi "kosong berarti semua"** (footgun
+  umum, didokumentasikan eksplisit di skema dan `10-promo.md`): promo TANPA
+  baris `PromoOutlet` berlaku di SELURUH outlet tenant; menambahkan baris
+  MEMPERSEMPIT cakupan. Nilai baru `HARI_TERTENTU`/`KANAL_TERTENTU`/
+  `PELANGGAN_ANGGOTA`/`PELANGGAN_BARU`/`ULANG_TAHUN` ditambahkan ke
+  `JenisSyaratPromo` karena dijanjikan eksplisit oleh `MASTER-CHECKLIST.md`
+  (`ALT-PRM-004`, `ALT-PRM-006`, `ALT-PRM-014`) dan `10-promo.md` versi
+  sebelum batch ini. `HARI_TERTENTU` SENGAJA tetap ada meski `PromoJadwal`
+  (Keputusan 5) juga membawa hari - pembagian tanggung jawab: `PromoJadwal`
+  adalah jendela AKTIF/NONAKTIF promo (di luar jendela, promo tidak berlaku
+  sama sekali); `PromoKondisi.HARI_TERTENTU` adalah SYARAT yang bisa
+  dikombinasikan dengan syarat lain (mis. "MIN_BELANJA 100rb HANYA hari
+  Jumat", tanpa mengaktifkan/menonaktifkan promo secara keseluruhan pada
+  hari lain).
+
+- **Keputusan 4 - constraint `PromoPemakaian` dan tension `repeatable`:**
+  Draft awal berencana `@@unique([promoId, pesananId])` ("promo yang sama
+  tidak boleh dipakai dua kali di pesanan yang sama, KECUALI
+  `Promo.repeatable = true`"). Ini TIDAK BISA diekspresikan sebagai
+  constraint database dengan cara APA PUN yang tersedia: Prisma `@@unique`
+  statis tidak bisa bersyarat, dan partial unique index Postgres (precedent
+  `prisma/migrations/manual/001`/`002`/`003`) hanya boleh memakai predicate
+  atas KOLOM PADA TABEL YANG SAMA - predicate di sini butuh membaca
+  `Promo.repeatable` di tabel LAIN (join), yang tidak didukung partial index
+  standar. Ini kategori keterbatasan BARU, lebih dalam dari precedent
+  XOR/partial-unique sebelumnya (keduanya predicate statis dalam satu
+  tabel) - satu-satunya cara menjaminnya di level database adalah TRIGGER,
+  di luar scope "SQL manual terdokumentasi" yang dipakai batch-batch
+  sebelumnya. **Keputusan: TIDAK ADA unique constraint database pada
+  `(promoId, pesananId)` sama sekali.** `PromoPemakaian` hanya mendapat
+  `@@index([promoId, pesananId])` (non-unique, untuk performa query) dan
+  `@@unique([tenantId, id])` (untuk composite-FK anak). Aturan
+  "paling banyak `usageLimitPerOrder` baris `PromoPemakaian` per (promo,
+  pesanan), kecuali `repeatable`" ditegakkan MURNI application-level. Gap
+  ini dicatat sebagai `ALT-DEF-038` (lihat `DEFECT-LEDGER.md`) - dicatat
+  sebagai defect terbuka, bukan sekadar catatan komentar, karena berbeda
+  kategori dari precedent yang sudah pernah "ditutup" dengan SQL manual
+  (precedent itu MASIH bisa dijalankan sebagai unique index sungguhan kalau
+  Postgres tersedia; solusi untuk kasus ini butuh trigger yang belum
+  ditulis sama sekali).
+
+- **Keputusan 5 - `PromoJadwal` konsisten dengan pola `JadwalShift`:**
+  `jamMulai`/`jamSelesai` memakai `String` (bukan `DateTime`/tipe waktu
+  native), mengikuti presisi yang SAMA dengan `JadwalShift.jamMulai`/
+  `jamSelesai` yang sudah ada di domain HR. Pola string waktu itu sendiri
+  sudah dicatat sebagai keterbatasan/defect-era (`ALT-DEF-018`), tapi
+  memperbaikinya di luar cakupan batch domain promo ini - konsistensi
+  dengan precedent yang ada dipilih di atas memperkenalkan pola waktu
+  KETIGA yang berbeda ke skema. `hariDalamMinggu Int[]` memakai native
+  Postgres array (didukung Prisma untuk provider `postgresql`, diverifikasi
+  lewat `prisma validate`/`prisma generate` sungguhan - lihat
+  `RELEASE-EVIDENCE.md`); array TIDAK BISA dibuat opsional di Prisma
+  (scalar list selalu non-null, default kosong), jadi array kosong dipakai
+  sebagai representasi "semua hari", konvensi yang sama dengan
+  `PromoOutlet` kosong.
+
+- **Keputusan 6 - `PromoKondisi` adalah rename bersih dari `PromoAturan`:**
+  Tidak ada kode lain yang bergantung pada nama `PromoAturan` (diverifikasi
+  lewat grep sebelum rename), sehingga dipilih rename bersih (bukan
+  menambah `PromoKondisi` di samping `PromoAturan` lama yang di-deprecate).
+  Bentuk `jenisSyarat`+`nilaiSyarat Json` DIPERTAHANKAN apa adanya (tidak
+  diformalkan menjadi kolom per jenis syarat) - masih cukup fleksibel untuk
+  syarat heterogen tanpa banyak kolom nullable; trade-off yang disadari:
+  tidak ada validasi bentuk `nilaiSyarat` di level database.
+
+- **Keputusan 7 - `PromoPemakaian` menjadi header, `PromoPemakaianBaris`
+  menjadi rincian:** `nilaiDiskon` yang dulu langsung di `PromoPemakaian`
+  pindah ke `PromoPemakaianBaris` (relasi 1:N) supaya satu penerapan promo
+  bisa punya banyak baris hasil (mis. BOGO yang menggratiskan 2 item = 2
+  baris, bukan satu baris kuantitas 2) - penting untuk retur parsial per
+  item (`ALT-PRM-017`) mengoreksi promo secara presisi. `PromoPemakaian`
+  mendapat kolom `status` (`DITERAPKAN`/`DIBATALKAN`/`DIRETUR`) untuk
+  melacak siklus hidup penerapan tanpa menghapus baris (audit trail).
+
+- **Keputusan 8 - `PromoSnapshot` (1:1) dan `PromoSimulasi` (independen):**
+  `PromoSnapshot.definisiPromo Json` menyalin definisi promo LENGKAP saat
+  diterapkan, prinsip sama dengan kolom `*Snapshot` `ItemPesanan`
+  (`ALT-DEF-005`/ADR-017 Keputusan 2) - `Json` dipilih (bukan kolom per
+  field) karena bentuknya harus menampung struktur
+  kondisi+reward+jadwal yang bervariasi per jenis promo. `PromoSimulasi`
+  SENGAJA TIDAK terhubung ke `Pesanan` sama sekali - `inputKeranjang Json`
+  adalah representasi keranjang bebas bentuk, karena simulasi (`ALT-PRM-015`)
+  bisa terjadi SEBELUM pesanan dibuat (mis. kalkulator promo di halaman menu
+  publik) dan sengaja TIDAK menulis `PromoPemakaian`/mengurangi kuota.
+
+- **Model yang mendapat composite-FK (mengikuti ADR-013):** `PromoReward`
+  (`promo`; `itemGratis` nullable -> `ItemMenu`), `PromoJadwal` (`promo`),
+  `PromoOutlet` (`promo`; `outlet` - inilah yang menutup `ALT-DEF-030`),
+  `PromoPemakaian` (`promo`; `pesanan`), `PromoPemakaianBaris`
+  (`promoPemakaian`; `itemPesanan` TETAP FK ID tunggal karena `ItemPesanan`
+  sendiri tidak membawa `tenantId`, konsisten `ItemPesananModifier`),
+  `PromoSnapshot` (`promoPemakaian`), `PromoSimulasi` (`promo` nullable).
+  `Kupon`/`PromoKondisi` TIDAK disentuh pola FK-nya di batch ini (di luar
+  cakupan `ALT-DEF-009`/`ALT-DEF-030` - `PromoKondisi` memang tidak punya
+  `tenantId` sendiri per Keputusan 6, dan `Kupon` sudah punya `tenantId` +
+  FK `promoId`/`pelangganId` tunggal dari batch sebelumnya, tidak
+  diaudit ulang di sini).
+
 ## Status ringkas
 
 Semua ADR di atas berstatus **DITERIMA sebagai keputusan desain**, tetapi
 implementasinya di kode berstatus **BELUM DIKERJAKAN** kecuali skema Prisma awal
 (ADR-002, ADR-004, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015, ADR-016,
-ADR-017, ADR-018, ADR-019, ADR-020, ADR-021, ADR-022, ADR-023, ADR-024, ADR-025
-sudah tercermin di
+ADR-017, ADR-018, ADR-019, ADR-020, ADR-021, ADR-022, ADR-023, ADR-024, ADR-025,
+ADR-026 sudah tercermin di
 `prisma/schema/schema.prisma`).

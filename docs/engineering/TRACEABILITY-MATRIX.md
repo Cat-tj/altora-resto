@@ -153,9 +153,36 @@ kini lengkap 18 baris dan terverifikasi baris-per-baris.
 | ALT-DEF-004 (defect) | enum `KodeMetodeBayar` = PERSIS `TUNAI`/`TRANSFER_MANUAL`/`QRIS_MANUAL`/`SALDO_TOKO` | - | - | - | SIAP_DIVERIFIKASI (skema + dokumen + test) | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 |
 | ALT-DEF-014 (defect) | `AlokasiPembayaran` + `KoreksiPembayaran` (BARU); `Pembayaran.pesananId` DIHAPUS | `POST /api/v1/pembayaran`, `PUT /{id}/alokasi`, `POST /{id}/koreksi` | `/resto/{outletSlug}/kasir/pembayaran` | `pembayaran.buat`, `pembayaran.alokasi.kelola` | SIAP_DIVERIFIKASI (komponen alokasi; `PesananSplit` masih terbuka) | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 |
 | ALT-DEF-015 (defect) | `KonfigurasiQris` + `RiwayatKonfigurasiQris` (BARU) | `GET/PUT /api/v1/outlet/{id}/qris` | `/pengaturan/qris` | `qris.konfigurasi.kelola` | SIAP_DIVERIFIKASI (skema + dokumen + test; partial index belum dijalankan) | `RELEASE-EVIDENCE.md` - pass ALT-DEF-004/014/015 |
-| ALT-PRM-001 | `Promo`, `PromoAturan` | `GET/POST /api/v1/promo` | `/resto/{outletSlug}/promo` | MANAJER | BELUM DIKERJAKAN | - |
-| ALT-PRM-002 | `Kupon` | `POST /api/v1/promo/{id}/kupon` | `/resto/{outletSlug}/promo` | MANAJER | BELUM DIKERJAKAN | - |
-| ALT-PRM-003 | `PromoPemakaian` | `POST /api/v1/promo/validasi`, `/pesanan/{id}/promo` | `/resto/{outletSlug}/pesanan/{id}` | PELAYAN/KASIR | BELUM DIKERJAKAN | - |
+Baris `ALT-PRM-*` di bawah DITULIS ULANG pada batch `ALT-DEF-009` (ADR-026) -
+versi sebelumnya hanya punya 3 baris (`ALT-PRM-001`-`ALT-PRM-003`) yang sudah
+tidak sinkron dengan 17 baris `ALT-PRM-001`-`ALT-PRM-017` yang sebenarnya ada
+di `MASTER-CHECKLIST.md`, dan kolom Entitas-nya merujuk `PromoAturan` (nama
+lama, sudah di-rename `PromoKondisi`) serta melewatkan `PromoReward`/
+`PromoJadwal`/`PromoOutlet`/`PromoPemakaianBaris`/`PromoSnapshot`/
+`PromoSimulasi` sama sekali - correction yang sama seperti pola
+`ALT-DEF-036`. `PromoKanal` (nama entitas yang disebut `MASTER-CHECKLIST.md`
+`ALT-PRM-006`) TIDAK dibuat sebagai model tersendiri di skema - cakupan
+kanal diimplementasikan sebagai `PromoKondisi.jenisSyarat = KANAL_TERTENTU`
+(ADR-026 Keputusan 3), jadi kolom Entitas di bawah dikoreksi ke
+`PromoKondisi` untuk baris itu.
+
+| ALT-PRM-001 | `Promo` | `GET/POST /api/v1/promo` | `/resto/{outletSlug}/promo` | promo.kelola | BELUM DIKERJAKAN | - |
+| ALT-PRM-002 | `PromoKondisi` | `PUT /api/v1/promo/{id}/kondisi` | `/resto/{outletSlug}/promo/{id}` | promo.kondisi.kelola | BELUM DIKERJAKAN | - |
+| ALT-PRM-003 | `PromoReward` | `PUT /api/v1/promo/{id}/reward` | `/resto/{outletSlug}/promo/{id}` | promo.reward.kelola | BELUM DIKERJAKAN | - |
+| ALT-PRM-004 | `PromoJadwal` | `PUT /api/v1/promo/{id}/jadwal` | `/resto/{outletSlug}/promo/{id}` | promo.jadwal.kelola | BELUM DIKERJAKAN | - |
+| ALT-PRM-005 | `PromoOutlet` | `PUT /api/v1/promo/{id}/outlet` | `/resto/{outletSlug}/promo/{id}` | promo.outlet.kelola | BELUM DIKERJAKAN | - |
+| ALT-PRM-006 | `PromoKondisi` (dikoreksi dari `PromoKanal` - kanal diimplementasikan sebagai `jenisSyarat = KANAL_TERTENTU`, bukan model terpisah, lihat ADR-026 Keputusan 3) | `PUT /api/v1/promo/{id}/kanal` | `/resto/{outletSlug}/promo/{id}` | promo.kanal.kelola | BELUM DIKERJAKAN | - |
+| ALT-PRM-007 | `Promo` (`prioritas`) | `PUT /api/v1/promo/{id}/prioritas` | `/resto/{outletSlug}/promo/{id}` | promo.prioritas.kelola | BELUM DIKERJAKAN | - |
+| ALT-PRM-008 | `PromoPemakaian` (`pesananId` tidak lagi unik) | `POST /api/v1/pesanan/{id}/promo` | `/kasir/pesanan/{id}` | promo.terapkan | BELUM DIKERJAKAN | - |
+| ALT-PRM-009 | `Promo` (`stackingPolicy = AMBIL_DISKON_TERBAIK`) | `POST /api/v1/promo/validasi` | `/kasir/pesanan/{id}` | promo.validasi | BELUM DIKERJAKAN | - |
+| ALT-PRM-010 | `PromoReward` (`berlakuKelipatan`), `Promo` (`repeatable`) | `POST /api/v1/promo/validasi` | `/kasir/pesanan/{id}` | promo.validasi | BELUM DIKERJAKAN | - |
+| ALT-PRM-011 | `PromoReward` | `POST /api/v1/promo/validasi` | `/kasir/pesanan/{id}` | promo.validasi | BELUM DIKERJAKAN | - |
+| ALT-PRM-012 | `PromoReward` (`modifierIkutGratis`) | `PUT /api/v1/promo/{id}/reward` | `/resto/{outletSlug}/promo/{id}` | promo.reward.kelola | BELUM DIKERJAKAN | - |
+| ALT-PRM-013 | `Promo` (`usageQuota`), `PromoPemakaian` | `PUT /api/v1/promo/{id}/kuota` | `/resto/{outletSlug}/promo/{id}` | promo.kuota.kelola | BELUM DIKERJAKAN | - |
+| ALT-PRM-014 | `Promo` (`usageLimitPerCustomer`), `PromoPemakaian` | `PUT /api/v1/promo/{id}/batas-pelanggan` | `/resto/{outletSlug}/promo/{id}` | promo.batas-pelanggan.kelola | BELUM DIKERJAKAN | - |
+| ALT-PRM-015 | `PromoSimulasi` | `POST /api/v1/promo/simulasi` | `/kasir/pesanan/{id}` | promo.validasi | BELUM DIKERJAKAN | - |
+| ALT-PRM-016 | `PromoPemakaian`, `PromoSnapshot` | `POST /api/v1/pesanan/{id}/promo` | `/kasir/pesanan/{id}` | promo.terapkan | BELUM DIKERJAKAN | - |
+| ALT-PRM-017 | `PromoPemakaian` (`status = DIRETUR`) | internal (event retur pesanan) | - | - (aktor sistem, ALT-DEF-034) | BELUM DIKERJAKAN | - |
 | ALT-PLG-001 | `Pelanggan` | `GET/POST /api/v1/pelanggan` | `/resto/{outletSlug}/pelanggan` | PELAYAN | BELUM DIKERJAKAN | - |
 | ALT-PLG-002 | `Keanggotaan`, `TierMembership` | `POST /api/v1/pelanggan/{id}/keanggotaan` | `/resto/{outletSlug}/pelanggan` | PELAYAN | BELUM DIKERJAKAN | - |
 | ALT-PLG-003 | `PoinRiwayat` | `GET .../poin-riwayat`, `POST .../tukar-poin` | `/resto/{outletSlug}/pelanggan` | PELAYAN | BELUM DIKERJAKAN | - |
