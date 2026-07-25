@@ -1453,6 +1453,109 @@ endpoint persediaan nyata, dan penegakan runtime seluruh invariant di tabel
 bagian 4. Karena itu status `ALT-DEF-008` adalah `SIAP_DIVERIFIKASI`,
 **BUKAN** `DITUTUP`.
 
+## Pass correction-loop 2026-07-25 (lanjutan): perbaikan ALT-DEF-009 dan ALT-DEF-030
+
+### 1. Cakupan
+
+`ALT-DEF-009` (stacking promo - `PromoPemakaian.pesananId` dulu `@unique`)
+dan `ALT-DEF-030` (`Promo` tidak punya cakupan outlet). Domain promo
+dirancang ulang penuh (ADR-026): `PromoKondisi` (rename `PromoAturan`),
+`PromoReward` (baru, menggantikan `Promo.jenis`), `PromoJadwal` (baru),
+`PromoOutlet` (baru, menutup `ALT-DEF-030`), `PromoPemakaianBaris`/
+`PromoSnapshot`/`PromoSimulasi` (baru). Lihat `docs/database/10-promo.md`
+dan ADR-026 di `DECISION-LOG.md` untuk desain lengkap.
+
+### 2. Perintah Prisma nyata
+
+```
+$ npm run prisma:format
+Formatted prisma/schema/schema.prisma in 96ms 🚀
+
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/dummy" npm run prisma:validate
+The schema at prisma/schema/schema.prisma is valid 🚀
+
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/dummy" npm run prisma:generate
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 1.22s
+```
+
+`PromoJadwal.hariDalamMinggu Int[]` (native Postgres scalar array) tervalidasi
+dan tergenerate BERSIH tanpa error - mengonfirmasi klaim ADR-026 Keputusan 5
+bahwa Prisma mendukung `Int[]` untuk provider `postgresql`.
+
+### 3. `tsc --noEmit` dan eksekusi test struktur nyata
+
+```
+$ npx tsc --noEmit -p packages/test-support
+(tidak ada output - bersih)
+```
+
+Seluruh **20** file di `packages/test-support/src/architecture/` dijalankan
+satu per satu lewat `node --experimental-strip-types` (19 file sebelum batch
+ini + `promo-stacking-reward-constraints.test.ts` baru). **Sebelum batch:**
+19/19 lulus. **Sesudah batch (termasuk file baru):** 20/20 lulus, **0
+regresi**. 9 file `prisma-client-shape-*.test.ts` adalah test tipe murni
+(exit 0 tanpa output stdout, diverifikasi lewat `tsc --noEmit` di atas, bukan
+runtime assertion) - konsisten dengan pola batch-batch sebelumnya, bukan
+kegagalan diam-diam.
+
+```
+dapur-kds-multi-stasiun.test.ts -> OK: ... ALT-DEF-006 lulus.
+idempotency-outbox-notification-constraints.test.ts -> OK: ... ALT-DEF-017 lulus.
+keanggotaan-outlet-constraints.test.ts -> OK: ... ALT-DEF-001/ALT-DEF-002 lulus.
+pembayaran-alokasi-metode-constraints.test.ts -> OK: ... ALT-DEF-004/ALT-DEF-014 lulus.
+persediaan-ledger-reservasi-constraints.test.ts -> OK: ... ALT-DEF-008 lulus.
+pesanan-state-machine-snapshot-constraints.test.ts -> OK: ... ALT-DEF-005/ALT-DEF-016 lulus.
+prisma-client-shape*.test.ts (9 file) -> exit 0, tanpa output (test tipe)
+promo-stacking-reward-constraints.test.ts -> OK: ... ALT-DEF-009/ALT-DEF-030 lulus.
+qris-konfigurasi-constraints.test.ts -> OK: ... ALT-DEF-015 (QRIS) lulus.
+resep-versi-produksi-constraints.test.ts -> OK: ... ALT-DEF-007 lulus.
+sesi-auth-pin-constraints.test.ts -> OK: ... ALT-DEF-003/ALT-DEF-013 lulus.
+tenant-outlet-composite-constraints.test.ts -> OK: ... ALT-DEF-010/ALT-DEF-014 lulus.
+```
+
+### 4. Mutation test - assertion inti terbukti non-vacuous
+
+Assertion inti (`PromoPemakaian.pesananId` TIDAK boleh lagi `@unique`)
+diverifikasi dengan mutasi nyata, bukan diasumsikan:
+
+1. `cp prisma/schema/schema.prisma /tmp/schema.prisma.bak`.
+2. Mutasi dengan skrip Python yang mengganti PERSIS SATU kemunculan
+   `"  pesananId String\n"` di seluruh file menjadi
+   `"  pesananId String   @unique\n"` (dicek `s.count(old) == 1` sebelum
+   replace, supaya mutasi tidak salah sasaran ke field lain).
+3. `diff /tmp/schema.prisma.bak prisma/schema/schema.prisma` mengonfirmasi
+   TEPAT SATU baris berubah (baris 3574, field `PromoPemakaian.pesananId`) -
+   mutasi diverifikasi mengenai target yang benar sebelum menilai hasil test.
+4. Jalankan test - **GAGAL seperti yang diharapkan**:
+   ```
+   Error: ASSERTION GAGAL: PromoPemakaian.pesananId TIDAK boleh lagi punya
+   @unique - inilah inti defect ALT-DEF-009 (ADR-026). Baris aktual:
+   "pesananId String   @unique"
+   ```
+5. `cp /tmp/schema.prisma.bak prisma/schema/schema.prisma` (revert), `diff`
+   mengonfirmasi IDENTIK dengan sebelum mutasi (revert bersih, tidak ada
+   perubahan tertinggal).
+6. Jalankan ulang test - lulus kembali: `OK: seluruh assertion arsitektur
+   ALT-DEF-009/ALT-DEF-030 lulus.`
+
+### 5. Kesimpulan status
+
+Schema untuk `ALT-DEF-009`/`ALT-DEF-030` benar secara sintaks (`format` +
+`validate`), tipe yang dihasilkan benar secara bentuk (`generate` +
+`tsc --noEmit`), assertion inti (hilangnya `@unique` pada `pesananId`)
+terbukti **non-vacuous** lewat mutation test nyata (diff-diverifikasi baik
+saat mutasi maupun revert), dan **tidak ada regresi** pada 19 test
+arsitektur sebelumnya.
+
+**Belum ada:** migrasi Postgres nyata (termasuk keputusan bahwa constraint
+`(promoId, pesananId)` bersyarat-`repeatable` TIDAK BISA diekspresikan
+sebagai SQL manual statis seperti precedent 001-003, butuh trigger - dicatat
+sebagai `ALT-DEF-038`, lihat `DEFECT-LEDGER.md`), business-logic resolusi
+konflik stacking (`packages/promo`, algoritma didokumentasikan penuh di
+ADR-026 tapi tidak diimplementasikan), dan endpoint/handler nyata. Karena
+itu status `ALT-DEF-009` dan `ALT-DEF-030` adalah `SIAP_DIVERIFIKASI`,
+**BUKAN** `DITUTUP`.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```
