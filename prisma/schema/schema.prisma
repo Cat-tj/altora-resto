@@ -123,8 +123,21 @@ model Tenant {
   promoSimulasi              PromoSimulasi[]
   jabatan                    Jabatan[]
   karyawan                   Karyawan[]
-  jadwalShift                JadwalShift[]
+  // ALT-DEF-019/ALT-DEF-024/ALT-DEF-025: model baru domain HR/absensi (ADR-028).
+  departemen                 Departemen[]
+  karyawanOutlet             KaryawanOutlet[]
+  hubunganKerja              HubunganKerja[]
+  templateShift              TemplateShift[]
+  jadwalKerja                JadwalKerja[]
+  polaJadwalBerulang         PolaJadwalBerulang[]
+  permintaanTukarShift       PermintaanTukarShift[]
   absensi                    Absensi[]
+  koreksiAbsensi             KoreksiAbsensi[]
+  istirahatAbsensi           IstirahatAbsensi[]
+  cutiIzin                   CutiIzin[]
+  permintaanLembur           PermintaanLembur[]
+  targetKinerja              TargetKinerja[]
+  penilaianKinerja           PenilaianKinerja[]
   kategoriBiaya              KategoriBiaya[]
   rekapKasHarian             RekapKasHarian[]
   biayaOperasional           BiayaOperasional[]
@@ -217,8 +230,12 @@ model Outlet {
   pengaturanPersediaanOutlet PengaturanPersediaanOutlet?
   transferStokAsal           TransferStok[]              @relation("TransferStokOutletAsal")
   transferStokTujuan         TransferStok[]              @relation("TransferStokOutletTujuan")
-  karyawanUtama              Karyawan[]                  @relation("KaryawanOutletUtama")
-  jadwalShift                JadwalShift[]
+  // ALT-DEF-019: outletUtamaId DIHAPUS dari Karyawan - lihat KaryawanOutlet
+  // (many-to-many, isUtama menandai outlet utama) di bawah, ADR-028.
+  karyawanOutlet             KaryawanOutlet[]
+  templateShift              TemplateShift[]
+  jadwalKerja                JadwalKerja[]
+  polaJadwalBerulang         PolaJadwalBerulang[]
   absensi                    Absensi[]
   rekapKasHarian             RekapKasHarian[]
   biayaOperasional           BiayaOperasional[]
@@ -321,6 +338,14 @@ model Pengguna {
   promoSimulasiDijalankan         PromoSimulasi[]           @relation("PromoSimulasiDijalankanOleh")
   riwayatKonfigurasiQrisDilakukan RiwayatKonfigurasiQris[]  @relation("RiwayatKonfigurasiQrisDilakukanOleh")
   cutiIzinDisetujui               CutiIzin[]                @relation("CutiDisetujuiOleh")
+  // ALT-DEF-019/ALT-DEF-025: aktor domain HR/absensi (koreksi absensi, tukar
+  // shift, lembur, penilaian kinerja) - identitas GLOBAL, tidak di-composite-
+  // kan ke tenant (ADR-013 poin 5), sama seperti aktor domain lain di atas.
+  koreksiAbsensiDiajukan          KoreksiAbsensi[]          @relation("KoreksiAbsensiDiajukanOleh")
+  koreksiAbsensiDisetujui         KoreksiAbsensi[]          @relation("KoreksiAbsensiDisetujuiOleh")
+  permintaanTukarShiftDisetujui   PermintaanTukarShift[]    @relation("TukarShiftDisetujuiOleh")
+  permintaanLemburDisetujui       PermintaanLembur[]        @relation("LemburDisetujuiOleh")
+  penilaianKinerjaDinilai         PenilaianKinerja[]        @relation("PenilaianDinilaiOleh")
   rekapKasHarianDiverifikasi      RekapKasHarian[]          @relation("RekapDiverifikasiOleh")
   biayaOperasionalDicatat         BiayaOperasional[]        @relation("BiayaDicatatOleh")
   izinSementaraDiberikan          IzinSementara[]           @relation("IzinSementaraDiberikanOleh")
@@ -591,7 +616,13 @@ model Perangkat {
   // model RiwayatPerangkat) - append-only, terpisah dari baris Perangkat itu
   // sendiri (yang hanya menyimpan state TERKINI perangkat, bukan histori).
   riwayatPerangkat RiwayatPerangkat[]
+  // ALT-HR-017: absensi yang direkam dari perangkat ini (pembatasan
+  // perangkat presensi, opsional per tenant).
+  absensi          Absensi[]
 
+  // ALT-HR-017: agar Absensi bisa memakai composite-FK
+  // (tenantId, perangkatId) -> Perangkat(tenantId, id).
+  @@unique([tenantId, id])
   @@map("perangkat")
 }
 
@@ -4093,14 +4124,46 @@ model RiwayatGabungPelanggan {
 // 12. KARYAWAN & ABSENSI (docs/database/12-karyawan-absensi.md)
 // =====================================================================================
 
+// ALT-DEF-019/ALT-DEF-024/ALT-DEF-025 (ADR-028): domain HR/absensi dirombak -
+// karyawan multi-outlet (KaryawanOutlet), riwayat jabatan/employment
+// terpisah dari identitas karyawan (HubunganKerja, historisasi seperti
+// VersiResep), template shift dengan flag lintas-tengah-malam eksplisit,
+// dan koreksi absensi sebagai alur approval append-only (KoreksiAbsensi)
+// yang TIDAK PERNAH menimpa baris Absensi asli. Lihat ADR-028 di
+// DECISION-LOG.md untuk rasional lengkap setiap keputusan di bawah.
+
 enum StatusKaryawan {
   AKTIF
   CUTI
   NONAKTIF
 }
 
-enum StatusPenugasanShift {
+// ALT-DEF-019 (ADR-028 Keputusan 1): jabatan kini melekat pada HubunganKerja
+// (riwayat employment), bukan langsung pada Karyawan - satu karyawan bisa
+// berganti jabatan/departemen dari waktu ke waktu tanpa kehilangan histori,
+// sama seperti prinsip versioning VersiResep.
+enum TipeHubunganKerja {
+  TETAP
+  KONTRAK
+  PARUH_WAKTU
+  MAGANG
+}
+
+// ALT-DEF-024 (ADR-028 Keputusan 3): status penjadwalan diperluas dari
+// sekadar DIJADWALKAN/DIBATALKAN menjadi siklus konfirmasi/selesai penuh,
+// selaras ALT-HR-007.
+enum StatusJadwalKerja {
   DIJADWALKAN
+  DIKONFIRMASI
+  DIBATALKAN
+  SELESAI
+}
+
+enum StatusPermintaanTukarShift {
+  DIAJUKAN
+  DISETUJUI_REKAN
+  DISETUJUI_MANAJER
+  DITOLAK
   DIBATALKAN
 }
 
@@ -4118,6 +4181,14 @@ enum StatusAbsensi {
   LEMBUR
 }
 
+// ALT-DEF-019 (ADR-028 Keputusan 5, crux decision): status alur approval
+// koreksi absensi - lihat model KoreksiAbsensi.
+enum StatusKoreksiAbsensi {
+  DIAJUKAN
+  DISETUJUI
+  DITOLAK
+}
+
 enum JenisCutiIzin {
   CUTI_TAHUNAN
   SAKIT
@@ -4130,107 +4201,472 @@ enum StatusCutiIzin {
   DITOLAK
 }
 
+enum StatusPermintaanLembur {
+  DIAJUKAN
+  DISETUJUI
+  DITOLAK
+}
+
 model Jabatan {
   id       String @id
   tenantId String
-  nama     String
 
-  tenant   Tenant     @relation(fields: [tenantId], references: [id])
-  karyawan Karyawan[]
+  nama String
 
-  // ALT-DEF-010: agar Karyawan bisa memakai composite-FK
+  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-019: jabatanId pindah dari Karyawan ke HubunganKerja.
+  hubunganKerja HubunganKerja[]
+
+  // ALT-DEF-010: agar HubunganKerja bisa memakai composite-FK
   // (tenantId, jabatanId) -> Jabatan(tenantId, id).
   @@unique([tenantId, id])
   @@map("jabatan")
+}
+
+// ALT-DEF-019 (ADR-028 Keputusan 1): departemen master data BARU - dipakai
+// untuk pengelompokan laporan HR (Dapur/FOH/Gudang/Admin, ALT-HR-004),
+// digantung ke HubunganKerja (opsional - tidak semua tenant memakai
+// departemen), bukan ke Karyawan langsung, dengan alasan yang sama seperti
+// jabatan: departemen adalah properti dari SATU periode employment, bukan
+// identitas statis karyawan.
+model Departemen {
+  id       String @id
+  tenantId String
+
+  nama   String
+  status StatusAktifNonaktif @default(AKTIF)
+
+  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  hubunganKerja HubunganKerja[]
+
+  // Agar HubunganKerja bisa memakai composite-FK
+  // (tenantId, departemenId) -> Departemen(tenantId, id).
+  @@unique([tenantId, id])
+  @@map("departemen")
 }
 
 model Karyawan {
   id               String         @id
   tenantId         String
   penggunaId       String?        @unique
-  jabatanId        String
-  outletUtamaId    String
   nomorInduk       String         @unique
   status           StatusKaryawan @default(AKTIF)
   tanggalBergabung DateTime
 
-  tenant                  Tenant                    @relation(fields: [tenantId], references: [id])
-  pengguna                Pengguna?                 @relation(fields: [penggunaId], references: [id])
-  // ALT-DEF-010: composite-FK (tenantId, jabatanId) -> Jabatan(tenantId, id).
-  jabatan                 Jabatan                   @relation(fields: [tenantId, jabatanId], references: [tenantId, id])
-  // ALT-DEF-010: composite-FK (tenantId, outletUtamaId) -> Outlet(tenantId, id).
-  outletUtama             Outlet                    @relation("KaryawanOutletUtama", fields: [tenantId, outletUtamaId], references: [tenantId, id])
-  penugasanShift          PenugasanShift[]
-  absensi                 Absensi[]
-  cutiIzin                CutiIzin[]
-  rmKinerjaKaryawanHarian RmKinerjaKaryawanHarian[]
+  tenant                        Tenant                    @relation(fields: [tenantId], references: [id])
+  pengguna                      Pengguna?                 @relation(fields: [penggunaId], references: [id])
+  // ALT-DEF-019 (ADR-028 Keputusan 2): outletUtamaId DIHAPUS - digantikan
+  // KaryawanOutlet many-to-many (isUtama menandai outlet utama). Ini
+  // perubahan BREAKING TAPI BENAR, sejalan dengan pola ALT-DEF-001 yang
+  // menghapus Pengguna.tenantId demi model keanggotaan - satu sumber
+  // kebenaran (KaryawanOutlet), bukan dua yang berpotensi tidak sinkron.
+  karyawanOutlet                KaryawanOutlet[]
+  // ALT-DEF-019 (ADR-028 Keputusan 1): riwayat jabatan/departemen/tipe
+  // hubungan kerja - jabatan AKTIF karyawan didapat lewat query
+  // "HubunganKerja terbaru dengan status AKTIF dan berakhirPada null (atau
+  // >= sekarang)", BUKAN field statis di Karyawan.
+  hubunganKerja                 HubunganKerja[]
+  jadwalKerja                   JadwalKerja[]
+  polaJadwalBerulang            PolaJadwalBerulang[]
+  permintaanTukarShiftPemohon   PermintaanTukarShift[]    @relation("TukarShiftPemohon")
+  permintaanTukarShiftPengganti PermintaanTukarShift[]    @relation("TukarShiftPengganti")
+  absensi                       Absensi[]
+  cutiIzin                      CutiIzin[]
+  permintaanLembur              PermintaanLembur[]
+  targetKinerja                 TargetKinerja[]
+  penilaianKinerja              PenilaianKinerja[]
+  rmKinerjaKaryawanHarian       RmKinerjaKaryawanHarian[]
 
-  // ALT-DEF-010: agar Absensi/RmKinerjaKaryawanHarian bisa memakai
+  // ALT-DEF-010: agar Absensi/RmKinerjaKaryawanHarian/dst bisa memakai
   // composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
   @@unique([tenantId, id])
   @@map("karyawan")
 }
 
-model JadwalShift {
+// ALT-DEF-019 (ADR-028 Keputusan 2, NEW - menggantikan Karyawan.outletUtamaId
+// tunggal): relasi many-to-many karyawan <-> outlet. `isUtama` tetap
+// menandai SATU outlet sebagai default penjadwalan/pelaporan (disiplin
+// "paling banyak satu isUtama=true per karyawan" adalah level aplikasi pada
+// batch ini, sama seperti disiplin append-only ledger lain - lihat
+// ALT-DEF-029 untuk keterbatasan tanpa Postgres nyata).
+model KaryawanOutlet {
   id         String @id
   tenantId   String
-  outletId   String
-  nama       String
-  jamMulai   String
-  jamSelesai String
-
-  tenant         Tenant           @relation(fields: [tenantId], references: [id])
-  outlet         Outlet           @relation(fields: [outletId], references: [id])
-  penugasanShift PenugasanShift[]
-
-  @@map("jadwal_shift")
-}
-
-model PenugasanShift {
-  id            String               @id
-  karyawanId    String
-  jadwalShiftId String
-  tanggal       DateTime             @db.Date
-  status        StatusPenugasanShift @default(DIJADWALKAN)
-
-  karyawan    Karyawan    @relation(fields: [karyawanId], references: [id])
-  jadwalShift JadwalShift @relation(fields: [jadwalShiftId], references: [id])
-
-  @@map("penugasan_shift")
-}
-
-model Absensi {
-  id         String        @id
-  tenantId   String
-  outletId   String
   karyawanId String
-  jamMasuk   DateTime
-  jamPulang  DateTime?
-  metode     MetodeAbsensi
-  status     StatusAbsensi
+  outletId   String
+
+  isUtama   Boolean             @default(false)
+  status    StatusAktifNonaktif @default(AKTIF)
+  createdAt DateTime            @default(now())
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id])
-  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
-  outlet   Outlet   @relation(fields: [tenantId, outletId], references: [tenantId, id])
   // ALT-DEF-010: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
   karyawan Karyawan @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet   Outlet   @relation(fields: [tenantId, outletId], references: [tenantId, id])
 
+  @@unique([karyawanId, outletId])
+  @@map("karyawan_outlet")
+}
+
+// ALT-DEF-019 (ADR-028 Keputusan 1, NEW): riwayat employment - memisahkan
+// "siapa orang ini" (Karyawan) dari "syarat kerja saat ini/lampau"
+// (HubunganKerja). "Jabatan aktif" karyawan = HubunganKerja dengan
+// status=AKTIF dan (berakhirPada IS NULL OR berakhirPada >= sekarang),
+// diurutkan mulaiPada DESC, ambil satu - pola query yang sama seperti
+// "versi resep aktif" pada VersiResep.
+model HubunganKerja {
+  id           String  @id
+  tenantId     String
+  karyawanId   String
+  jabatanId    String
+  departemenId String?
+
+  tipeHubungan TipeHubunganKerja
+  mulaiPada    DateTime
+  berakhirPada DateTime?
+  status       StatusAktifNonaktif @default(AKTIF)
+  createdAt    DateTime            @default(now())
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
+  karyawan   Karyawan    @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, jabatanId) -> Jabatan(tenantId, id).
+  jabatan    Jabatan     @relation(fields: [tenantId, jabatanId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, departemenId) -> Departemen(tenantId, id).
+  departemen Departemen? @relation(fields: [tenantId, departemenId], references: [tenantId, id])
+
+  @@map("hubungan_kerja")
+}
+
+// ALT-DEF-024 (ADR-028 Keputusan 4): rename JadwalShift -> TemplateShift -
+// kini eksplisit menjadi POLA shift yang dipakai ulang (mis. "Shift Pagi
+// 07:00-15:00"), bukan penugasan konkret. `jamMulai`/`jamSelesai` TETAP
+// String "HH:mm" (bukan `DateTime @db.Time`) - keputusan sadar didokumentasi
+// di ADR-028: tidak ada Postgres nyata di environment ini (ALT-DEF-029)
+// untuk memvalidasi perilaku `@db.Time` (mis. apakah driver Prisma
+// mengembalikannya sebagai Date dengan komponen tanggal epoch yang bisa
+// menyesatkan), sementara pola String sudah punya preseden aman di batch
+// sebelumnya. `lintasTengahMalam` adalah PERBAIKAN NYATA untuk
+// ALT-DEF-024: bila true, aplikasi WAJIB memperlakukan jamSelesai sebagai
+// terjadi di TANGGAL BERIKUTNYA saat menghitung durasi/overlap, bukan
+// menyimpulkannya dari jamSelesai < jamMulai (yang rapuh terhadap shift
+// pas 24 jam atau data salah entri).
+model TemplateShift {
+  id       String @id
+  tenantId String
+  outletId String
+
+  nama              String
+  jamMulai          String
+  jamSelesai        String
+  lintasTengahMalam Boolean             @default(false)
+  status            StatusAktifNonaktif @default(AKTIF)
+  createdAt         DateTime            @default(now())
+
+  tenant             Tenant               @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet             Outlet               @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  jadwalKerja        JadwalKerja[]
+  polaJadwalBerulang PolaJadwalBerulang[]
+
+  // Agar JadwalKerja bisa memakai composite-FK
+  // (tenantId, templateShiftId) -> TemplateShift(tenantId, id).
+  @@unique([tenantId, id])
+  @@map("template_shift")
+}
+
+// ALT-DEF-024 (ADR-028 Keputusan 5): rename PenugasanShift -> JadwalKerja -
+// penugasan KONKRET satu TemplateShift ke satu karyawan pada satu tanggal.
+// Jadwal berulang ("jadwal berulang" per master spec) diselesaikan dengan
+// PolaJadwalBerulang yang MENGHASILKAN baris JadwalKerja individual (bukan
+// recurrence-rule yang dievaluasi lazy) - setiap hari tetap baris sendiri
+// yang bisa di-query/edit/batalkan independen (mis. "jadwalku Selasa depan"
+// adalah SELECT langsung, bukan evaluasi rule). `polaBerulangId` opsional
+// hanya untuk jejak "baris ini dihasilkan oleh pola yang mana", TIDAK
+// dipakai untuk logika baca.
+model JadwalKerja {
+  id              String  @id
+  tenantId        String
+  outletId        String
+  karyawanId      String
+  templateShiftId String
+  polaBerulangId  String?
+
+  tanggal   DateTime          @db.Date
+  status    StatusJadwalKerja @default(DIJADWALKAN)
+  createdAt DateTime          @default(now())
+
+  tenant               Tenant                 @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet               Outlet                 @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
+  karyawan             Karyawan               @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
+  // Composite-FK (tenantId, templateShiftId) -> TemplateShift(tenantId, id).
+  templateShift        TemplateShift          @relation(fields: [tenantId, templateShiftId], references: [tenantId, id])
+  polaBerulang         PolaJadwalBerulang?    @relation(fields: [polaBerulangId], references: [id])
+  permintaanTukarShift PermintaanTukarShift[]
+
+  // Agar PermintaanTukarShift bisa memakai composite-FK
+  // (tenantId, jadwalKerjaAsalId) -> JadwalKerja(tenantId, id).
+  @@unique([tenantId, id])
+  @@map("jadwal_kerja")
+}
+
+// ALT-DEF-024 (ADR-028 Keputusan 5, NEW): definisi pola jadwal berulang -
+// SUMBER yang dipakai job/service-layer untuk MENGHASILKAN (generate) baris
+// JadwalKerja individual pada rentang tanggal + hari-dalam-minggu yang
+// cocok. Model ini TIDAK pernah dibaca langsung untuk menjawab "jadwal
+// karyawan hari X" - itu selalu query JadwalKerja.
+model PolaJadwalBerulang {
+  id              String @id
+  tenantId        String
+  outletId        String
+  karyawanId      String
+  templateShiftId String
+
+  // Hari dalam minggu (0=Minggu .. 6=Sabtu) tempat pola ini berlaku.
+  hariDalamMinggu Int[]
+  tanggalMulai    DateTime            @db.Date
+  tanggalSelesai  DateTime?           @db.Date
+  status          StatusAktifNonaktif @default(AKTIF)
+  createdAt       DateTime            @default(now())
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet        Outlet        @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
+  karyawan      Karyawan      @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
+  // Composite-FK (tenantId, templateShiftId) -> TemplateShift(tenantId, id).
+  templateShift TemplateShift @relation(fields: [tenantId, templateShiftId], references: [tenantId, id])
+  jadwalKerja   JadwalKerja[]
+
+  @@map("pola_jadwal_berulang")
+}
+
+// ALT-DEF-024 (ADR-028 Keputusan 6, NEW - ALT-HR-008): permintaan tukar
+// shift antar karyawan. `jadwalKerjaAsalId` menunjuk baris JadwalKerja yang
+// hendak ditukar - jadwal ASAL TIDAK diubah sampai approval selesai
+// (DISETUJUI_MANAJER), sejalan catatan checklist ALT-HR-008.
+model PermintaanTukarShift {
+  id                  String  @id
+  tenantId            String
+  jadwalKerjaAsalId   String
+  karyawanPemohonId   String
+  karyawanPenggantiId String?
+  disetujuiOlehId     String?
+
+  status    StatusPermintaanTukarShift @default(DIAJUKAN)
+  createdAt DateTime                   @default(now())
+
+  tenant            Tenant      @relation(fields: [tenantId], references: [id])
+  // Composite-FK (tenantId, jadwalKerjaAsalId) -> JadwalKerja(tenantId, id).
+  jadwalKerjaAsal   JadwalKerja @relation(fields: [tenantId, jadwalKerjaAsalId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, karyawanPemohonId) -> Karyawan(tenantId, id).
+  karyawanPemohon   Karyawan    @relation("TukarShiftPemohon", fields: [tenantId, karyawanPemohonId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, karyawanPenggantiId) -> Karyawan(tenantId, id).
+  karyawanPengganti Karyawan?   @relation("TukarShiftPengganti", fields: [tenantId, karyawanPenggantiId], references: [tenantId, id])
+  disetujuiOleh     Pengguna?   @relation("TukarShiftDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+
+  @@map("permintaan_tukar_shift")
+}
+
+// ALT-DEF-025/ALT-DEF-016/ALT-DEF-017 (ADR-028 Keputusan 7): Absensi.jamMasuk/
+// jamPulang TETAP IMMUTABLE - selalu apa yang benar-benar dicatat perangkat
+// saat presensi (bukti mentah, tidak pernah ditulis ulang). jamMasukEfektif/
+// jamPulangEfektif adalah kolom CACHE eksplisit (sama disiplin "cache,
+// bukan sumber kebenaran" seperti Pelanggan.saldoTokoCache, ADR-027) yang
+// HANYA di-update oleh service-layer setelah sebuah KoreksiAbsensi
+// berstatus DISETUJUI - lihat model KoreksiAbsensi untuk mekanisme lengkap.
+// Sebelum ada koreksi yang disetujui, efektif == nilai asli.
+// lokasiLat/lokasiLng/jarakDariOutletMeter dan perangkatId (ALT-HR-016/
+// ALT-HR-017): dukungan level-skema untuk validasi geofence/pembatasan
+// perangkat - logika radius/registrasi perangkat sesungguhnya adalah
+// feature work service-layer selanjutnya, di luar cakupan batch ini.
+model Absensi {
+  id          String  @id
+  tenantId    String
+  outletId    String
+  karyawanId  String
+  perangkatId String?
+
+  jamMasuk             DateTime
+  jamPulang            DateTime?
+  jamMasukEfektif      DateTime?
+  jamPulangEfektif     DateTime?
+  metode               MetodeAbsensi
+  status               StatusAbsensi
+  lokasiLat            Decimal?      @db.Decimal(9, 6)
+  lokasiLng            Decimal?      @db.Decimal(9, 6)
+  jarakDariOutletMeter Decimal?      @db.Decimal(8, 2)
+
+  tenant           Tenant             @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet           Outlet             @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
+  karyawan         Karyawan           @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
+  // ALT-HR-017: composite-FK (tenantId, perangkatId) -> Perangkat(tenantId, id) - nullable,
+  // hanya terisi bila tenant mengaktifkan pembatasan perangkat presensi.
+  perangkat        Perangkat?         @relation(fields: [tenantId, perangkatId], references: [tenantId, id])
+  koreksiAbsensi   KoreksiAbsensi[]
+  istirahatAbsensi IstirahatAbsensi[]
+
+  // ALT-DEF-010/ALT-DEF-019: agar KoreksiAbsensi/IstirahatAbsensi bisa
+  // memakai composite-FK (tenantId, absensiId) -> Absensi(tenantId, id).
+  @@unique([tenantId, id])
   @@map("absensi")
 }
 
-model CutiIzin {
-  id              String         @id
-  karyawanId      String
-  jenis           JenisCutiIzin
-  tanggalMulai    DateTime       @db.Date
-  tanggalSelesai  DateTime       @db.Date
-  status          StatusCutiIzin @default(DIAJUKAN)
+// ALT-DEF-019 (ADR-028 Keputusan 7, CRUX DECISION - ALT-HR-015): koreksi
+// absensi sebagai RECORD BARU dengan approval, TIDAK PERNAH menimpa baris
+// Absensi asli. Mekanisme lengkap:
+//   1. Supervisor/karyawan mengajukan KoreksiAbsensi (status DIAJUKAN),
+//      menyalin nilai SEBELUM (jamMasukSebelum/jamPulangSebelum, diambil
+//      dari Absensi.jamMasuk/jamPulang ASLI saat pengajuan - snapshot,
+//      bukan referensi hidup) dan nilai SESUDAH yang diusulkan
+//      (jamMasukSesudah/jamPulangSesudah).
+//   2. Approval (disetujuiOlehId + status -> DISETUJUI) memicu service-layer
+//      MENULIS jamMasukEfektif/jamPulangEfektif pada baris Absensi asli
+//      dengan nilai *Sesudah - Absensi.jamMasuk/jamPulang (nilai ASLI/audit)
+//      TIDAK PERNAH disentuh.
+//   3. Bila DITOLAK, tidak ada perubahan pada Absensi sama sekali - baris
+//      KoreksiAbsensi tetap ada sebagai jejak pengajuan yang ditolak.
+// Satu Absensi bisa punya BANYAK baris KoreksiAbsensi (riwayat pengajuan
+// berulang bila ditolak lalu diajukan ulang) - relasi one-to-many, bukan
+// one-to-one, justru karena append-only.
+model KoreksiAbsensi {
+  id              String  @id
+  tenantId        String
+  absensiId       String
+  diajukanOlehId  String
   disetujuiOlehId String?
 
-  karyawan      Karyawan  @relation(fields: [karyawanId], references: [id])
+  jamMasukSebelum  DateTime
+  jamMasukSesudah  DateTime?
+  jamPulangSebelum DateTime?
+  jamPulangSesudah DateTime?
+  alasan           String
+  status           StatusKoreksiAbsensi @default(DIAJUKAN)
+  createdAt        DateTime             @default(now())
+
+  tenant        Tenant    @relation(fields: [tenantId], references: [id])
+  // Composite-FK (tenantId, absensiId) -> Absensi(tenantId, id).
+  absensi       Absensi   @relation(fields: [tenantId, absensiId], references: [tenantId, id])
+  diajukanOleh  Pengguna  @relation("KoreksiAbsensiDiajukanOleh", fields: [diajukanOlehId], references: [id])
+  disetujuiOleh Pengguna? @relation("KoreksiAbsensiDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+
+  @@map("koreksi_absensi")
+}
+
+// ALT-DEF-025 (ADR-028 Keputusan 8, NEW - ALT-HR-011): pencatatan
+// istirahat dalam satu sesi kerja, append-only (banyak baris istirahat per
+// Absensi, mis. istirahat makan siang + istirahat sore).
+model IstirahatAbsensi {
+  id        String @id
+  tenantId  String
+  absensiId String
+
+  mulaiPada   DateTime
+  selesaiPada DateTime?
+  jenis       String?
+  createdAt   DateTime  @default(now())
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id])
+  // Composite-FK (tenantId, absensiId) -> Absensi(tenantId, id).
+  absensi Absensi @relation(fields: [tenantId, absensiId], references: [tenantId, id])
+
+  @@map("istirahat_absensi")
+}
+
+// ALT-DEF-019 (ADR-028 Keputusan 9): CutiIzin DIPERTAHANKAN apa adanya
+// secara struktural (bukan rename ke PermintaanCuti) - jenis
+// CUTI_TAHUNAN/SAKIT/IZIN sudah memetakan wajar ke "cuti" secara luas per
+// master spec, dan checklist (ALT-HR-014) memakai nama CutiIzin. Satu-
+// satunya perbaikan nyata di batch ini: menambahkan `tenantId` (SEBELUMNYA
+// TIDAK ADA sama sekali - gap tenant-safety identik ALT-DEF-010 yang
+// terlewat batch sebelumnya) dan mengganti FK karyawan tunggal menjadi
+// composite-FK, konsisten ADR-013.
+model CutiIzin {
+  id              String  @id
+  tenantId        String
+  karyawanId      String
+  disetujuiOlehId String?
+
+  jenis          JenisCutiIzin
+  tanggalMulai   DateTime       @db.Date
+  tanggalSelesai DateTime       @db.Date
+  status         StatusCutiIzin @default(DIAJUKAN)
+
+  tenant        Tenant    @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-019: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id)
+  // (SEBELUMNYA FK ID tunggal - gap tenant-safety, lihat catatan di atas).
+  karyawan      Karyawan  @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
   disetujuiOleh Pengguna? @relation("CutiDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
 
   @@map("cuti_izin")
+}
+
+// ALT-DEF-019 (NEW - ALT-HR-... lembur, di luar ID checklist eksplisit,
+// digantung ke domain HR/absensi yang sama): permintaan lembur karyawan.
+model PermintaanLembur {
+  id              String  @id
+  tenantId        String
+  karyawanId      String
+  disetujuiOlehId String?
+
+  tanggal    DateTime               @db.Date
+  jamMulai   DateTime
+  jamSelesai DateTime
+  alasan     String
+  status     StatusPermintaanLembur @default(DIAJUKAN)
+  createdAt  DateTime               @default(now())
+
+  tenant        Tenant    @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
+  karyawan      Karyawan  @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
+  disetujuiOleh Pengguna? @relation("LemburDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+
+  @@map("permintaan_lembur")
+}
+
+// ALT-DEF-019 (ADR-028 Keputusan 10, NEW - ALT-HR-018): modeling MINIMAL
+// untuk target/penilaian kinerja - SENGAJA tidak dibangun jadi full
+// payroll/HR suite (di luar cakupan master spec, lihat catatan scope di
+// MASTER-CHECKLIST.md domain Karyawan & Absensi).
+model TargetKinerja {
+  id         String @id
+  tenantId   String
+  karyawanId String
+
+  periode     String
+  deskripsi   String
+  targetNilai Decimal? @db.Decimal(10, 2)
+  createdAt   DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
+  karyawan Karyawan @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
+
+  @@map("target_kinerja")
+}
+
+model PenilaianKinerja {
+  id            String @id
+  tenantId      String
+  karyawanId    String
+  dinilaiOlehId String
+
+  periode   String
+  skor      Decimal? @db.Decimal(5, 2)
+  catatan   String?
+  createdAt DateTime @default(now())
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
+  karyawan    Karyawan @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
+  dinilaiOleh Pengguna @relation("PenilaianDinilaiOleh", fields: [dinilaiOlehId], references: [id])
+
+  @@map("penilaian_kinerja")
 }
 
 // =====================================================================================

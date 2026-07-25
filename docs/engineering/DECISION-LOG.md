@@ -2176,3 +2176,197 @@ ADR-026, ADR-027 sudah tercermin di
   ditulis pada batch ini karena pola triggernya identik `MutasiStok`/file 005
   yang sudah ada sebagai precedent, menulis salinannya tanpa Postgres nyata
   untuk mengujinya dinilai tidak menambah nilai verifikasi).
+
+## ADR-028: Rombak domain Karyawan & Absensi - multi-outlet, historisasi jabatan, shift lintas-tengah-malam, koreksi absensi append-only (ALT-DEF-019, ALT-DEF-024, ALT-DEF-025)
+
+- **Status:** DITERIMA
+- **Konteks:** Batch correction-loop domain terakhir (Karyawan & Absensi)
+  menutup tiga defect terkait erat: `ALT-DEF-019` (`Karyawan` hanya terikat
+  satu outlet via `outletUtamaId`; tidak ada model koreksi absensi
+  append-only+approval), `ALT-DEF-024` (`JadwalShift.jamMulai`/`jamSelesai`
+  bertipe `String` bebas tanpa penanda shift lintas-tengah-malam), dan
+  `ALT-DEF-025` (`Absensi` tidak punya pencatatan istirahat). Model lama:
+  `Jabatan`, `Karyawan` (`jabatanId`, `outletUtamaId` statis), `JadwalShift`
+  (`jamMulai`/`jamSelesai String`), `PenugasanShift`, `Absensi`, `CutiIzin`.
+
+- **Keputusan 1 - `HubunganKerja` BARU memisahkan identitas karyawan dari
+  riwayat employment; `jabatanId` pindah dari `Karyawan` ke
+  `HubunganKerja`.** `Karyawan.jabatanId` adalah FK statis - jabatan
+  karyawan (promosi, mutasi departemen) tidak bisa berubah tanpa kehilangan
+  histori peran lama. Prinsip sama seperti `VersiResep` (ADR sebelumnya):
+  entitas identitas (`Karyawan`, mis. `Resep`) dipisah dari entitas
+  ber-versi/periode (`HubunganKerja`, mis. `VersiResep`). "Jabatan aktif"
+  karyawan didapat lewat query eksplisit - `HubunganKerja` dengan
+  `status = AKTIF` dan (`berakhirPada IS NULL` atau `berakhirPada >=
+  sekarang`), diurutkan `mulaiPada DESC`, ambil satu - BUKAN field statis
+  yang bisa langsung dibaca. `Departemen` (BARU, master data tenant-scoped)
+  digantung ke `HubunganKerja` juga (opsional), rasional sama: departemen
+  adalah properti SATU periode kerja, bukan identitas permanen karyawan.
+  `tipeHubungan` (`TETAP`/`KONTRAK`/`PARUH_WAKTU`/`MAGANG`) ditambahkan
+  karena master spec menyinggung jenis employment yang sebelumnya tidak
+  terwakili sama sekali di schema.
+
+- **Keputusan 2 - `KaryawanOutlet` many-to-many menggantikan
+  `Karyawan.outletUtamaId` SEPENUHNYA (dihapus, bukan dipertahankan
+  paralel).** Dipertimbangkan dua opsi: (a) hapus `outletUtamaId`, ganti
+  total dengan `KaryawanOutlet.isUtama = true` sebagai satu-satunya sumber
+  "outlet utama", atau (b) pertahankan `outletUtamaId` sebagai pointer cepat
+  yang disinkronkan manual dengan `KaryawanOutlet`. **Dipilih (a).**
+  Rasional: (b) menciptakan DUA sumber kebenaran yang bisa menyimpang (mis.
+  `KaryawanOutlet` diubah tapi `outletUtamaId` lupa disinkronkan) - kelas
+  masalah yang sama persis yang mendorong `ALT-DEF-001` menghapus
+  `Pengguna.tenantId` demi model `KeanggotaanTenant`/`KeanggotaanOutlet`
+  murni. Ini perubahan BREAKING TAPI BENAR (didokumentasikan secara sadar,
+  bukan diam-diam) - setiap query/handler yang sebelumnya membaca
+  `karyawan.outletUtamaId` langsung harus diganti query
+  `karyawanOutlet.findFirst({ where: { karyawanId, isUtama: true } })`.
+  Disiplin "paling banyak satu `isUtama=true` per karyawan" adalah level
+  aplikasi pada batch ini (Prisma tidak bisa menyatakan conditional-
+  uniqueness lintas baris, ALT-DEF-029 - identik keterbatasan yang sudah
+  dicatat untuk domain lain), didokumentasikan sebagai gap yang perlu
+  partial unique index nyata begitu Postgres tersedia.
+
+- **Keputusan 3 - Rename `JadwalShift` -> `TemplateShift`, `PenugasanShift`
+  -> `JadwalKerja`; `jamMulai`/`jamSelesai` TETAP `String` "HH:mm", BUKAN
+  `DateTime @db.Time`.** Instruksi batch meminta mencoba `@db.Time` bila
+  bisa dipakai bersih. **Dipertimbangkan dan DITOLAK** karena tidak ada
+  Postgres nyata di environment ini (`ALT-DEF-029`) untuk memvalidasi
+  perilaku sesungguhnya tipe `TIME` lewat driver Prisma - risiko konkret:
+  `@db.Time` di PostgreSQL tidak membawa komponen tanggal/zona waktu sama
+  sekali (berbeda dari `TIMESTAMP`), dan perilaku serialisasi driver
+  (apakah dikembalikan sebagai `Date` dengan tanggal epoch 1970-01-01, atau
+  string) tidak bisa dipastikan tanpa `prisma generate` + query nyata
+  terhadap database yang benar-benar berjalan - mengklaim "sudah dicoba dan
+  bekerja" tanpa bisa membuktikannya adalah persis kelas kesalahan yang
+  proses koreksi ini berulang kali memperbaiki di batch lain. String
+  "HH:mm" dipertahankan sebagai simplifikasi SADAR yang didokumentasikan,
+  dengan `lintasTengahMalam Boolean @default(false)` (BARU) melakukan
+  pekerjaan sesungguhnya untuk `ALT-DEF-024`: bila `true`, aplikasi WAJIB
+  memperlakukan `jamSelesai` sebagai terjadi di TANGGAL BERIKUTNYA saat
+  menghitung durasi/deteksi overlap - flag EKSPLISIT, bukan disimpulkan
+  secara implisit dari `jamSelesai < jamMulai` (rapuh: gagal untuk shift
+  tepat 24 jam, dan tidak membedakan "data salah entri" dari "memang lintas
+  tengah malam").
+
+- **Keputusan 4 - Jadwal berulang: `PolaJadwalBerulang` (BARU) MENGHASILKAN
+  baris `JadwalKerja` individual, bukan recurrence-rule yang dievaluasi
+  lazy.** Dipertimbangkan: (a) field recurrence-rule (mis. RRULE-style) pada
+  `JadwalKerja` itu sendiri yang dievaluasi saat baca, atau (b) model
+  `PolaJadwalBerulang` terpisah yang menjadi SUMBER bagi service-layer untuk
+  men-generate baris `JadwalKerja` konkret per tanggal yang cocok. **Dipilih
+  (b).** Rasional: (a) membuat pertanyaan sesederhana "jadwal karyawan X
+  hari Selasa depan" butuh evaluasi rule di setiap query (lambat, sulit
+  di-index, sulit menangani pengecualian satu hari seperti "Selasa depan
+  libur nasional, batalkan"); (b) menjaga SETIAP hari sebagai baris
+  `JadwalKerja` independen yang bisa langsung di-`SELECT`/edit/batalkan satu
+  per satu tanpa menyentuh pola induknya - `JadwalKerja.polaBerulangId`
+  (nullable) hanya jejak asal-usul, TIDAK PERNAH dipakai untuk logika baca
+  jadwal. Proses generate baris dari pola adalah service-layer/job
+  terjadwal, di luar cakupan schema batch ini.
+
+- **Keputusan 5 - `KoreksiAbsensi` (CRUX DECISION, `ALT-HR-015`):
+  `Absensi.jamMasuk`/`jamPulang` immutable; approval menulis
+  `jamMasukEfektif`/`jamPulangEfektif` pada baris ASLI, bukan membuat baris
+  `Absensi` baru.** Dua opsi diberikan oleh spesifikasi koreksi: (a) app
+  membuat baris `Absensi` BARU dan menandai baris lama "superseded" saat
+  koreksi disetujui, atau (b) `Absensi` mendapat kolom `jamMasukEfektif`/
+  `jamPulangEfektif` yang HANYA di-update lewat `KoreksiAbsensi` yang
+  disetujui, sementara `jamMasuk`/`jamPulang` asli tetap immutable selamanya
+  sebagai bukti presensi apa-adanya. **Dipilih (b).** Rasional: `Absensi`
+  adalah entitas dengan identitas SATU-PER-PERISTIWA-PRESENSI yang dirujuk
+  luas oleh domain lain dengan asumsi itu (mis.
+  `RmKinerjaKaryawanHarian.karyawanId` + `tanggal`, laporan lembur
+  `ALT-HR-013`, deteksi keterlambatan `ALT-HR-012`) - opsi (a) memaksa
+  SETIAP consumer tersebut menambah logika "ikuti rantai supersede sampai
+  baris terbaru" untuk setiap baca, kelas bug yang sama seperti FK yang
+  menunjuk baris usang. Opsi (b) menjaga SATU baris = SATU identitas
+  presensi permanen, dengan pemisahan eksplisit "apa yang sungguh terjadi
+  di lapangan" (`jamMasuk`/`jamPulang`, TIDAK PERNAH ditulis ulang - bukti
+  audit) vs "apa yang harus dipakai untuk perhitungan/laporan setelah
+  koreksi disetujui" (`*Efektif`, kolom CACHE eksplisit yang hanya
+  diperbarui oleh service-layer SETELAH approval - disiplin identik
+  `Pelanggan.saldoTokoCache`, ADR-027). Mekanisme lengkap: `KoreksiAbsensi`
+  menyalin nilai `*Sebelum` sebagai SNAPSHOT saat pengajuan (bukan referensi
+  hidup ke `Absensi` - kalau `Absensi` berubah lagi sebelum koreksi ini
+  diproses, `*Sebelum` tetap merepresentasikan apa yang dilihat pengaju saat
+  itu), mengusulkan nilai `*Sesudah`, dan baru menulis `*Efektif` pada
+  `Absensi` setelah `disetujuiOlehId` + `status = DISETUJUI` terisi. Relasi
+  `Absensi` -> `KoreksiAbsensi` SENGAJA one-to-many (bukan one-to-one) -
+  pengajuan yang ditolak lalu diajukan ulang membuat baris `KoreksiAbsensi`
+  baru, riwayat pengajuan lama tetap ada sebagai jejak audit (ADR-006
+  no-hard-delete).
+
+- **Keputusan 6 - `IstirahatAbsensi` (BARU, `ALT-DEF-025`/`ALT-HR-011`)
+  append-only, banyak baris per `Absensi`.** Sejalan pola ledger domain lain
+  - satu sesi kerja bisa punya lebih dari satu periode istirahat (makan
+  siang + sore), masing-masing baris sendiri dengan `mulaiPada`/
+  `selesaiPada` independen, bukan agregat tunggal di `Absensi`.
+
+- **Keputusan 7 - Geofence/pembatasan perangkat (`ALT-HR-016`/`ALT-HR-017`):
+  dukungan level-skema saja.** `Absensi` mendapat `lokasiLat`/`lokasiLng`
+  (`Decimal @db.Decimal(9,6)`, presisi ~11cm - cukup untuk radius geofence
+  outlet), `jarakDariOutletMeter` (`Decimal @db.Decimal(8,2)`, dihitung dan
+  disimpan oleh service-layer saat presensi, bukan dihitung ulang tiap baca
+  laporan), dan `perangkatId` nullable dengan composite-FK
+  `(tenantId, perangkatId) -> Perangkat(tenantId, id)` (menambah
+  `@@unique([tenantId, id])` baru pada `Perangkat`, konsisten ADR-013).
+  Validasi radius/registrasi perangkat sesungguhnya (menolak presensi di
+  luar radius, atau dari perangkat tak terdaftar) adalah LOGIKA service-
+  layer, feature work eksplisit di luar cakupan schema batch ini - kolom di
+  atas hanya menyediakan tempat menyimpan data yang dibutuhkan logika
+  tersebut nanti.
+
+- **Keputusan 8 - `CutiIzin` DIPERTAHANKAN (bukan rename ke
+  `PermintaanCuti`); ditambahkan `tenantId` + composite-FK yang SEBELUMNYA
+  tidak ada sama sekali.** `CutiIzin` (`CUTI_TAHUNAN`/`SAKIT`/`IZIN`) sudah
+  memetakan wajar ke cakupan "cuti" master spec, dan `MASTER-CHECKLIST.md`
+  (`ALT-HR-014`) sudah memakai nama `CutiIzin` - rename akan menciptakan
+  ketidaksesuaian nama yang sama seperti yang dihindari `TierKeanggotaan`
+  (ADR-027 Keputusan 1: schema mengikuti dokumen yang sudah settled).
+  **Ditemukan saat audit ulang model ini untuk batch ini:** `CutiIzin`
+  TIDAK PERNAH punya `tenantId` sama sekali dan `karyawanId` adalah FK ID
+  TUNGGAL (bukan composite) - gap tenant-safety identik `ALT-DEF-010` yang
+  terlewat pada batch composite-FK sebelumnya karena `CutiIzin` sendiri
+  tidak disebut eksplisit di daftar model ADR-013. Diperbaiki di batch ini:
+  `tenantId` ditambahkan, `karyawan` diganti jadi composite-FK
+  `(tenantId, karyawanId) -> Karyawan(tenantId, id)`.
+
+- **Keputusan 9 - `TargetKinerja`/`PenilaianKinerja` (BARU, `ALT-HR-018`)
+  dimodelkan MINIMAL secara sengaja.** Master spec eksplisit TIDAK meminta
+  full payroll/HR suite - kedua model ini hanya cukup untuk mencatat
+  target/penilaian periodik (`periode String`, mis. `"2026-Q1"`) tanpa
+  struktur skala penilaian, siklus approval multi-tahap, atau kalkulasi
+  bonus/kompensasi yang di luar cakupan.
+
+- **Model yang mendapat composite-FK (mengikuti ADR-013):** `HubunganKerja`
+  (ke `Karyawan`, `Jabatan`, `Departemen` opsional - seluruhnya BARU),
+  `KaryawanOutlet` (ke `Karyawan`, `Outlet` - BARU), `TemplateShift` (ke
+  `Outlet`), `JadwalKerja` (ke `Outlet`, `Karyawan`, `TemplateShift`),
+  `PolaJadwalBerulang` (ke `Outlet`, `Karyawan`, `TemplateShift` - BARU),
+  `PermintaanTukarShift` (ke `JadwalKerja`, `Karyawan` dua kali dengan nama
+  relasi berbeda `TukarShiftPemohon`/`TukarShiftPengganti` - BARU),
+  `Absensi` (ke `Outlet`, `Karyawan` - dipertahankan dari ADR-013; ke
+  `Perangkat` - BARU, nullable), `KoreksiAbsensi` (ke `Absensi` - BARU),
+  `IstirahatAbsensi` (ke `Absensi` - BARU), `CutiIzin` (ke `Karyawan` -
+  BARU, lihat Keputusan 8), `PermintaanLembur` (ke `Karyawan` - BARU),
+  `TargetKinerja`/`PenilaianKinerja` (ke `Karyawan` - BARU). Relasi ke
+  `Pengguna` (`diajukanOlehId`/`disetujuiOlehId`/`dinilaiOlehId`, dst) TETAP
+  FK ID TUNGGAL (ADR-013 poin 5, identitas global). Parent baru yang
+  mendapat `@@unique([tenantId, id])`: `Departemen`, `KaryawanOutlet`
+  (implisit lewat `@@unique([karyawanId, outletId])` sudah cukup, TIDAK
+  ditambah `@@unique([tenantId, id])` karena tidak ada child yang perlu
+  merujuknya), `TemplateShift`, `JadwalKerja`, `Absensi` (sudah ada dari
+  ADR-013, dipertahankan), `Perangkat` (BARU - sebelumnya tidak perlu
+  sampai `Absensi.perangkatId` ditambahkan batch ini).
+
+- **Cakupan batch ini vs. yang BELUM dikerjakan:** schema
+  (`prisma/schema/schema.prisma`), dokumen
+  (`docs/database/12-karyawan-absensi.md`, `docs/api/API-CONTRACT.md`,
+  `docs/arsitektur/STATE-MACHINES.md`, `docs/keamanan/PERMISSION-MATRIX.md`,
+  `prisma/seed/izin.seed.ts`, `docs/engineering/TRACEABILITY-MATRIX.md`),
+  dan test struktur arsitektur. **BELUM dikerjakan (di luar scope batch
+  ini):** handler/endpoint nyata (presensi masuk/pulang, approval koreksi/
+  tukar-shift/cuti/lembur, job generate `JadwalKerja` dari
+  `PolaJadwalBerulang`, validasi geofence/perangkat sesungguhnya), migrasi
+  Postgres nyata dan partial unique index untuk "satu `isUtama=true` per
+  karyawan" (DIBLOKIR, ALT-DEF-029).

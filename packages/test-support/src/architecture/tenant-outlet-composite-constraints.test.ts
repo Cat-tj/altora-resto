@@ -124,12 +124,21 @@ export function jalankanSemuaAssertion(): void {
     "GiliranKasir harus punya @@unique([tenantId, id]) agar RekapKasHarian bisa memakai composite FK ke GiliranKasir.",
   );
 
-  // --- Karyawan <-> Outlet (ALT-DEF-010) ---
-  const karyawanBody = getModelBody(schema, "Karyawan");
+  // --- Karyawan <-> Outlet (ALT-DEF-010, diperbarui ALT-DEF-019/ADR-028) ---
+  // Karyawan.outletUtamaId (FK tunggal) DIHAPUS pada batch ALT-DEF-019 -
+  // digantikan KaryawanOutlet many-to-many. Assertion lama yang mengecek
+  // Karyawan.outletUtama diganti dengan assertion baru di bawah (lihat juga
+  // karyawan-absensi-hr-constraints.test.ts untuk cakupan penuh ALT-DEF-019).
+  const karyawanOutletBody = getModelBody(schema, "KaryawanOutlet");
   assertContains(
-    karyawanBody,
-    'outletUtama             Outlet                    @relation("KaryawanOutletUtama", fields: [tenantId, outletUtamaId], references: [tenantId, id])',
-    "Karyawan.outletUtama harus berupa composite FK (tenantId, outletUtamaId) -> Outlet(tenantId, id).",
+    karyawanOutletBody,
+    "outlet   Outlet   @relation(fields: [tenantId, outletId], references: [tenantId, id])",
+    "KaryawanOutlet.outlet harus berupa composite FK (tenantId, outletId) -> Outlet(tenantId, id).",
+  );
+  assertContains(
+    karyawanOutletBody,
+    "karyawan Karyawan @relation(fields: [tenantId, karyawanId], references: [tenantId, id])",
+    "KaryawanOutlet.karyawan harus berupa composite FK (tenantId, karyawanId) -> Karyawan(tenantId, id).",
   );
 
   // --- PurchaseOrder <-> Supplier (ALT-DEF-010) ---
