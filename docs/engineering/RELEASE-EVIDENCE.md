@@ -1858,6 +1858,106 @@ generate `JadwalKerja` dari `PolaJadwalBerulang`, validasi geofence/
 perangkat sesungguhnya). Karena itu status `ALT-DEF-019`, `ALT-DEF-024`, dan
 `ALT-DEF-025` adalah `SIAP_DIVERIFIKASI`, **BUKAN** `DITUTUP`.
 
+## Pass correction-loop 2026-07-25 (lanjutan): sinkronisasi penuh TRACEABILITY-MATRIX.md (ALT-DEF-020, ALT-DEF-039, ALT-DEF-041, ALT-DEF-042)
+
+Pass **dokumentasi-saja** (tidak ada mutasi `prisma/schema/schema.prisma`) -
+lihat `docs/engineering/DECISION-LOG.md` ADR-029 untuk rasional lengkap.
+Tidak ada mutation-test skema karena tidak ada perubahan skema pada pass
+ini; bukti di bawah adalah verifikasi konsistensi ANTAR-DOKUMEN.
+
+### 1. Jumlah baris `MASTER-CHECKLIST.md` vs `TRACEABILITY-MATRIX.md` (harus sama)
+
+```
+$ grep -oE '^\| ALT-[A-Z]{2,3}-[0-9]{3} ' docs/engineering/MASTER-CHECKLIST.md | wc -l
+     255
+$ grep -oE '^\| ALT-[A-Z]{2,3}-[0-9]{3} ' docs/engineering/TRACEABILITY-MATRIX.md | wc -l
+     255
+$ diff <(grep -oE '^\| ALT-[A-Z]{2,3}-[0-9]{3} ' docs/engineering/MASTER-CHECKLIST.md | sort) \
+       <(grep -oE '^\| ALT-[A-Z]{2,3}-[0-9]{3} ' docs/engineering/TRACEABILITY-MATRIX.md | sort)
+$ echo "exit: $?"
+exit: 0
+```
+
+Diff kosong, exit 0 - setiap requirement ID di `MASTER-CHECKLIST.md` punya
+tepat satu baris yang sesuai di `TRACEABILITY-MATRIX.md`, dan tidak ada
+baris "ekstra" di matriks yang tidak berdasar checklist. Dijalankan ulang
+per-domain (17 domain, `ALT-PLT` s.d. `ALT-SEC`) dengan hasil sama.
+
+### 2. Verifikasi jumlah model schema yang dirujuk sebagai baseline
+
+```
+$ grep -cE '^model [A-Za-z]+ \{' prisma/schema/schema.prisma
+133
+```
+
+Cocok dengan angka yang dicantumkan di kepala `TRACEABILITY-MATRIX.md`
+("133 model terdaftar per commit ini") dan di setiap sub-bagian domain.
+
+### 3. Tidak ada requirement bertanda LULUS/SELESAI
+
+```
+$ grep -oE '\b(LULUS|SELESAI|DIKERJAKAN)\b' docs/engineering/TRACEABILITY-MATRIX.md \
+    | sort | uniq -c
+      2 DIKERJAKAN
+    168 LULUS
+    168 SELESAI
+```
+
+Diverifikasi manual (bukan diasumsikan dari angka mentah): SELURUH 168
+kemunculan `LULUS` dan 168 kemunculan `SELESAI` berasal dari satu frasa
+penyangkal yang berulang di kolom Status tiap baris requirement -
+"...implementasi handler/service/UI FITUR belum dikerjakan — bukan
+`LULUS`/`SELESAI`." (atau varian per-baris yang senada) - BUKAN requirement
+yang benar-benar ditandai lulus/selesai. Baris legenda pembuka dokumen
+(baris 51) juga eksplisit menyatakan "TIDAK PERNAH `LULUS`/`SELESAI` di
+dokumen ini". Kolom Unit/Integration/E2E/Security test konsisten memakai
+frasa "belum ada (menunggu implementasi fitur — tidak ada test runner ...
+wired up)" (571 kemunculan) untuk baris yang tidak punya architecture test
+yang relevan, dan mereferensikan salah satu dari 22 file
+`packages/test-support/src/architecture/*.test.ts` untuk baris yang punya.
+
+```
+$ find packages/test-support/src/architecture -name '*.test.ts' | wc -l
+      22
+```
+
+### 4. Model yang tidak ditemukan di schema (dasar Gap Analysis)
+
+```
+$ grep -c 'TIDAK DITEMUKAN di schema.prisma' docs/engineering/TRACEABILITY-MATRIX.md
+57
+$ grep -n 'TIDAK DITEMUKAN di schema.prisma' docs/engineering/TRACEABILITY-MATRIX.md \
+    | grep -cE '^[0-9]+:\| ALT-'
+56
+```
+
+Angka mentah `grep -c` (57) termasuk 1 kemunculan di teks legenda pembuka
+dokumen (baris 15, menjelaskan konvensi penandaan - bukan baris tabel
+requirement). Setelah difilter ke baris tabel (`^| ALT-...`) saja: **56**
+baris requirement, cocok persis dengan angka "56 requirement" di judul
+bagian Gap Analysis. Dua di antara 56 baris itu (`ALT-MNU-011`,
+`ALT-MNU-012`) masing-masing menyebut frasa itu DUA KALI dalam satu baris
+(dua model berbeda di kolom Model database, keduanya tidak ditemukan) -
+tetap dihitung sebagai 1 requirement, bukan 2, karena satuan hitungnya
+adalah baris/requirement bukan kemunculan frasa.
+
+### 5. Ringkasan status
+
+Konsistensi struktural (jumlah baris, ID per domain, referensi model)
+antara `MASTER-CHECKLIST.md` dan `TRACEABILITY-MATRIX.md` **terbukti**
+lewat command di atas - bukan diklaim tanpa bukti. Verifikasi
+string-per-string kolom Endpoint/Permission/Route UI terhadap
+`API-CONTRACT.md`/`PERMISSION-MATRIX.md`/`ROUTE-MAP.md` untuk seluruh 255
+baris **TIDAK** dilakukan pass ini (dicatat sebagai keterbatasan eksplisit
+di bagian "Gap Analysis" `TRACEABILITY-MATRIX.md`) - hanya domain dengan
+precedent dari batch correction-loop sebelumnya yang diverifikasi terhadap
+dokumen tsb. Dua defect baru (`ALT-DEF-041`, `ALT-DEF-042`) dicatat di
+`DEFECT-LEDGER.md` untuk gap nyata yang ditemukan; `ALT-DEF-041` (18 baris
+kolom Ketergantungan) diperbaiki langsung pada pass ini, `ALT-DEF-042`
+(3 model platform hilang + eventType outbox tidak lengkap) **belum**
+diperbaiki - butuh batch schema terpisah, di luar cakupan pass
+dokumentasi-saja ini.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```

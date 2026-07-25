@@ -2370,3 +2370,71 @@ ADR-026, ADR-027 sudah tercermin di
   `PolaJadwalBerulang`, validasi geofence/perangkat sesungguhnya), migrasi
   Postgres nyata dan partial unique index untuk "satu `isUtama=true` per
   karyawan" (DIBLOKIR, ALT-DEF-029).
+
+## ADR-029: Sinkronisasi penuh TRACEABILITY-MATRIX.md ke 255 requirement (ALT-DEF-020, ALT-DEF-039, ALT-DEF-041, ALT-DEF-042)
+
+**Konteks.** `TRACEABILITY-MATRIX.md` sebelumnya hanya mencakup ~64 dari 249
+requirement (`ALT-DEF-020`), dan checklist sudah tumbuh lagi ke 255
+requirement sejak audit stempel keanggotaan (`ALT-DEF-039`). Ini adalah pass
+**dokumentasi-saja** (tidak menyentuh `prisma/schema/schema.prisma`) untuk
+menutup gap tersebut secara menyeluruh, bukan batch fitur/schema baru.
+
+**Keputusan 1 - Matriks ditulis ulang penuh, bukan ditambal.** Setiap satu
+dari 255 baris `MASTER-CHECKLIST.md` (17 domain, `ALT-PLT` s.d. `ALT-SEC`,
+verifikasi ulang lewat `grep` pola `^\| ALT-[A-Z]{2,3}-[0-9]{3} `) sekarang
+punya baris yang sesuai di `TRACEABILITY-MATRIX.md`, dikelompokkan per
+domain dengan urutan yang sama. Kolom Model database diverifikasi lewat
+grep langsung terhadap `prisma/schema/schema.prisma` (133 model), bukan
+diasumsikan dari nama di checklist - 56 requirement ditemukan TANPA model
+yang bisa diverifikasi langsung (36 di antaranya domain scaffold yang
+memang belum disentuh correction loop, sisanya checklist yang masih
+menyebut nama model lama sebelum rename ADR).
+
+**Keputusan 2 - Tidak ada requirement yang ditandai LULUS/SELESAI.**
+Correction-loop sejauh ini hanya memperbaiki fondasi data model
+(schema+dokumen+architecture test), bukan membangun fitur nyata - tidak ada
+handler/endpoint yang benar-benar berjalan, tidak ada test runner
+(vitest/Jest/Playwright) yang wired up di repo selain
+`packages/test-support/src/architecture/*.test.ts` (22 file). Kolom
+Unit/Integration/E2E/Security test di matriks mencatat status ini apa
+adanya ("belum ada, menunggu implementasi fitur") alih-alih menyalin klaim
+optimis dari checklist lama.
+
+**Keputusan 3 - Gap ditemukan dicatat sebagai defect baru, bukan diperbaiki
+diam-diam.** Dua defect baru dibuka pada pass ini: `ALT-DEF-041` (18 baris
+kolom Ketergantungan `MASTER-CHECKLIST.md` yang self-reference atau
+dangling - termasuk 4 baris yang sudah direncanakan `ALT-DEF-036` tapi
+perbaikannya belum pernah benar-benar diterapkan ke file; SELURUH 18 baris
+diperbaiki langsung pada pass ini, bukan hanya direncanakan) dan
+`ALT-DEF-042` (3 model platform - `UndanganTenant`, `BackupJob`,
+`AntrianCetak` - yang direferensikan requirement checklist sejak
+granularisasi awal tapi tidak pernah dibuat di schema meski domain Platform
+sudah melalui 6 batch correction-loop dedicated; juga daftar `eventType`
+`DomainOutboxEvent` yang tidak mencakup retur/split/reopen/merge pesanan,
+refund kasir, atau tukar poin/stempel). Model/schema untuk `ALT-DEF-042`
+SENGAJA TIDAK dibuat pada pass ini - pass ini murni dokumentasi, bukan batch
+fitur.
+
+**Keputusan 4 - Domain yang belum tersentuh correction loop didaftar
+eksplisit.** 7 dari 17 domain (`ALT-MNU`, `ALT-BEL`, `ALT-MJ` di luar
+composite-FK generik, `ALT-PLY`, `ALT-ANL`, `ALT-UX`, dan sebagian besar
+`ALT-SEC`) belum pernah mendapat batch correction-loop dedicated - total 88
+dari 255 requirement (34,5%). Ini didaftar di bagian "Gap Analysis"
+`TRACEABILITY-MATRIX.md` sebagai peta prioritas untuk batch berikutnya,
+bukan diperbaiki pada pass ini.
+
+**Keterbatasan yang jujur dicatat:** Endpoint/Permission/Route UI TIDAK
+diverifikasi string-per-string terhadap
+`API-CONTRACT.md`/`PERMISSION-MATRIX.md`/`ROUTE-MAP.md` untuk seluruh 255
+baris (hanya domain dengan precedent dari batch sebelumnya) - verifikasi
+penuh 255×3 dokumen adalah pekerjaan terpisah dari kapasitas satu pass
+sinkronisasi. Lihat `docs/engineering/TRACEABILITY-MATRIX.md` bagian "Gap
+Analysis" untuk rincian lengkap.
+
+**Cakupan batch ini vs. BELUM dikerjakan:** dokumen
+(`docs/engineering/TRACEABILITY-MATRIX.md` ditulis ulang penuh,
+`docs/engineering/DEFECT-LEDGER.md` +2 baris, `docs/engineering/
+MASTER-CHECKLIST.md` 18 baris kolom Ketergantungan diperbaiki). **TIDAK
+disentuh (sesuai instruksi pass ini):** `prisma/schema/schema.prisma` sama
+sekali - `ALT-DEF-042` mendokumentasikan gap model tapi tidak membuat
+modelnya; itu pekerjaan batch domain Platform berikutnya.
