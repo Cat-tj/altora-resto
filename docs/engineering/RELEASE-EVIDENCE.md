@@ -1689,6 +1689,175 @@ cache, job kedaluwarsa poin, endpoint merge/consent/tukar-stempel). Karena
 itu status `ALT-DEF-018`, `ALT-DEF-023`, `ALT-DEF-039`, dan `ALT-DEF-040`
 adalah `SIAP_DIVERIFIKASI`, **BUKAN** `DITUTUP`.
 
+## Pass correction-loop 2026-07-25 (lanjutan): perbaikan ALT-DEF-019, ALT-DEF-024, ALT-DEF-025
+
+Batch domain bisnis TERAKHIR sebelum traceability-full-sync dan
+test-architecture/final-evidence. Merombak domain Karyawan & Absensi
+sepenuhnya - lihat `docs/engineering/DECISION-LOG.md` ADR-028 untuk rasional
+setiap keputusan desain.
+
+### 1. `prisma format` (real, sebelum dan sesudah semua edit)
+
+```
+$ npx prisma format --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 99ms 🚀
+```
+
+Dijalankan DUA KALI - sekali segera setelah menulis seluruh model baru
+(memverifikasi tidak ada syntax error), sekali lagi di akhir batch setelah
+seluruh edit dokumen selesai (`git diff --stat prisma/schema/schema.prisma`
+kosong pada run kedua - tidak ada drift whitespace tersisa).
+
+### 2. `prisma validate` (dummy `DATABASE_URL`, tidak ada Postgres nyata di environment ini)
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/db" npx prisma validate --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+```
+
+### 3. `prisma generate`
+
+```
+$ DATABASE_URL="postgresql://user:pass@localhost:5432/db" npx prisma generate --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+✔ Generated Prisma Client (v5.20.0) to ./node_modules/@prisma/client in 1.54s
+```
+
+Diverifikasi lewat grep terhadap `node_modules/.prisma/client/index.d.ts`
+(client nyata yang di-generate, BUKAN `@prisma/client` paket published) -
+`grep -c` atas 12 nama tipe `*UncheckedCreateInput` untuk 12 model baru
+(`KaryawanOutlet`, `HubunganKerja`, `Departemen`, `TemplateShift`,
+`JadwalKerja`, `PolaJadwalBerulang`, `PermintaanTukarShift`,
+`KoreksiAbsensi`, `IstirahatAbsensi`, `PermintaanLembur`, `TargetKinerja`,
+`PenilaianKinerja`) menghasilkan **36** kecocokan (3 kemunculan × 12 model -
+`CreateInput`, `UncheckedCreateInput`, `UpdateInput` masing-masing) -
+membuktikan seluruh model baru benar-benar ter-generate, bukan sekadar
+tertulis di schema tanpa tervalidasi Prisma.
+
+### 4. `tsc --noEmit -p packages/test-support`
+
+Dijalankan berulang kali sepanjang batch (setiap kali file test diedit) -
+output KOSONG (bersih) di setiap run, termasuk run TERAKHIR setelah seluruh
+edit schema/test/dokumen selesai.
+
+### 5. Regresi test arsitektur - before/after
+
+**Sebelum batch ini:** 21 file test arsitektur, seluruhnya lulus (baseline
+diverifikasi ulang di awal batch dengan `node --experimental-strip-types`
+atas seluruh `*.test.ts` di `packages/test-support/src/architecture/`).
+
+**Ditemukan SEBELUM edit dokumen apa pun:** menghapus
+`Karyawan.jabatanId`/`outletUtamaId` (breaking-but-correct, ADR-028
+Keputusan 1/2) membuat `tenant-outlet-composite-constraints.test.ts` GAGAL
+nyata pada assertion `Karyawan.outletUtama harus berupa composite FK` -
+regresi YANG DIHARAPKAN dari perubahan schema yang disengaja, bukan bug.
+Diperbaiki dengan mengganti assertion lama (yang mengecek FK tunggal
+`outletUtama` yang sudah tidak ada) dengan assertion baru yang mengecek
+composite-FK `KaryawanOutlet.outlet`/`KaryawanOutlet.karyawan` sebagai
+gantinya - lihat commit `2fd5322`.
+
+**Setelah batch ini:** 22 file test arsitektur (21 lama + 1 baru
+`karyawan-absensi-hr-constraints.test.ts`), **seluruhnya lulus**, 0 regresi
+nyata (hanya 1 assertion yang DIHARAPKAN berubah, sudah diperbaiki di atas).
+
+```
+$ cd packages/test-support/src/architecture && for f in *.test.ts; do node --experimental-strip-types "$f"; done
+[... 18 baris "OK: seluruh assertion arsitektur ... lulus." ...]
+[... 4 file prisma-client-shape-*.test.ts tidak mencetak output - type-check-only via tsc, bukan runtime assertion, konsisten pola batch sebelumnya ...]
+$ echo $?
+0
+```
+
+### 6. Mutation testing (9 mutasi, setiap diff diverifikasi non-kosong)
+
+Sama disiplin batch-batch sebelumnya: setiap mutasi diverifikasi (1) diff
+non-kosong terhadap backup schema/seed sebelum mutasi, (2) test benar-benar
+GAGAL setelah mutasi diterapkan, sebelum dipercaya sebagai bukti non-vacuity.
+
+```
+=== BASELINE (harus LULUS) ===
+✅ baseline lulus
+
+=== MUTASI ===
+✅ M1 outletUtamaId dihidupkan lagi di Karyawan                diff 1 baris, test GAGAL dengan benar
+✅ M2 rename TemplateShift kembali ke JadwalShift              diff 2 baris, test GAGAL dengan benar
+✅ M3 lintasTengahMalam dihapus dari TemplateShift             diff 1 baris, test GAGAL dengan benar
+✅ M4 jamMulai diganti DateTime @db.Time                       diff 2 baris, test GAGAL dengan benar
+✅ M5 KaryawanOutlet.outlet diturunkan ke FK tunggal            diff 2 baris, test GAGAL dengan benar
+✅ M6 Absensi.jamMasukEfektif dihapus                          diff 1 baris, test GAGAL dengan benar
+✅ M7 StatusKoreksiAbsensi kehilangan DITOLAK                  diff 1 baris, test GAGAL dengan benar
+✅ M8 CutiIzin.tenantId dihapus                                diff 1 baris, test GAGAL dengan benar
+✅ M9 kode izin absensi.koreksi.kelola dihapus dari seed       diff 2 baris, test GAGAL dengan benar
+
+=== VERIFIKASI PEMULIHAN ===
+✅ pulih, lulus
+```
+
+**Catatan proses (kesalahan nyata, dicatat untuk transparansi):** run
+pertama M3/M6/M8 memakai pola perl-regex dengan whitespace yang tidak cocok
+persis dengan hasil `prisma format` (kolom diselaraskan berbeda dari yang
+diasumsikan) sehingga diff KOSONG (mutasi no-op) pada percobaan pertama -
+DIULANG dengan pola yang cocok teks aktual sampai diff non-kosong
+terverifikasi, mengikuti disiplin "diff non-kosong DULU, baru percaya hasil
+gagal/lulus" yang sama seperti M14 batch persediaan. M9 percobaan pertama
+juga sempat KELIRU mengganti teks di dalam KOMENTAR (bukan baris `kode:`
+sesungguhnya) karena regex tanpa penjangkaran spesifik menyasar kemunculan
+PERTAMA string yang sama (di komentar, yang muncul lebih dulu di file)
+alih-alih baris data - diperbaiki dengan menjangkarkan pola ke
+`{ kode: "..."` secara eksplisit. **Insiden tambahan:** proses mutasi M9
+pertama sempat MERUSAK file `prisma/seed/izin.seed.ts` yang sesungguhnya
+(bukan salinan sementara) karena skrip mutasi dijalankan langsung terhadap
+file asli tanpa backup/restore untuk file itu - langsung terdeteksi lewat
+`git diff` (baris rusak/sintaks tidak valid terlihat jelas), diperbaiki
+manual dengan `Edit` mengembalikan ke isi yang benar, dan diverifikasi lewat
+`tsc --noEmit` bersih + `git diff` menunjukkan hanya perubahan yang
+dimaksud. Pelajaran dicatat: mutation test terhadap file DILUAR schema
+(seperti `izin.seed.ts`) HARUS memakai salinan backup eksplisit
+sebagaimana dilakukan untuk `schema.prisma`, bukan diedit-di-tempat.
+
+### 7. Cross-check dokumen (MASTER-CHECKLIST.md/DEFECT-LEDGER.md)
+
+Ditemukan dan diperbaiki (bukan hanya schema, dokumen checklist ITU SENDIRI
+salah), kelas temuan sama `ALT-DEF-034`:
+
+- `izin.seed.ts` memakai kode `absensi.koreksi` (tanpa akhiran `.kelola`)
+  yang **tidak pernah** direferensikan `MASTER-CHECKLIST.md` - `ALT-HR-015`
+  konsisten memakai `absensi.koreksi.kelola`. Diganti nama, bukan
+  dipertahankan berdampingan.
+- Kolom Model Data/Endpoint `MASTER-CHECKLIST.md` untuk `ALT-HR-006`
+  (`PolaShift`/`/api/v1/pola-shift`), `ALT-HR-007`
+  (`JadwalShift`/`/api/v1/jadwal-shift/{id}/penugasan`), `ALT-HR-008`
+  (`/api/v1/jadwal-shift/tukar`), `ALT-HR-011` (`Absensi` sebagai entity,
+  seharusnya `IstirahatAbsensi`), dan `ALT-HR-018` (`PenilaianKaryawan`
+  tunggal, seharusnya `TargetKinerja, PenilaianKinerja` terpisah) semuanya
+  menyebut model/endpoint yang **tidak pernah benar-benar dibuat** - schema
+  mengimplementasikan `TemplateShift`/`JadwalKerja`/`PolaJadwalBerulang`.
+  Dikoreksi ke arah schema (bukan sebaliknya), dengan catatan tertulis di
+  kepala tabel domain Karyawan & Absensi di `MASTER-CHECKLIST.md`.
+- `docs/engineering/TRACEABILITY-MATRIX.md` sebelumnya **tidak memuat satu
+  baris `ALT-HR-*` pun** - gap total, bukan sekadar stale. 18 baris
+  (`ALT-HR-001` s.d. `ALT-HR-018`) ditambahkan, disinkronkan baris-per-baris
+  terhadap `MASTER-CHECKLIST.md` versi yang SUDAH dikoreksi di atas.
+
+### 8. Ringkasan status
+
+Schema untuk `ALT-DEF-019`/`ALT-DEF-024`/`ALT-DEF-025` sudah benar secara
+sintaks (`format`+`validate`), tipe yang dihasilkan sudah benar secara
+bentuk (`generate`+`tsc --noEmit`), seluruh model/field/enum/constraint yang
+diklaim ADR-028 sudah dibuktikan ada lewat test struktur yang **terbukti
+non-vacuous** (9 mutasi), dan **tidak ada regresi nyata** pada 21 test
+arsitektur sebelumnya (1 assertion diperbarui secara sengaja mengikuti
+breaking-but-correct schema change, bukan regresi bug).
+
+**Belum ada:** migrasi Postgres nyata dan partial unique index "satu
+`isUtama=true` per `karyawanId`" (DIBLOKIR, `ALT-DEF-029`), handler/endpoint
+nyata (presensi masuk/pulang, approval koreksi/tukar-shift/cuti/lembur, job
+generate `JadwalKerja` dari `PolaJadwalBerulang`, validasi geofence/
+perangkat sesungguhnya). Karena itu status `ALT-DEF-019`, `ALT-DEF-024`, dan
+`ALT-DEF-025` adalah `SIAP_DIVERIFIKASI`, **BUKAN** `DITUTUP`.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```

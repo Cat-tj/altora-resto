@@ -278,6 +278,36 @@ yang ditambahkan, bukan sinkronisasi penuh 249-requirement (tetap
 | ALT-PLT-019 | `DomainOutboxEvent` (baru, ALT-DEF-017) | internal (relay worker, belum diimplementasikan) | - | sistem | SIAP_DIVERIFIKASI (schema) | `idempotency-outbox-notification-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
 | ALT-PLT-020 | `Notification` (baru, ALT-DEF-017) | `GET /api/v1/notifikasi`, `POST /api/v1/notifikasi/{id}/read` | `/notifikasi` (belum ada di ROUTE-MAP, TODO tambah) | platform.notifikasi.lihat | SIAP_DIVERIFIKASI (schema) | `idempotency-outbox-notification-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
 
+## Karyawan & Absensi (`ALT-DEF-019`, `ALT-DEF-024`, `ALT-DEF-025`) - baris ditambahkan pass correction-loop HR/absensi (ADR-028)
+
+Baris berikut ditambahkan pada pass ini untuk seluruh requirement
+`ALT-HR-001` s.d. `ALT-HR-018` di `MASTER-CHECKLIST.md`, disinkronkan
+baris-per-baris terhadap isi tabel checklist tersebut (kolom Entitas/API/UI
+Route/Izin) - lihat `docs/engineering/DECISION-LOG.md` ADR-028 dan
+`docs/engineering/RELEASE-EVIDENCE.md`. Hanya domain ini yang disentuh, bukan
+sinkronisasi penuh 255-requirement (tetap `ALT-DEF-020`).
+
+| Requirement ID | Entitas ERD | Endpoint API | Rute UI | Permission | Status | Bukti Uji |
+|---|---|---|---|---|---|---|
+| ALT-HR-001 | `Karyawan` | `GET/POST /api/v1/karyawan` | `/karyawan` | `karyawan.kelola` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` (lihat RELEASE-EVIDENCE.md) |
+| ALT-HR-002 | `Karyawan.status` | `PATCH /api/v1/karyawan/{id}/status` | `/karyawan/{id}` | `karyawan.status.kelola` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-003 | `Jabatan` | `GET/POST /api/v1/jabatan` | `/karyawan/jabatan` | `karyawan.jabatan.kelola` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-004 | `Departemen` (baru, ADR-028) | `GET/POST /api/v1/departemen` | `/karyawan/departemen` | `karyawan.departemen.kelola` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-005 | `KaryawanOutlet` (baru, menggantikan `Karyawan.outletUtamaId` - ADR-028 Keputusan 2) | `PUT /api/v1/karyawan/{id}/outlet` | `/karyawan/{id}` | `karyawan.outlet.kelola` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-006 | `TemplateShift` (rename `JadwalShift`, + `lintasTengahMalam` - ADR-028 Keputusan 3) | `GET/POST /api/v1/template-shift` | `/karyawan/shift` | `karyawan.shift.kelola` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-007 | `JadwalKerja` (rename `PenugasanShift`) | `POST /api/v1/jadwal-kerja` | `/karyawan/shift` | `karyawan.jadwal.kelola` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-008 | `PermintaanTukarShift` (baru, ADR-028 Keputusan-tukar-shift) | `POST /api/v1/jadwal-kerja/tukar`, `.../setujui-rekan`, `.../setujui-manajer`, `.../tolak` | `/karyawan/shift` | `karyawan.tukar-shift.kelola` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts`; alur approval `docs/arsitektur/STATE-MACHINES.md` bagian 10 |
+| ALT-HR-009 | `Absensi` | `POST /api/v1/absensi/masuk` (wajib `Idempotency-Key`) | `/absensi` | `absensi.presensi` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-010 | `Absensi.jamPulang` | `POST /api/v1/absensi/{id}/pulang` (wajib `Idempotency-Key`) | `/absensi` | `absensi.presensi` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-011 | `IstirahatAbsensi` (baru, ALT-DEF-025) | `POST /api/v1/absensi/{id}/istirahat/mulai`, `.../selesai` | `/absensi` | `absensi.istirahat` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-012 | `Absensi.status` (`TERLAMBAT`) | internal (saat presensi masuk) | - | `absensi.keterlambatan` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-013 | `Absensi` vs `TemplateShift` | `GET /api/v1/absensi/{id}/lembur` | `/absensi` | `absensi.lembur.lihat` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-014 | `CutiIzin` (dipertahankan + `tenantId` baru, ADR-028 Keputusan 8) | `POST /api/v1/cuti-izin`, `.../{id}/setujui` | `/karyawan/cuti` | `cuti-izin.ajukan` (ajukan), `absensi.setujui` (approve) | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-015 | `KoreksiAbsensi` (baru, crux decision ADR-028 Keputusan 5) | `POST /api/v1/absensi/koreksi` (wajib `Idempotency-Key`), `.../{id}/setujui`, `.../{id}/tolak` | `/absensi` | `absensi.koreksi.kelola` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts`; alur approval `docs/arsitektur/STATE-MACHINES.md` bagian 9 |
+| ALT-HR-016 | `Absensi.lokasiLat`/`lokasiLng`/`jarakDariOutletMeter` (baru) | internal (validasi saat presensi) | - | `absensi.geofence` | SIAP_DIVERIFIKASI (schema; validasi radius sesungguhnya BELUM diimplementasikan, feature work service-layer) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-017 | `Absensi.perangkatId` (baru, composite-FK ke `Perangkat`) | internal (validasi saat presensi) | - | `absensi.perangkat.validasi` | SIAP_DIVERIFIKASI (schema; validasi registrasi perangkat sesungguhnya BELUM diimplementasikan) | `karyawan-absensi-hr-constraints.test.ts` |
+| ALT-HR-018 | `TargetKinerja`/`PenilaianKinerja` (baru, dimodelkan minimal - ADR-028 Keputusan 9) | `POST /api/v1/karyawan/{id}/target-kinerja`, `.../penilaian-kinerja` | `/karyawan/{id}` | `karyawan.penilaian.kelola` | SIAP_DIVERIFIKASI (schema) | `karyawan-absensi-hr-constraints.test.ts` |
+
 ## Catatan gap yang ditemukan saat menyusun matriks ini
 
 - `ALT-PLT-001` (registrasi tenant baru) dan `ALT-PLT-006` (halaman audit log) belum

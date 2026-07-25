@@ -321,6 +321,26 @@ Kolom tabel requirement di bawah:
 
 ## Karyawan & Absensi (`ALT-HR`) - 18 requirement
 
+**Dikoreksi pada batch ALT-DEF-019/ALT-DEF-024/ALT-DEF-025 (ADR-028), sama
+kelas temuan ALT-DEF-034 poin (d):** kolom Model Data/Endpoint untuk
+`ALT-HR-006`/`ALT-HR-007`/`ALT-HR-008` di bawah menyebut `PolaShift`/
+`JadwalShift`/endpoint `/api/v1/pola-shift`/`/api/v1/jadwal-shift/...` -
+nama-nama ini TIDAK PERNAH benar-benar dibuat di schema. Skema
+mengimplementasikan `TemplateShift` (pola shift reusable + `lintasTengahMalam`
+eksplisit, `ALT-DEF-024`) dan `JadwalKerja` (penugasan konkret, rename dari
+`PenugasanShift` lama) - lihat `docs/database/12-karyawan-absensi.md` dan
+ADR-028. Kolom Model Data/Endpoint di bawah DIKOREKSI mengikuti schema
+(bukan sebaliknya) karena `TemplateShift`/`JadwalKerja` sudah konsisten
+dengan konvensi penamaan domain ini secara luas (`JadwalKerja` menghindari
+tabrakan makna dengan `TemplateShift` yang murni pola, bukan penugasan) -
+pola sama seperti `ALT-RSP-003` dkk. yang dikoreksi ke arah schema pada
+`ALT-DEF-034`. Kolom Model Data `ALT-HR-018` juga dikoreksi dari
+`PenilaianKaryawan` tunggal menjadi `TargetKinerja, PenilaianKinerja` (dua
+model terpisah - target ditetapkan di muka, penilaian dicatat belakangan,
+lihat ADR-028 Keputusan 9). Kolom Model Data `ALT-HR-011` dikoreksi dari
+`Absensi` menjadi `IstirahatAbsensi` (baris terpisah append-only, ALT-DEF-025)
+dan Endpoint dipecah menjadi dua aksi eksplisit mulai/selesai.
+
 | ID | Nama | Deskripsi | Domain | Ketergantungan | Acceptance Criteria | Model Data | Endpoint/Command | Permission | Route UI | Test Wajib | Status | Bukti |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | ALT-HR-001 | CRUD data karyawan | Mendaftarkan karyawan dengan data pribadi dan status employment. | Karyawan & Absensi | - | Karyawan tenant-scoped, nomor identitas unik per tenant. | Karyawan | GET/POST /api/v1/karyawan | karyawan.kelola | /karyawan | Unit, Integration | BELUM DIKERJAKAN | - |
@@ -328,19 +348,19 @@ Kolom tabel requirement di bawah:
 | ALT-HR-003 | CRUD jabatan | Mengelola master jabatan (Kasir, Kepala Dapur, Supervisor, dst). | Karyawan & Absensi | - | Jabatan tenant-scoped dan dapat dikaitkan ke peran default. | Jabatan | GET/POST /api/v1/jabatan | karyawan.jabatan.kelola | /karyawan/jabatan | Unit, Integration | BELUM DIKERJAKAN | - |
 | ALT-HR-004 | CRUD departemen | Mengelola master departemen (Dapur, FOH, Gudang, Admin). | Karyawan & Absensi | - | Departemen tenant-scoped, dipakai untuk pengelompokan laporan HR. | Departemen | GET/POST /api/v1/departemen | karyawan.departemen.kelola | /karyawan/departemen | Unit, Integration | BELUM DIKERJAKAN | - |
 | ALT-HR-005 | Karyawan lintas banyak outlet (KaryawanOutlet) | Relasi many-to-many karyawan ke outlet, menggantikan satu outletUtamaId. | Karyawan & Absensi | ALT-HR-001, ALT-PLT-007 | Karyawan bisa dijadwalkan di lebih dari satu outlet tanpa mengubah data induk. | KaryawanOutlet | PUT /api/v1/karyawan/{id}/outlet | karyawan.outlet.kelola | /karyawan/{id} | Unit, Integration | BELUM DIKERJAKAN | - |
-| ALT-HR-006 | Pola shift kerja | Mendefinisikan pola shift standar (Pagi, Siang, Malam) dengan jam mulai-selesai. | Karyawan & Absensi | - | Pola shift dipakai sebagai template saat membuat jadwal harian. | PolaShift | GET/POST /api/v1/pola-shift | karyawan.shift.kelola | /karyawan/shift | Unit, Integration | BELUM DIKERJAKAN | - |
-| ALT-HR-007 | Jadwal shift per karyawan | Menugaskan karyawan ke shift tertentu pada tanggal tertentu. | Karyawan & Absensi | ALT-HR-006 | Satu karyawan tidak bisa dijadwalkan dua shift tumpang tindih di outlet berbeda. | JadwalShift | POST /api/v1/jadwal-shift/{id}/penugasan | karyawan.jadwal.kelola | /karyawan/shift | Unit, Integration | BELUM DIKERJAKAN | - |
-| ALT-HR-008 | Tukar jadwal shift antar karyawan | Karyawan mengajukan tukar shift dengan rekan, butuh approval supervisor. | Karyawan & Absensi | ALT-HR-007 | Tukar shift baru berlaku setelah disetujui, jadwal asal tidak langsung berubah sebelum approval. | PengajuanTukarShift | POST /api/v1/jadwal-shift/tukar | karyawan.tukar-shift.kelola | /karyawan/shift | Unit, Integration | BELUM DIKERJAKAN | - |
+| ALT-HR-006 | Pola shift kerja | Mendefinisikan pola shift standar (Pagi, Siang, Malam) dengan jam mulai-selesai. | Karyawan & Absensi | - | Pola shift dipakai sebagai template saat membuat jadwal harian; shift lintas tengah malam ditandai eksplisit lewat `lintasTengahMalam`. | TemplateShift | GET/POST /api/v1/template-shift | karyawan.shift.kelola | /karyawan/shift | Unit, Integration | BELUM DIKERJAKAN | - |
+| ALT-HR-007 | Jadwal shift per karyawan | Menugaskan karyawan ke shift tertentu pada tanggal tertentu. | Karyawan & Absensi | ALT-HR-006 | Satu karyawan tidak bisa dijadwalkan dua shift tumpang tindih di outlet berbeda. | JadwalKerja | POST /api/v1/jadwal-kerja | karyawan.jadwal.kelola | /karyawan/shift | Unit, Integration | BELUM DIKERJAKAN | - |
+| ALT-HR-008 | Tukar jadwal shift antar karyawan | Karyawan mengajukan tukar shift dengan rekan, butuh approval supervisor. | Karyawan & Absensi | ALT-HR-007 | Tukar shift baru berlaku setelah disetujui, jadwal asal tidak langsung berubah sebelum approval. | PermintaanTukarShift | POST /api/v1/jadwal-kerja/tukar | karyawan.tukar-shift.kelola | /karyawan/shift | Unit, Integration | BELUM DIKERJAKAN | - |
 | ALT-HR-009 | Presensi masuk | Mencatat waktu masuk kerja karyawan lewat QR/PIN/GPS. | Karyawan & Absensi | ALT-HR-007 | Presensi tercatat dengan metode verifikasi dan lokasi (jika GPS diaktifkan). | Absensi | POST /api/v1/absensi/masuk | absensi.presensi | /absensi | Unit, Integration | BELUM DIKERJAKAN | - |
 | ALT-HR-010 | Presensi pulang | Mencatat waktu pulang, menghitung durasi kerja aktual. | Karyawan & Absensi | ALT-HR-009 | Durasi kerja dihitung otomatis dari selisih waktu masuk dan pulang. | Absensi | POST /api/v1/absensi/{id}/pulang | absensi.presensi | /absensi | Unit, Integration | BELUM DIKERJAKAN | - |
-| ALT-HR-011 | Catat waktu istirahat | Mencatat mulai/selesai jam istirahat dalam satu sesi kerja. | Karyawan & Absensi | ALT-HR-009 | Durasi kerja efektif dikurangi total waktu istirahat tercatat. | Absensi | POST /api/v1/absensi/{id}/istirahat | absensi.istirahat | /absensi | Unit, Integration | BELUM DIKERJAKAN | - |
+| ALT-HR-011 | Catat waktu istirahat | Mencatat mulai/selesai jam istirahat dalam satu sesi kerja. | Karyawan & Absensi | ALT-HR-009 | Durasi kerja efektif dikurangi total waktu istirahat tercatat. | IstirahatAbsensi | POST /api/v1/absensi/{id}/istirahat/mulai, POST /api/v1/absensi/{id}/istirahat/selesai | absensi.istirahat | /absensi | Unit, Integration | BELUM DIKERJAKAN | - |
 | ALT-HR-012 | Deteksi keterlambatan | Menandai presensi masuk yang melewati toleransi jadwal shift sebagai terlambat. | Karyawan & Absensi | ALT-HR-009 | Flag terlambat dihitung otomatis dari selisih jadwal shift dan waktu presensi aktual. | Absensi | internal (saat presensi masuk) | absensi.keterlambatan | - | Unit, Integration | BELUM DIKERJAKAN | - |
 | ALT-HR-013 | Hitung lembur (overtime) | Menghitung jam lembur dari durasi kerja aktual melebihi jadwal shift. | Karyawan & Absensi | ALT-HR-009 | Jam lembur terhitung otomatis dan dapat direview HRD sebelum disetujui untuk penggajian. | Absensi | GET /api/v1/absensi/{id}/lembur | absensi.lembur.lihat | /absensi | Unit, Integration | BELUM DIKERJAKAN | - |
 | ALT-HR-014 | Alur pengajuan cuti/izin | State machine pengajuan cuti/izin/sakit (DIAJUKAN -> DISETUJUI/DITOLAK). | Karyawan & Absensi | ALT-HR-001 | Cuti yang disetujui otomatis mengecualikan karyawan dari penjadwalan shift tanggal tsb. | CutiIzin | POST /api/v1/cuti-izin | cuti-izin.ajukan | /karyawan/cuti | Unit, Integration | BELUM DIKERJAKAN | - |
 | ALT-HR-015 | Koreksi absensi sebagai baris baru dengan approval | Koreksi absensi dibuat sebagai record KoreksiAbsensi baru, bukan menimpa data asli. | Karyawan & Absensi | ALT-HR-009 | Data Absensi asli tetap utuh; KoreksiAbsensi terhubung dan butuh approval supervisor. | KoreksiAbsensi | POST /api/v1/absensi/koreksi | absensi.koreksi.kelola | /absensi | Unit, Integration, Security | BELUM DIKERJAKAN | - |
 | ALT-HR-016 | Geofence lokasi presensi | Membatasi presensi hanya valid dalam radius geografis outlet tertentu. | Karyawan & Absensi | ALT-HR-009 | Presensi di luar radius geofence outlet ditolak atau ditandai untuk review. | Absensi | internal (validasi saat presensi) | absensi.geofence | - | Unit, Integration, Security | BELUM DIKERJAKAN | - |
 | ALT-HR-017 | Pembatasan perangkat presensi | Presensi hanya bisa dilakukan dari perangkat terdaftar outlet, bukan sembarang perangkat. | Karyawan & Absensi | ALT-PLT-019 | Presensi dari perangkatId tidak terdaftar pada outlet tsb ditolak. | Absensi, Perangkat | internal (validasi saat presensi) | absensi.perangkat.validasi | - | Unit, Integration, Security | BELUM DIKERJAKAN | - |
-| ALT-HR-018 | Penilaian kinerja karyawan | Mencatat evaluasi periodik kinerja karyawan oleh supervisor/manajer. | Karyawan & Absensi | ALT-HR-001 | Penilaian tersimpan per periode dan bisa direview HRD, tidak menimpa penilaian lama. | PenilaianKaryawan | POST /api/v1/karyawan/{id}/penilaian | karyawan.penilaian.kelola | /karyawan/{id} | Unit, Integration | BELUM DIKERJAKAN | - |
+| ALT-HR-018 | Penilaian kinerja karyawan | Mencatat evaluasi periodik kinerja karyawan oleh supervisor/manajer. | Karyawan & Absensi | ALT-HR-001 | Penilaian tersimpan per periode dan bisa direview HRD, tidak menimpa penilaian lama. | TargetKinerja, PenilaianKinerja | POST /api/v1/karyawan/{id}/target-kinerja, POST /api/v1/karyawan/{id}/penilaian-kinerja | karyawan.penilaian.kelola | /karyawan/{id} | Unit, Integration | BELUM DIKERJAKAN | - |
 
 ## Analitik (`ALT-ANL`) - 12 requirement
 
