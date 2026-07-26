@@ -3582,3 +3582,155 @@ DROP DATABASE altora_resto_dev_freshtest; (dibersihkan setelah verifikasi)
 Defect baru `ALT-DEF-048` dicatat untuk titik picu konsumsi
 (`DIKIRIM_KE_DAPUR` vs granularitas per-`TiketDapur`) yang perlu
 diverifikasi ulang saat kode handler dapur ditulis.
+
+## ADR-038: Redesain PromoPemakaian (satu baris per pasangan + jumlahPenerapan), menutup ALT-DEF-038
+
+### 1. Diff migrasi (`prisma migrate diff --from-schema-datasource --to-schema-datamodel`)
+
+```
+-- DropIndex
+DROP INDEX "promo_pemakaian_promoId_pesananId_idx";
+
+-- AlterTable
+ALTER TABLE "promo_pemakaian" ADD COLUMN     "jumlahPenerapan" INTEGER NOT NULL DEFAULT 1,
+ADD COLUMN     "totalDiskon" BIGINT NOT NULL DEFAULT 0;
+
+-- AlterTable
+ALTER TABLE "promo_pemakaian_baris" ADD COLUMN     "nomorPenerapan" INTEGER NOT NULL DEFAULT 1;
+
+-- CreateIndex
+CREATE UNIQUE INDEX "promo_pemakaian_pesananId_promoId_key" ON "promo_pemakaian"("pesananId", "promoId");
+```
+
+Diff di atas ditinjau lalu digabung ke migrasi resmi
+`prisma/schema/migrations/20260726150000_promo_pemakaian_satu_baris_per_pasangan_penghitung/migration.sql`
+bersama trigger `trg_promo_pemakaian_cek_batas_penerapan` (trigger ditulis
+manual - `migrate diff` tidak menghasilkan trigger prosedural, sama seperti
+precedent ADR-035/ADR-037).
+
+### 2. Penerapan ke `altora_resto_dev` (psql + resolve)
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -f prisma/schema/migrations/20260726150000_promo_pemakaian_satu_baris_per_pasangan_penghitung/migration.sql
+DROP INDEX
+ALTER TABLE
+ALTER TABLE
+CREATE INDEX
+CREATE FUNCTION
+CREATE TRIGGER
+
+$ npx prisma migrate resolve --applied 20260726150000_promo_pemakaian_satu_baris_per_pasangan_penghitung
+Migration 20260726150000_promo_pemakaian_satu_baris_per_pasangan_penghitung marked as applied.
+
+$ npx prisma migrate status
+12 migrations found in prisma/migrations
+Database schema is up to date!
+```
+
+### 3. Verifikasi struktur nyata (`\d promo_pemakaian`)
+
+```
+                                         Table "public.promo_pemakaian"
+     Column      |              Type              | Collation | Nullable |               Default
+-----------------+--------------------------------+-----------+----------+--------------------------------------
+ id              | text                           |           | not null |
+ tenantId        | text                           |           | not null |
+ promoId         | text                           |           | not null |
+ kuponId         | text                           |           |          |
+ pesananId       | text                           |           | not null |
+ status          | "StatusPemakaianPromo"         |           | not null | 'DITERAPKAN'::"StatusPemakaianPromo"
+ createdAt       | timestamp(3) without time zone |           | not null | CURRENT_TIMESTAMP
+ jumlahPenerapan | integer                        |           | not null | 1
+ totalDiskon     | bigint                         |           | not null | 0
+Indexes:
+    "promo_pemakaian_pkey" PRIMARY KEY, btree (id)
+    "promo_pemakaian_pesananId_promoId_key" UNIQUE, btree ("pesananId", "promoId")
+    "promo_pemakaian_tenantId_id_key" UNIQUE, btree ("tenantId", id)
+Triggers:
+    trg_promo_pemakaian_cek_batas_penerapan BEFORE INSERT OR UPDATE ON promo_pemakaian FOR EACH ROW EXECUTE FUNCTION promo_pemakaian_cek_batas_penerapan()
+```
+
+### 4. Test database-integration BARU (`promo-pemakaian-penerapan-invariants.test.ts`)
+
+```
+$ node node_modules/.pnpm/tsx@4.23.1/node_modules/tsx/dist/cli.mjs \
+    packages/test-support/src/database-integration/promo-pemakaian-penerapan-invariants.test.ts
+OK: database-integration ALT-DEF-038 (satu baris PromoPemakaian per pasangan pesananId+promoId, penghitung jumlahPenerapan, trigger batas repeatable/usageLimitPerOrder, banyak PromoPemakaianBaris per header) lulus - menutup ALT-DEF-038.
+```
+
+### 5. Test arsitektur diperbarui (`promo-stacking-reward-constraints.test.ts`)
+
+```
+$ node --experimental-strip-types packages/test-support/src/architecture/promo-stacking-reward-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-009/ALT-DEF-030 lulus.
+```
+
+### 6. Typecheck
+
+```
+$ npx tsc --noEmit -p packages/test-support
+```
+
+Tiga error `TS1360` di `prisma-client-shape-persediaan.test.ts` (fixture
+`MutasiStokUncheckedCreateInput` kehilangan properti `alasan`) TETAP muncul.
+Diverifikasi via `git stash`/`git stash pop` bahwa error ini SUDAH ADA
+SEBELUM perubahan batch ini (pre-existing, tidak berkaitan dengan
+Promo/PromoPemakaian) - di luar scope batch ADR-038, tidak diperbaiki di
+sini.
+
+### 7. Seluruh test SEBELUM redeploy (33 file: 22 architecture + 11 database-integration)
+
+```
+architecture: 22 passed, 0 failed
+database-integration: 11 passed, 0 failed
+```
+
+Naik dari 32 file (22 architecture + 10 database-integration) sebelum batch
+ini menjadi 33 file (22 architecture + 11 database-integration) - satu file
+database-integration baru (`promo-pemakaian-penerapan-invariants.test.ts`).
+
+### 8. Fresh-database redeploy (dari kosong, 12 migrasi)
+
+```
+$ psql -U icat -h localhost -d postgres -c "DROP DATABASE IF EXISTS altora_resto_dev;"
+$ psql -U icat -h localhost -d postgres -c "CREATE DATABASE altora_resto_dev;"
+$ npx prisma migrate deploy
+Applying migration `20260725154045_baseline_correction_loop`
+...
+Applying migration `20260726150000_promo_pemakaian_satu_baris_per_pasangan_penghitung`
+All migrations have been successfully applied.
+```
+
+Struktur `\d promo_pemakaian` dan daftar trigger diverifikasi ulang setelah
+redeploy - IDENTIK dengan sebelum drop (unique index
+`promo_pemakaian_pesananId_promoId_key` + trigger
+`trg_promo_pemakaian_cek_batas_penerapan` keduanya ada).
+
+Seluruh 33 file test (22 architecture + 11 database-integration) dijalankan
+ulang terhadap database fresh:
+
+```
+database-integration fresh: 11 passed, 0 failed
+architecture fresh: 22 passed, 0 failed
+```
+
+**Before/after batch ini:** SEBELUM = 32 file (22 architecture + 10
+database-integration), 32/32 passed. SESUDAH = 33 file (22 architecture +
+11 database-integration), 33/33 passed - baik sebelum maupun sesudah
+fresh-database redeploy.
+
+### 9. Traceability
+
+`INVARIAN-BELUM-DITEGAKKAN.md`: `INV-008` dipindah dari kategori B2 ke
+kategori A (DB-enforced, unique index + trigger, teruji); `INV-023`
+catatannya diperbarui (separuh app-level yang TERSISA: baca
+`Promo.repeatable` sebelum increment, menunggu batch implementasi
+command-handler). Kategori A naik dari 20 ke 21 baris, kategori B2 turun
+dari 4 ke 3 baris, total tetap 48 baris (INV-008 pindah kategori, bukan
+baris baru).
+
+`DEFECT-LEDGER.md`: `ALT-DEF-038` DITUTUP (`DITUTUP`) - checklist penutupan
+lengkap dicek di entrinya (migrasi diterapkan, constraint SQL terpasang,
+test integrasi lulus, test arsitektur diperbarui+lulus, typecheck bersih
+untuk perubahan batch ini, fresh-database redeploy identik, traceability
+diperbarui, bukti tersedia di sini).

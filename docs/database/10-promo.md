@@ -92,8 +92,10 @@ erDiagram
         string tenantId FK
         string promoId FK
         string kuponId FK "nullable"
-        string pesananId FK "TIDAK unik lagi - ALT-DEF-009"
+        string pesananId FK "TIDAK unik SENDIRIAN - ALT-DEF-009 (stacking bebas)"
         string status "DITERAPKAN|DIBATALKAN|DIRETUR"
+        int jumlahPenerapan "default 1, penghitung repeatable - ALT-DEF-038"
+        bigint totalDiskon "default 0, agregat SUM(baris.nilaiDiskon) - ALT-DEF-038"
         datetime createdAt
     }
     PROMO_PEMAKAIAN_BARIS {
@@ -102,6 +104,7 @@ erDiagram
         string promoPemakaianId FK
         string itemPesananId FK "nullable, null = diskon level-order"
         bigint nilaiDiskon "rupiah"
+        int nomorPenerapan "default 1, kelompok per instance repeatable - ALT-DEF-038"
         datetime createdAt
     }
     PROMO_SNAPSHOT {
@@ -126,13 +129,29 @@ Catatan:
 
 - **ALT-DEF-009 (defect utama, lihat ADR-026):** `PROMO_PEMAKAIAN.pesananId`
   dulu `@unique`, sehingga satu pesanan hanya bisa memakai satu promo.
-  Sekarang TIDAK unik - satu pesanan bisa punya banyak baris
-  `PROMO_PEMAKAIAN` (satu per promo yang diterapkan, atau lebih dari satu
-  untuk promo yang sama bila `Promo.repeatable = true`). Kombinasi mana yang
-  boleh digabung ditentukan `Promo.stackingPolicy` + `Promo.conflictGroup` +
-  `Promo.prioritas` - algoritma resolusi konflik lengkap didokumentasikan di
-  ADR-026, BUKAN diimplementasikan di batch ini (itu business-logic
-  `packages/promo`, di luar cakupan perubahan skema).
+  Sekarang TIDAK unik SENDIRIAN - satu pesanan bisa punya banyak baris
+  `PROMO_PEMAKAIAN`, satu per PROMO BERBEDA yang diterapkan (stacking).
+  Kombinasi mana yang boleh digabung ditentukan `Promo.stackingPolicy` +
+  `Promo.conflictGroup` + `Promo.prioritas` - algoritma resolusi konflik
+  lengkap didokumentasikan di ADR-026, BUKAN diimplementasikan di batch itu
+  (itu business-logic `packages/promo`, di luar cakupan perubahan skema).
+- **ALT-DEF-038 (menutup, lihat ADR-038): SATU baris per pasangan
+  (pesananId, promoId), penghitung `jumlahPenerapan`.** `PROMO_PEMAKAIAN`
+  punya `@@unique([pesananId, promoId])` - SELALU tepat satu baris header
+  untuk pasangan promo+pesanan yang SAMA, TANPA pengecualian untuk promo
+  `repeatable=true`. Promo yang repeatable dan terpicu berkali-kali dalam
+  satu pesanan (mis. "beli 2 gratis 1" x3) TIDAK menghasilkan 3 baris
+  `PROMO_PEMAKAIAN` - tetap SATU baris header, dengan `jumlahPenerapan = 3`
+  sebagai penghitung. Tiga aktivasi hadiahnya direpresentasikan sebagai
+  BANYAK baris `PROMO_PEMAKAIAN_BARIS` (dikelompokkan lewat
+  `nomorPenerapan`) di bawah SATU header itu - lihat catatan
+  `PROMO_PEMAKAIAN_BARIS` di bawah. `totalDiskon` di header adalah agregat
+  `SUM(PROMO_PEMAKAIAN_BARIS.nilaiDiskon)` di bawahnya. Trigger
+  `trg_promo_pemakaian_cek_batas_penerapan` menjaga `jumlahPenerapan` tidak
+  melebihi batas yang berasal dari `Promo.repeatable`/`usageLimitPerOrder`.
+  Ini TIDAK mengubah cakupan ALT-DEF-009: promo BERBEDA pada pesanan yang
+  sama tetap bebas/stacking, constraint ini hanya melarang PASANGAN yang
+  SAMA muncul dua kali.
 - **`Promo.jenis` (lama) digantikan `PromoReward.jenis`:** satu promo kini
   bisa punya lebih dari satu baris reward (mis. diskon persen + item
   gratis sekaligus). `Promo` murni mendefinisikan KAPAN/UNTUK SIAPA berlaku
@@ -149,7 +168,13 @@ Catatan:
   `PROMO_PEMAKAIAN` (header "promo X diterapkan ke pesanan Y") bisa punya
   banyak baris (mis. BOGO yang menggratiskan 2 item = 2 baris). `nilaiDiskon`
   yang dulu ada langsung di `PROMO_PEMAKAIAN` pindah ke sini per baris; total
-  potongan promo tersebut = SUM baris-barisnya.
+  potongan promo tersebut = SUM baris-barisnya (di-cache di
+  `PROMO_PEMAKAIAN.totalDiskon`, ALT-DEF-038). `nomorPenerapan`
+  (ALT-DEF-038) mengelompokkan baris per KALI promo repeatable terpicu -
+  BOGO x3 dengan 2 baris hadiah per aktivasi = 6 baris, `nomorPenerapan`
+  1/1/2/2/3/3. Berguna untuk penelusuran retur-per-instance: kalau
+  pelanggan meretur satu dari tiga hadiah gratis itu, `nomorPenerapan`
+  menunjukkan persis penerapan ke berapa asalnya.
 - **`PROMO_SNAPSHOT` (1:1 dengan `PROMO_PEMAKAIAN`):** salinan definisi promo
   (kondisi+reward+jadwal) PERSIS saat diterapkan, prinsip sama dengan kolom
   `*Snapshot` di `ItemPesanan` (ALT-DEF-005/ADR-017). Perubahan `Promo` di
@@ -158,14 +183,12 @@ Catatan:
   "apa efek promo ini pada keranjang ini" (ALT-PRM-015) bisa terjadi sebelum
   pesanan dibuat sama sekali; tidak menulis `PROMO_PEMAKAIAN` dan tidak
   mengurangi kuota.
-- **Keterbatasan yang diketahui, TIDAK diimplementasikan di batch ini
-  (dicatat sebagai ALT-DEF-038):** "promo non-repeatable paling banyak
-  diterapkan sekali per pesanan" TIDAK bisa dijamin database sebagai
-  constraint statis karena bergantung pada nilai `Promo.repeatable` di
-  tabel LAIN (bukan predicate yang bisa diekspresikan partial unique index
-  Postgres biasa) - hanya trigger yang bisa menjaminnya di level data,
-  di luar scope "SQL manual terdokumentasi" batch ini. Aturan ditegakkan
-  murni application-level untuk saat ini.
+- **ALT-DEF-038 DITUTUP (lihat ADR-038)** - lihat catatan di atas pada
+  entri `PROMO_PEMAKAIAN`. Sisa app-level yang TETAP ada (INV-023,
+  `INVARIAN-BELUM-DITEGAKKAN.md`): service-layer wajib membaca
+  `Promo.repeatable` SEBELUM memutuskan untuk increment `jumlahPenerapan`
+  (trigger DB hanya menolak HASIL AKHIR yang melanggar batas, bukan
+  pengganti disiplin transaksi aplikasi).
 - Kombinasi promo dan urutan evaluasi divalidasi/dihitung di `packages/promo`
   saat kalkulasi total pesanan; `PROMO_PEMAKAIAN`/`PROMO_PEMAKAIAN_BARIS`
   menyimpan hasil akhir sebagai jejak audit, bukan hanya referensi promo.

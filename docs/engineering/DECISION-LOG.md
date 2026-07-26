@@ -3892,3 +3892,157 @@ lintas-baris tetap penuh app-level). Defect baru `ALT-DEF-048` dicatat di
 `DEFECT-LEDGER.md` untuk titik picu konsumsi (`DIKIRIM_KE_DAPUR` vs
 `TiketDapur.SEDANG_DISIAPKAN`) yang perlu diverifikasi ulang saat kode
 handler dapur/produksi ditulis.
+
+## ADR-038: Redesain `PromoPemakaian` - satu baris per pasangan (pesananId, promoId) + penghitung `jumlahPenerapan`, menutup ALT-DEF-038
+
+**Konteks.** `ALT-DEF-038` (dicatat sejak batch `ALT-DEF-009`/ADR-026)
+mencatat bahwa aturan "promo yang sama paling banyak diterapkan
+`usageLimitPerOrder` kali per pesanan, KECUALI `Promo.repeatable = true`"
+tidak bisa diekspresikan sebagai constraint database dengan cara apa pun
+yang tersedia saat itu - baik `@@unique` Prisma (statis) maupun partial
+unique index Postgres (predicate hanya boleh membaca kolom PADA TABEL YANG
+SAMA, bukan JOIN ke `Promo.repeatable`). Rencana asli adalah trigger
+`BEFORE INSERT` lintas-tabel yang membaca `Promo.repeatable` saat setiap
+baris `PromoPemakaian` baru ditulis untuk memutuskan apakah baris ke-N untuk
+pasangan (promo, pesanan) yang sama boleh ada - trigger itu DIDEFER dua kali
+karena butuh keputusan desain retry/concurrent-insert tersendiri (bagaimana
+service-layer tahu ini "percobaan ke berapa" sebelum insert terjadi, apa
+yang terjadi saat dua request bersamaan mencoba insert baris ke-N yang
+sama).
+
+**Keputusan 1 - insight desain: restrukturisasi data, bukan pertajam
+trigger.** Masalah sebenarnya bukan triggernya sulit ditulis - masalahnya
+BENTUK DATA salah. Model lama membiarkan BANYAK baris `PromoPemakaian`
+untuk pasangan (promo, pesanan) yang SAMA ketika `repeatable=true`, yang
+membuat "berapa kali boleh berulang" jadi pertanyaan KARDINALITAS baris
+(butuh JOIN ke tabel lain untuk tahu batasnya) - persis kategori masalah
+yang partial unique index/CHECK constraint statis tidak bisa jawab.
+Redesain: `PromoPemakaian` SELALU tepat SATU baris per pasangan
+(`pesananId`, `promoId`), TANPA pengecualian, ditegakkan
+`@@unique([pesananId, promoId])` - constraint STATIS murni dalam satu
+tabel, kategori yang SAMA seperti precedent XOR resep/partial-unique QRIS
+yang sudah diberlakukan sebagai SQL manual resmi. Promo yang repeatable dan
+terpicu berkali-kali (mis. "beli 2 gratis 1" x3 pada pesanan besar) tetap
+SATU baris header ini; field BARU `jumlahPenerapan Int @default(1)` adalah
+PENGHITUNG naik (bukan penyebab pengulangan) yang di-increment ATOMIK oleh
+service-layer setiap kali promo yang sama terpicu ulang pada pesanan yang
+sama (`UPDATE promo_pemakaian SET "jumlahPenerapan" = "jumlahPenerapan" + 1
+WHERE id = $1` - satu pernyataan atomik, bukan baca-lalu-tulis, konsisten
+dengan pola row-locking ADR-037). Tiga kelipatan hadiah dari BOGO x3
+direpresentasikan sebagai TIGA baris `PromoPemakaianBaris` di bawah SATU
+header ini (model relasi ini SUDAH benar sejak ADR-026 - diverifikasi ulang,
+tidak ada perubahan struktural yang dibutuhkan di sana selain field baru
+di Keputusan 3).
+
+Promo BERBEDA pada pesanan yang sama TIDAK terpengaruh - stacking ADR-026
+tetap bebas karena constraint hanya melarang PASANGAN (pesananId, promoId)
+yang SAMA muncul dua kali, bukan melarang lebih dari satu promo per
+pesanan (dibuktikan test `testPromoBerbedaTetapBerhasil`).
+
+**Keputusan 2 - `totalDiskon` BARU, bukan rename `nilaiDiskon`.** Field
+rupiah per-BARIS `PromoPemakaianBaris.nilaiDiskon` (sudah `BigInt` sejak
+ADR-034) TIDAK diubah/di-rename - field itu tetap benar sebagai nilai
+DISKON SATU BARIS. `PromoPemakaian.totalDiskon BigInt @default(0)` adalah
+field BARU TERPISAH di level HEADER: agregat `SUM(PromoPemakaianBaris.
+nilaiDiskon)` di bawah header itu, denormalisasi sengaja (konsisten dengan
+pola cache lain di skema ini, mis. `Pelanggan.saldoTokoCache`) supaya
+"berapa total diskon promo ini di pesanan ini" adalah baca satu kolom,
+bukan JOIN+SUM setiap query. Ditulis ulang oleh service-layer setiap kali
+baris `PromoPemakaianBaris` baru ditambahkan/diretur di bawah header
+tersebut (bukan trigger - agregasi lintas-baris murni MENJUMLAHKAN, bukan
+MENOLAK, jadi tidak butuh penegakan constraint, konsisten dengan keputusan
+INV-015 di `INVARIAN-BELUM-DITEGAKKAN.md` bahwa agregasi SUM lintas-baris
+tetap app-level).
+
+**Keputusan 3 - `snapshotAturan` TIDAK ditambahkan; `PromoSnapshot` SUDAH
+memenuhi kebutuhan itu.** Rencana redesain awalnya menyebut kolom
+`snapshotAturan Json` langsung di `PromoPemakaian`. Diverifikasi lebih
+dulu: model `PromoSnapshot` (dibuat sejak ADR-026, 1:1 lewat
+`@@unique([tenantId, promoPemakaianId])`) SUDAH PERSIS mekanisme yang
+dimaksud - `PromoSnapshot.definisiPromo Json` adalah salinan definisi promo
+(kondisi+reward+jadwal) PERSIS saat diterapkan, immutable, prinsip yang
+sama dengan kolom `*Snapshot` di `ItemPesanan` (ADR-017). Menambah
+`snapshotAturan Json` langsung di `PromoPemakaian` akan menduplikasi
+mekanisme snapshot yang SAMA pada tabel yang SAMA (dua kolom Json berbeda
+nama menyimpan hal yang konsepnya identik) - dua sumber kebenaran untuk
+satu konsep adalah pola yang berulang kali ditolak di correction-loop ini
+(lihat mis. ADR-026 Keputusan 2 soal `Promo.jenis` vs `PromoReward.jenis`).
+Keputusan: TIDAK ada field baru; didokumentasikan di sini dan di
+schema.prisma bahwa `PromoSnapshot.definisiPromo` ADALAH `snapshotAturan`
+yang dimaksud rencana redesain.
+
+**Keputusan 4 - `nomorPenerapan` BARU pada `PromoPemakaianBaris`.**
+Ditambahkan `nomorPenerapan Int @default(1)` untuk mengelompokkan baris
+per KALI promo repeatable terpicu (mis. BOGO x3 dengan 2 baris hadiah per
+aktivasi = 6 baris, `nomorPenerapan` 1/1/2/2/3/3 mengelompokkannya per
+instance). Dipertimbangkan TIDAK menambahkannya (YAGNI - `createdAt` sudah
+bisa dipakai untuk urutan kasar), tapi diputuskan CUKUP BERGUNA untuk
+auditabilitas/retur-per-instance (ALT-PRM-017 sudah menjadikan retur
+presisi-per-baris sebagai kebutuhan eksplisit untuk `itemPesananId`; hal
+yang sama berlaku untuk "penerapan ke berapa" ketika repeatable) dan
+BIAYA-nya kecil (satu kolom `Int @default(1)`, tidak butuh migrasi
+data/backfill kompleks karena default 1 valid untuk seluruh baris lama).
+Bukan nullable karena SELALU bermakna (instance ke-1 untuk penerapan
+tunggal, bukan hanya untuk kasus repeatable).
+
+**Keputusan 5 - trigger `usageLimitPerOrder` DITULIS (bukan didefer lagi).**
+Setelah restrukturisasi Keputusan 1, sisa masalah lintas-tabel yang TERSISA
+jauh lebih kecil: memastikan `jumlahPenerapan` pada SATU baris yang sudah
+pasti ada tidak melebihi batas yang berasal dari `Promo.repeatable`/
+`Promo.usageLimitPerOrder`. Ini BUKAN lagi "apakah insert ini secara
+konseptual insert ke-N dari baris yang berulang" (masalah kardinalitas yang
+menjebak versi lama) - ini murni "bandingkan satu integer terhadap batas
+yang dibaca dari tabel lain", kategori masalah yang PERSIS sama dengan
+`cek_stok_bahan_negatif` (ADR-037, trigger yang membaca
+`pengaturan_persediaan_outlet` dari `stok_bahan`) yang SUDAH terbukti bisa
+ditulis dan diuji nyata di batch sebelumnya. Trigger
+`trg_promo_pemakaian_cek_batas_penerapan` (`BEFORE INSERT OR UPDATE` pada
+`promo_pemakaian`) ditulis dan menegakkan: (a) `repeatable=false` ->
+`jumlahPenerapan` tidak boleh > 1; (b) `usageLimitPerOrder` (nullable = tak
+terbatas) terisi -> `jumlahPenerapan` tidak boleh melebihinya; (c)
+`jumlahPenerapan` tidak boleh < 1. Sama seperti `cek_stok_bahan_negatif`,
+trigger ini adalah lapisan KEDUA (defense-in-depth) atas disiplin transaksi
+service-layer (INV-023: baca `Promo.repeatable` SEBELUM increment) -
+bukan pengganti row-locking yang benar untuk pola increment atomik.
+
+**Migrasi.**
+`20260726150000_promo_pemakaian_satu_baris_per_pasangan_penghitung`
+(`ALTER TABLE promo_pemakaian ADD jumlahPenerapan/totalDiskon`,
+`ALTER TABLE promo_pemakaian_baris ADD nomorPenerapan`, `DROP INDEX`
+non-unik lama `(promoId, pesananId)` diganti `CREATE UNIQUE INDEX
+promo_pemakaian_pesananId_promoId_key`, trigger
+`trg_promo_pemakaian_cek_batas_penerapan`) - diterapkan ke
+`altora_resto_dev` via `psql` + `prisma migrate resolve --applied`. Bagian
+`ALTER TABLE`/`CREATE INDEX` dihasilkan `prisma migrate diff
+--from-schema-datasource --to-schema-datamodel` dan ditinjau sebelum
+diterapkan; trigger ditulis manual di bagian sama migrasi (`migrate diff`
+tidak menghasilkan trigger prosedural, sama seperti precedent ADR-035/037).
+Fresh-database redeploy (`DROP DATABASE`+`CREATE DATABASE` +
+`prisma migrate deploy` dari kosong, 12 migrasi resmi diterapkan bersih)
+dijalankan dan struktur (`\d promo_pemakaian`, daftar trigger) diverifikasi
+identik dengan sebelum drop.
+
+**Status.** Test arsitektur `promo-stacking-reward-constraints.test.ts`
+diperbarui: assertion negatif lama yang melarang SEGALA `@@unique` berisi
+`pesananId` (termasuk berpasangan dengan `promoId`) DILONGGARKAN - assertion
+sekarang membedakan "pesananId SENDIRIAN tanpa promoId" (TETAP dilarang,
+itu defect ALT-DEF-009 asli) dari "`(pesananId, promoId)` berpasangan"
+(SEKARANG WAJIB ada, itu perbaikan ALT-DEF-038); assertion positif baru
+untuk `jumlahPenerapan`/`totalDiskon`/`nomorPenerapan`. Test
+database-integration BARU `promo-pemakaian-penerapan-invariants.test.ts`
+membuktikan lima perilaku: unique constraint menolak baris kedua per
+pasangan, promo berbeda pada pesanan sama tetap berhasil (stacking utuh),
+trigger menolak `jumlahPenerapan > 1` pada non-repeatable, trigger menolak
+`jumlahPenerapan` melebihi `usageLimitPerOrder` (termasuk lewat `UPDATE`,
+bukan hanya `INSERT`), dan banyak `PromoPemakaianBaris` (6 baris/3 instance)
+berhasil ditambahkan di bawah satu header. Seluruh 22 test arsitektur + 11
+test database-integration (naik dari 10 - file promo baru) lulus, termasuk
+dari fresh-database redeploy (12 migrasi dari kosong, 33/33 file lulus).
+`docs/engineering/INVARIAN-BELUM-DITEGAKKAN.md` INV-008 dipindah ke
+kategori A (DB-enforced penuh untuk (pesananId, promoId) DAN untuk batas
+`jumlahPenerapan`); INV-023 (separuh app-level: baca `repeatable` sebelum
+increment) TETAP kategori C - trigger adalah defense-in-depth, bukan
+pengganti disiplin transaksi service-layer, jadi separuh app-level itu
+belum benar-benar "diverifikasi ada kodenya" (belum ada command-handler
+yang ditulis, di luar scope batch ini). `ALT-DEF-038` ditutup (`DITUTUP`) di
+`DEFECT-LEDGER.md` - lihat entri untuk checklist penutupan lengkap.
