@@ -1908,6 +1908,17 @@ model BatchStok {
 // SUDAH punya `version`/ADR-035 untuk update konkuren biasa, tapi kontensi
 // TINGGI pada item populer/stok terbatas butuh `SELECT ... FOR UPDATE`
 // pesimistik, bukan optimistic retry, untuk menghindari thundering herd).
+// ADR-042 (menutup ALT-DEF-052/INV-063): trigger `trg_reservasi_stok_cek_ketersediaan`
+// (BEFORE INSERT, migrasi `20260726180000_...`) sekarang menegakkan bahwa
+// SUM(jumlah) baris AKTIF lain + baris baru ini tidak boleh melebihi saldo
+// TERSEDIA (`StokBahan.kuantitas - kuantitasDireservasi`) untuk (gudang,
+// bahan) yang relevan - lock eksplisit `SELECT ... FOR UPDATE` pada baris
+// `StokBahan` agregat (lokasiStokId IS NULL) menyerialkan dua reservasi
+// konkuren untuk ITEM PESANAN BERBEDA yang berebut BAHAN yang SAMA (kasus
+// yang TIDAK disentuh unique index `itemPesananId` ADR-037). KETERBATASAN
+// JUJUR: model ini tidak membawa `gudangId` sendiri - trigger me-resolve ke
+// satu Gudang milik `outletId` (asumsi satu-gudang-per-outlet); lihat
+// catatan lengkap di migration.sql dan ADR-042 Keputusan 2.
 model ReservasiStok {
   id              String              @id
   tenantId        String
@@ -3368,6 +3379,15 @@ model Pembayaran {
 // `KoreksiPembayaran`), bukan menambah baris kedua - kalau tidak, "berapa yang
 // sudah dibayar untuk pesanan X oleh pembayaran Y" jadi pertanyaan agregat yang
 // tidak perlu.
+// ADR-042 (menutup ALT-DEF-053/INV-064): trigger `trg_alokasi_pembayaran_cek_batas_pesanan`
+// (BEFORE INSERT, migrasi `20260726180000_...`) sekarang menegakkan bahwa
+// SUM(jumlah) baris lain (dari Pembayaran BERBEDA mana pun, kecuali status
+// terminal-negatif GAGAL/DIBATALKAN/DIKEMBALIKAN) + baris baru ini tidak
+// boleh melebihi `Pesanan.totalAkhir` - lock eksplisit `SELECT ... FOR
+// UPDATE` pada baris `Pesanan` yang relevan menyerialkan alokasi konkuren ke
+// pesanan yang SAMA, komplementer (bukan pengganti) `version`/ADR-035 pada
+// Pesanan. Lihat rasional lengkap status mana yang dihitung di ADR-042
+// Keputusan 3 dan migration.sql.
 model AlokasiPembayaran {
   id           String   @id
   tenantId     String
@@ -3732,6 +3752,13 @@ model Promo {
   maximumDiscount       BigInt?
   // Kuota total pemakaian LINTAS SEMUA pelanggan (ALT-PRM-013). null = tak
   // terbatas.
+  // ADR-042 (menutup ALT-DEF-051/INV-062): sekarang DITEGAKKAN oleh trigger
+  // `trg_promo_pemakaian_cek_kuota_total` (BEFORE INSERT OR UPDATE pada
+  // promo_pemakaian, migrasi `20260726180000_...`) - SUM("jumlahPenerapan")
+  // lintas SELURUH PromoPemakaian untuk promoId ini dibandingkan ke sini,
+  // dengan `SELECT ... FOR UPDATE` pada baris Promo ini SENDIRI di dalam
+  // trigger untuk menyerialkan transaksi konkuren (bukan COUNT(*) baris -
+  // lihat rasional "row vs SUM" di ADR-042 Keputusan 1).
   usageQuota            Int?
   // Batas pemakaian per pelanggan (ALT-PRM-014). null = tak terbatas.
   usageLimitPerCustomer Int?
