@@ -3901,39 +3901,71 @@ model Kupon {
   @@map("kupon")
 }
 
-// ALT-DEF-009 (INTI DEFECT): `pesananId` TIDAK LAGI `@unique` - inilah
-// perbaikan defect utama batch ini. `PromoPemakaian` sekarang HEADER
-// "promo ini diterapkan ke pesanan ini", dengan rincian nilai per baris
-// dipindah ke `PromoPemakaianBaris` (satu header bisa punya banyak baris,
-// mis. BOGO yang menggratiskan 2 item = 2 baris).
+// ALT-DEF-009 (INTI DEFECT ASLI): `pesananId` TIDAK LAGI `@unique` - inilah
+// perbaikan defect utama batch itu. `PromoPemakaian` HEADER "promo ini
+// diterapkan ke pesanan ini", dengan rincian nilai per baris di
+// `PromoPemakaianBaris` (satu header bisa punya banyak baris, mis. BOGO yang
+// menggratiskan 2 item = 2 baris).
 //
-// KEPUTUSAN CONSTRAINT (tension repeatable vs unique, didokumentasikan
-// eksplisit sesuai instruksi correction-loop): draft awal berencana
-// `@@unique([promoId, pesananId])` ("promo yang sama tidak boleh dipakai
-// dua kali di pesanan yang sama, KECUALI repeatable=true"). Itu TIDAK BISA
-// diekspresikan sebagai constraint database apa pun - baik Prisma `@@unique`
-// (statis, tidak bisa bersyarat) MAUPUN partial unique index Postgres biasa
-// (predicate index parsial hanya boleh merujuk KOLOM PADA TABEL YANG SAMA,
-// bukan JOIN ke `Promo.repeatable` di tabel lain). Ini kategori keterbatasan
-// BARU dan lebih dalam daripada precedent XOR/partial-unique di
-// `prisma/migrations/manual/002`/`003` (keduanya predicate STATIS dalam satu
-// tabel) - satu-satunya cara benar-benar menjaminnya di level database
-// adalah TRIGGER, yang di luar scope "SQL manual terdokumentasi" yang sudah
-// dipakai batch-batch sebelumnya. Keputusan: TIDAK ada unique constraint DB
-// pada (promoId, pesananId) sama sekali; aturan "paling banyak
-// usageLimitPerOrder baris PromoPemakaian per (promo, pesanan) kecuali
-// repeatable" ditegakkan MURNI di application-level, dan gap ini dicatat
-// sebagai ALT-DEF-038 (lihat DEFECT-LEDGER.md) - BUKAN sekadar catatan
-// komentar, karena berbeda kategori dari precedent yang sudah pernah
-// ditutup dengan SQL manual.
+// ALT-DEF-038 - REDESAIN (menutup defect ini, MENGGANTIKAN seluruh catatan
+// keputusan constraint yang tadinya ada di sini): draft ASLI ALT-DEF-009
+// berencana `@@unique([promoId, pesananId])` bersyarat ("promo yang sama
+// tidak boleh dipakai dua kali di pesanan yang sama, KECUALI
+// repeatable=true"). Itu TIDAK BISA diekspresikan sebagai constraint
+// database - baik Prisma `@@unique` (statis) maupun partial unique index
+// Postgres (predicate index parsial hanya boleh merujuk kolom PADA TABEL
+// YANG SAMA, bukan JOIN ke `Promo.repeatable`). Trigger `BEFORE INSERT`
+// lintas-tabel yang tadinya direncanakan untuk mengisi celah ini SENGAJA
+// TIDAK PERNAH DITULIS (butuh keputusan desain retry/concurrent-insert
+// tersendiri) - dicatat sebagai ALT-DEF-038 dan dibiarkan terbuka.
+//
+// INSIGHT REDESAIN: masalahnya bukan constraint-nya yang sulit, tapi BENTUK
+// DATA-nya yang salah. Alih-alih "boleh berkali-kali JIKA repeatable" (butuh
+// membaca tabel lain untuk tahu berapa kali boleh), sekarang SELALU TEPAT
+// SATU baris PromoPemakaian per pasangan (pesananId, promoId) - TANPA
+// pengecualian. Promo yang repeatable dan terpicu berkali-kali (mis. "beli 2
+// gratis 1" x3 dalam satu pesanan besar) tetap SATU baris header ini, dengan
+// `jumlahPenerapan` sebagai PENGHITUNG naik (3), dan 3 kelipatan hadiahnya
+// direpresentasikan sebagai BANYAK baris `PromoPemakaianBaris` di bawah SATU
+// header ini (bukan 3 header terpisah). Constraint `@@unique([pesananId,
+// promoId])` di bawah sekarang STATIS MURNI dalam satu tabel - kategori yang
+// SAMA seperti precedent XOR resep/partial-unique QRIS yang sudah
+// diberlakukan sebagai SQL manual (lihat `prisma/migrations/manual/002`-
+// `003` dan migrasi resmi `20260725154310_harden_manual_invariants`).
+//
+// Trigger `trg_promo_pemakaian_cek_batas_penerapan` (lihat migrasi
+// `20260726150000_...`) menjaga sisi KEDUA: `jumlahPenerapan` tidak boleh
+// melebihi batas yang berasal dari `Promo.repeatable`/`usageLimitPerOrder` di
+// tabel lain - JAUH lebih sederhana dari trigger lintas-tabel yang dulu
+// dianggap perlu (cross-tabel di sini hanya perlu MEMBACA dua kolom dan
+// membandingkan satu integer, bukan mendeteksi "apakah INSERT ini adalah
+// insert ke-N dari baris yang secara konseptual berulang").
 model PromoPemakaian {
-  id        String               @id
-  tenantId  String
-  promoId   String
-  kuponId   String?
-  pesananId String
-  status    StatusPemakaianPromo @default(DITERAPKAN)
-  createdAt DateTime             @default(now())
+  id              String               @id
+  tenantId        String
+  promoId         String
+  kuponId         String?
+  pesananId       String
+  status          StatusPemakaianPromo @default(DITERAPKAN)
+  // ALT-DEF-038: berapa kali promo ini SECARA EFEKTIF berlaku pada pesanan
+  // ini (mis. BOGO "beli 2 gratis 1" pada pesanan 6 item = 3). Default 1
+  // (perilaku lama, satu penerapan). Increment ATOMIK oleh service-layer
+  // setiap kali promo yang sama terpicu ulang - lihat INV-023 untuk separuh
+  // app-level (baca `Promo.repeatable` SEBELUM increment) dan trigger
+  // `trg_promo_pemakaian_cek_batas_penerapan` untuk separuh DB (menjamin
+  // hasil akhir tidak pernah melebihi batas yang sah, defense-in-depth
+  // terhadap race condition/bug, sama seperti pola `cek_stok_bahan_negatif`
+  // ADR-037).
+  jumlahPenerapan Int                  @default(1)
+  // ALT-DEF-038: agregat rupiah SUM(PromoPemakaianBaris.nilaiDiskon) di bawah
+  // header ini - denormalisasi sengaja (bukan sekadar dihitung ulang lewat
+  // JOIN setiap query) supaya "berapa total diskon promo ini di pesanan ini"
+  // adalah baca satu kolom, konsisten dengan konvensi *Snapshot/cache
+  // lain di skema ini (mis. `Pelanggan.saldoTokoCache`). Field BARU - field
+  // rupiah per-BARIS `PromoPemakaianBaris.nilaiDiskon` (ADR-034, sudah
+  // BigInt) TIDAK berubah/di-rename; ini agregat TERPISAH di level header.
+  totalDiskon     BigInt               @default(0)
+  createdAt       DateTime             @default(now())
 
   tenant  Tenant  @relation(fields: [tenantId], references: [id])
   // ALT-DEF-009/ADR-013: composite-FK (tenantId, promoId) -> Promo(tenantId, id).
@@ -3943,15 +3975,25 @@ model PromoPemakaian {
   pesanan Pesanan @relation(fields: [tenantId, pesananId], references: [tenantId, id])
 
   baris    PromoPemakaianBaris[]
+  // ALT-DEF-038: `snapshotAturan` yang diminta rencana redesain TIDAK
+  // ditambahkan sebagai field baru di sini - `PromoSnapshot` (1:1, di bawah)
+  // SUDAH memenuhi kebutuhan ini persis (salinan definisi promo Json PERSIS
+  // saat diterapkan, immutable, ADR-026). Menambah `snapshotAturan Json` di
+  // sini akan menduplikasi mekanisme snapshot yang sama pada tabel yang
+  // sama - diputuskan CUKUP dokumentasikan bahwa `PromoSnapshot.definisiPromo`
+  // adalah snapshotAturan yang dimaksud, tidak membuat field/tabel kedua.
   snapshot PromoSnapshot?
 
   // Dibutuhkan agar PromoPemakaianBaris/PromoSnapshot bisa memakai
   // composite-FK (tenantId, promoPemakaianId) -> PromoPemakaian(tenantId, id).
   @@unique([tenantId, id])
-  // Indeks non-unik (BUKAN constraint) untuk query "promo apa saja yang
-  // sudah dipakai di pesanan ini" - lihat catatan keputusan constraint di
-  // atas untuk alasan tidak ada @@unique di sini.
-  @@index([promoId, pesananId])
+  // ALT-DEF-038: INTI perbaikan - SELALU tepat satu baris per pasangan
+  // (pesananId, promoId), constraint STATIS murni dalam satu tabel (lihat
+  // catatan panjang di atas model ini). Promo BERBEDA pada pesanan yang sama
+  // tetap bebas (stacking ALT-DEF-009 tidak terpengaruh - constraint ini
+  // hanya melarang PASANGAN yang SAMA muncul dua kali, bukan melarang lebih
+  // dari satu promo per pesanan).
+  @@unique([pesananId, promoId])
   @@map("promo_pemakaian")
 }
 
@@ -3962,12 +4004,26 @@ model PromoPemakaian {
 // digratiskan. BOGO yang menggratiskan 2 item menghasilkan 2 baris di sini
 // (satu per item), bukan satu baris dengan kuantitas 2 - membuat retur
 // parsial per item bisa mengoreksi promo secara presisi (ALT-PRM-017).
+//
+// ALT-DEF-038: verifikasi - model ini SUDAH menggantung murni pada
+// `promoPemakaianId` (header), tidak butuh referensi promo/pesanan sendiri;
+// tidak ada perubahan struktural yang dibutuhkan pada relasi ini. Field BARU
+// `nomorPenerapan` ditambahkan untuk mengelompokkan baris per KALI promo
+// repeatable terpicu (mis. BOGO x3 = 2 baris hadiah x 3 penerapan = 6 baris
+// di sini; `nomorPenerapan` 1/1/2/2/3/3 mengelompokkannya per instance).
+// Berguna untuk auditabilitas/penelusuran retur-per-instance (jika pelanggan
+// meretur SATU dari tiga hadiah "gratis" itu, `nomorPenerapan` menunjukkan
+// persis penerapan ke berapa hadiah itu berasal, tanpa perlu menebak dari
+// urutan `createdAt`). Default 1 (promo non-repeatable/penerapan tunggal
+// selalu instance ke-1) - tidak nullable karena field ini SELALU bermakna,
+// bukan hanya untuk kasus repeatable.
 model PromoPemakaianBaris {
   id               String   @id
   tenantId         String
   promoPemakaianId String
   itemPesananId    String?
   nilaiDiskon      BigInt
+  nomorPenerapan   Int      @default(1)
   createdAt        DateTime @default(now())
 
   tenant         Tenant         @relation(fields: [tenantId], references: [id])
