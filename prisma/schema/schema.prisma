@@ -3,7 +3,8 @@
 // Mengimplementasikan ERD di docs/database/*.md. Aturan umum (lihat docs/database/README.md):
 // - ID memakai ULID, disimpan sebagai String @id.
 // - Setiap tabel transaksional/tenant-scoped membawa tenantId dan (jika relevan) outletId.
-// - Uang disimpan sebagai Int dalam rupiah (bukan Decimal/Float) - tidak ada floating point.
+// - Uang disimpan sebagai BigInt dalam rupiah (bukan Decimal/Float) - tidak ada
+//   floating point (ADR-034, mengamandemen ADR-005 yang semula Int).
 // - Kuantitas bahan baku memakai Decimal (butuh presisi pecahan, mis. gram/ml).
 // - Timestamp disimpan UTC.
 // - Tidak ada hard-delete pada data finansial, stok, dan audit - lihat kolom status /
@@ -535,8 +536,8 @@ model BatasIzin {
   id                      String   @id
   peranId                 String   @unique
   maksimumDiskonPersen    Decimal?
-  maksimumDiskonNominal   Int?
-  maksimumRefund          Int?
+  maksimumDiskonNominal   BigInt?
+  maksimumRefund          BigInt?
   maksimumPenyesuaianStok Decimal?
   wajibPinSupervisor      Boolean  @default(false)
   wajibPersetujuanManajer Boolean  @default(false)
@@ -921,7 +922,7 @@ model VarianMenu {
   id            String              @id
   itemMenuId    String
   nama          String
-  hargaTambahan Int                 @default(0)
+  hargaTambahan BigInt              @default(0)
   status        StatusAktifNonaktif @default(AKTIF)
 
   itemMenu    ItemMenu      @relation(fields: [itemMenuId], references: [id])
@@ -964,7 +965,7 @@ model ModifierOpsi {
   id             String              @id
   modifierGrupId String
   nama           String
-  hargaTambahan  Int                 @default(0)
+  hargaTambahan  BigInt              @default(0)
   status         StatusAktifNonaktif @default(AKTIF)
 
   modifierGrup          ModifierGrup            @relation(fields: [modifierGrupId], references: [id])
@@ -984,7 +985,7 @@ model HargaItemOutlet {
   tenantId     String
   itemMenuId   String
   outletId     String
-  harga        Int
+  harga        BigInt
   berlakuSejak DateTime @default(now())
 
   itemMenu ItemMenu @relation("HargaItemOutletItemMenu", fields: [tenantId, itemMenuId], references: [tenantId, id])
@@ -1202,7 +1203,7 @@ model VersiResep {
   jumlahHasil      Decimal
   satuanHasilId    String
   penyusutanPersen Decimal          @default(0)
-  snapshotBiaya    Int?
+  snapshotBiaya    BigInt?
   status           StatusVersiResep @default(DRAF)
   createdAt        DateTime         @default(now())
 
@@ -1709,7 +1710,7 @@ model MutasiStok {
   batchStokId      String?
   // ALT-DEF-008: harga perolehan per satuan saat mutasi (rupiah bulat,
   // ADR-005). Nullable - hanya mutasi MASUK yang membawa biaya perolehan.
-  hargaPerolehan   Int?
+  hargaPerolehan   BigInt?
   // ADR-032: alasan/justifikasi WAJIB untuk SETIAP baris mutasi_stok (bukan
   // hanya baris pembalik) demi auditabilitas penuh - lihat catatan ADR-032
   // Keputusan 4 untuk rasional "wajib untuk semua baris, bukan cuma pembalik".
@@ -1805,7 +1806,7 @@ model BatchStok {
   tanggalKedaluwarsa DateTime?
   kuantitasAwal      Decimal
   // Rupiah bulat per ADR-005 - harga perolehan per satuan dasar bahan.
-  hargaPerolehan     Int
+  hargaPerolehan     BigInt
   lokasiStokId       String?
   // SEAM ke domain produksi (ADR-022 Keputusan 8). Nullable: batch hasil
   // PEMBELIAN tidak punya proses produksi.
@@ -2010,7 +2011,7 @@ model CatatanWaste {
   satuanId        String
   // Nilai kerugian rupiah bulat (ADR-005), nullable - dihitung dari
   // hargaPerolehan batch bila batch diketahui.
-  nilaiKerugian   Int?
+  nilaiKerugian   BigInt?
   catatan         String?
   mutasiStokId    String   @unique
   dicatatOlehId   String
@@ -2080,7 +2081,7 @@ model PengaturanPersediaanOutlet {
   izinkanStokNegatif           Boolean                 @default(false)
   // Ambang selisih opname yang memicu MENUNGGU_PERSETUJUAN (ALT-PSD-017),
   // rupiah bulat (ADR-005). Nullable = seluruh selisih butuh persetujuan.
-  ambangSelisihOpname          Int?
+  ambangSelisihOpname          BigInt?
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
   outlet Outlet @relation(fields: [tenantId, outletId], references: [tenantId, id])
@@ -2201,7 +2202,7 @@ model PurchaseOrder {
   supplierId    String
   nomorPo       String              @unique
   status        StatusPurchaseOrder @default(DRAFT)
-  totalEstimasi Int                 @default(0)
+  totalEstimasi BigInt              @default(0)
   dibuatOlehId  String
   createdAt     DateTime            @default(now())
 
@@ -2226,7 +2227,7 @@ model PurchaseOrderBaris {
   purchaseOrderId String
   bahanId         String
   jumlahDipesan   Decimal
-  hargaSatuan     Int
+  hargaSatuan     BigInt
 
   purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
   bahan         Bahan         @relation(fields: [bahanId], references: [id])
@@ -2261,7 +2262,7 @@ model PenerimaanBarangBaris {
   penerimaanBarangId String
   bahanId            String
   jumlahDiterima     Decimal
-  hargaSatuanAktual  Int
+  hargaSatuanAktual  BigInt
 
   penerimaanBarang PenerimaanBarang @relation(fields: [penerimaanBarangId], references: [id])
   bahan            Bahan            @relation(fields: [bahanId], references: [id])
@@ -2478,11 +2479,11 @@ model Pesanan {
   kanal              KanalPesanan
   nomorPesanan       String
   status             StatusPesanan @default(DRAF)
-  subtotal           Int           @default(0)
-  totalDiskon        Int           @default(0)
-  totalPajak         Int           @default(0)
-  totalServiceCharge Int           @default(0)
-  totalAkhir         Int           @default(0)
+  subtotal           BigInt        @default(0)
+  totalDiskon        BigInt        @default(0)
+  totalPajak         BigInt        @default(0)
+  totalServiceCharge BigInt        @default(0)
+  totalAkhir         BigInt        @default(0)
   dibuatOlehId       String
   createdAt          DateTime      @default(now())
   dibatalkanPada     DateTime?
@@ -2541,24 +2542,24 @@ model ItemPesanan {
   itemMenuId   String
   varianMenuId String?
   kuantitas    Int
-  hargaSatuan  Int
+  hargaSatuan  BigInt
   catatan      String?
   status       StatusItemPesanan @default(DRAF)
 
   // --- Snapshot (ALT-DEF-016) ---
   namaItemSnapshot      String
   namaVarianSnapshot    String?
-  hargaDasarSnapshot    Int
-  hargaVarianSnapshot   Int     @default(0)
+  hargaDasarSnapshot    BigInt
+  hargaVarianSnapshot   BigInt  @default(0)
   // Jumlah harga seluruh ItemPesananModifier baris ini pada saat pemesanan -
   // dihitung SEKALI dari sum(ItemPesananModifier.totalSnapshot) saat item
   // dibuat dan disimpan sebagai nilai tetap (bukan dihitung ulang tiap baca),
   // sama seperti *Snapshot lain di model ini - lihat ADR-017 Keputusan 2.
-  hargaModifierSnapshot Int     @default(0)
-  diskonSnapshot        Int     @default(0)
-  pajakSnapshot         Int     @default(0)
-  serviceChargeSnapshot Int     @default(0)
-  totalBarisSnapshot    Int
+  hargaModifierSnapshot BigInt  @default(0)
+  diskonSnapshot        BigInt  @default(0)
+  pajakSnapshot         BigInt  @default(0)
+  serviceChargeSnapshot BigInt  @default(0)
+  totalBarisSnapshot    BigInt
   // ALT-DEF-007 (ADR-022 Keputusan 7): TIDAK LAGI scalar polos. Kolom ini
   // ditambahkan batch ALT-DEF-005/ADR-017 Keputusan 3 sebagai
   // forward-reference tanpa FK karena model `VersiResep` belum ada; batch
@@ -2596,17 +2597,17 @@ model ItemPesananModifier {
   id             String @id
   itemPesananId  String
   modifierOpsiId String
-  hargaTambahan  Int
+  hargaTambahan  BigInt
 
   // --- Snapshot (ALT-DEF-016) ---
   namaModifierSnapshot String
-  hargaSnapshot        Int
+  hargaSnapshot        BigInt
   // Kuantitas modifier ini (mis. "extra cheese x2") - default 1 untuk
   // modifier yang secara alami tidak berulang.
   jumlah               Int    @default(1)
   // hargaSnapshot * jumlah - disimpan tetap (bukan dihitung ulang tiap baca),
   // konsisten dengan pola *Snapshot lain di ItemPesanan.
-  totalSnapshot        Int
+  totalSnapshot        BigInt
 
   itemPesanan  ItemPesanan  @relation(fields: [itemPesananId], references: [id])
   modifierOpsi ModifierOpsi @relation(fields: [modifierOpsiId], references: [id])
@@ -2980,9 +2981,9 @@ model GiliranKasir {
   tenantId           String
   outletId           String
   penggunaId         String
-  modalAwal          Int
-  modalAkhirDihitung Int?
-  modalAkhirSistem   Int?
+  modalAwal          BigInt
+  modalAkhirDihitung BigInt?
+  modalAkhirSistem   BigInt?
   status             StatusGiliranKasir @default(DIBUKA)
   dibukaPada         DateTime           @default(now())
   ditutupPada        DateTime?
@@ -3008,7 +3009,7 @@ model TransaksiKasir {
   giliranKasirId String
   pesananId      String
   jenis          JenisTransaksiKasir
-  jumlah         Int
+  jumlah         BigInt
   createdAt      DateTime            @default(now())
 
   giliranKasir GiliranKasir @relation(fields: [giliranKasirId], references: [id])
@@ -3060,12 +3061,12 @@ model Pembayaran {
   // Total nilai peristiwa pembayaran ini (rupiah). Menggantikan nama lama
   // `totalDibayar` yang menyiratkan "total tagihan pesanan" - padahal satu
   // Pembayaran kini bisa melunasi sebagian saja, atau beberapa pesanan sekaligus.
-  jumlah             Int
+  jumlah             BigInt
   // `totalDiterima`/`kembalian` khusus alur TUNAI (uang fisik yang diserahkan
   // pelanggan dan kembaliannya). Untuk QRIS_MANUAL/TRANSFER_MANUAL/SALDO_TOKO
   // nilainya sama dengan `jumlah` dan `kembalian = 0`.
-  totalDiterima      Int
-  kembalian          Int              @default(0)
+  totalDiterima      BigInt
+  kembalian          BigInt           @default(0)
   status             StatusPembayaran @default(DRAF)
   dikonfirmasiOlehId String?
   createdAt          DateTime         @default(now())
@@ -3110,7 +3111,7 @@ model AlokasiPembayaran {
   tenantId     String
   pembayaranId String
   pesananId    String
-  jumlah       Int
+  jumlah       BigInt
   createdAt    DateTime @default(now())
 
   tenant     Tenant     @relation(fields: [tenantId], references: [id])
@@ -3134,7 +3135,7 @@ model PembayaranMetodeBaris {
   tenantId      String
   pembayaranId  String
   metodeBayarId String
-  jumlah        Int
+  jumlah        BigInt
 
   tenant      Tenant      @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010/ADR-013: composite-FK ganda (pola KeanggotaanOutlet) - satu
@@ -3156,8 +3157,8 @@ model KoreksiPembayaran {
   tenantId        String
   pembayaranId    String
   alasan          String
-  jumlahSebelum   Int
-  jumlahSesudah   Int
+  jumlahSebelum   BigInt
+  jumlahSesudah   BigInt
   dikoreksiOlehId String
   createdAt       DateTime @default(now())
 
@@ -3226,7 +3227,7 @@ model PembayaranRefund {
   id              String   @id
   tenantId        String
   pembayaranId    String
-  jumlah          Int
+  jumlah          BigInt
   alasan          String
   disetujuiOlehId String
   createdAt       DateTime @default(now())
@@ -3466,7 +3467,7 @@ model Promo {
   // Batas potongan dalam rupiah walau hasil hitung reward lebih besar (mis.
   // DISKON_PERSEN 50% tanpa batas bisa menghabiskan subtotal - maximumDiscount
   // memotongnya). null = tidak ada batas.
-  maximumDiscount       Int?
+  maximumDiscount       BigInt?
   // Kuota total pemakaian LINTAS SEMUA pelanggan (ALT-PRM-013). null = tak
   // terbatas.
   usageQuota            Int?
@@ -3541,12 +3542,12 @@ model PromoReward {
   // --- DISKON_PERSEN ---
   nilaiPersen         Decimal?
   // --- DISKON_NOMINAL ---
-  nilaiNominal        Int?
+  nilaiNominal        BigInt?
   // --- ITEM_GRATIS / BELI_X_BAYAR_Y (target hadiah) ---
   itemGratisId        String?
   jumlahGratis        Int?
   // --- HARGA_PAKET ---
-  hargaPaket          Int?
+  hargaPaket          BigInt?
   // --- BELI_X_BAYAR_Y ---
   syaratJumlahBeliX   Int?
   bayarJumlahY        Int?
@@ -3717,7 +3718,7 @@ model PromoPemakaianBaris {
   tenantId         String
   promoPemakaianId String
   itemPesananId    String?
-  nilaiDiskon      Int
+  nilaiDiskon      BigInt
   createdAt        DateTime @default(now())
 
   tenant         Tenant         @relation(fields: [tenantId], references: [id])
@@ -3871,7 +3872,7 @@ model Pelanggan {
   // Saldo toko digantung di Pelanggan (bukan Keanggotaan) karena pelanggan
   // bisa punya saldo toko (mis. dari refund-ke-saldo) TANPA pernah mendaftar
   // program loyalitas/tier - keduanya independen, lihat ADR-027 Keputusan 3.
-  saldoTokoCache Int             @default(0)
+  saldoTokoCache BigInt          @default(0)
   createdAt      DateTime        @default(now())
 
   tenant                       Tenant                   @relation(fields: [tenantId], references: [id])
@@ -4098,7 +4099,7 @@ model LedgerSaldoToko {
   pelangganId      String
   jenis            JenisLedgerSaldoToko
   // Rupiah bulat (ADR-005) - positif = saldo bertambah, negatif = berkurang.
-  jumlah           Int
+  jumlah           BigInt
   // Terisi bila saldo dipakai/ditambah sehubungan dengan satu pesanan.
   pesananId        String?
   // Terisi bila baris ini dihasilkan OLEH satu peristiwa `Pembayaran` metode
@@ -4777,10 +4778,10 @@ model RekapKasHarian {
   outletId           String
   giliranKasirId     String?              @unique
   tanggal            DateTime             @db.Date
-  totalPenjualan     Int                  @default(0)
-  totalRefund        Int                  @default(0)
-  totalDiskon        Int                  @default(0)
-  selisihKas         Int                  @default(0)
+  totalPenjualan     BigInt               @default(0)
+  totalRefund        BigInt               @default(0)
+  totalDiskon        BigInt               @default(0)
+  selisihKas         BigInt               @default(0)
   status             StatusRekapKasHarian @default(DRAF)
   diverifikasiOlehId String?
 
@@ -4802,7 +4803,7 @@ model BiayaOperasional {
   tenantId        String
   outletId        String
   kategoriBiayaId String
-  jumlah          Int
+  jumlah          BigInt
   keterangan      String
   status          StatusBiayaOperasional @default(DIAJUKAN)
   dicatatOlehId   String
@@ -4828,9 +4829,9 @@ model RmPenjualanHarian {
   outletId       String
   tanggal        DateTime @db.Date
   totalTransaksi Int      @default(0)
-  totalPenjualan Int      @default(0)
-  totalDiskon    Int      @default(0)
-  totalRefund    Int      @default(0)
+  totalPenjualan BigInt   @default(0)
+  totalDiskon    BigInt   @default(0)
+  totalRefund    BigInt   @default(0)
   dihitungPada   DateTime @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
@@ -4848,7 +4849,7 @@ model RmPenjualanItemHarian {
   itemMenuId       String
   tanggal          DateTime @db.Date
   kuantitasTerjual Int      @default(0)
-  totalPenjualan   Int      @default(0)
+  totalPenjualan   BigInt   @default(0)
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
@@ -4886,7 +4887,7 @@ model RmKinerjaKaryawanHarian {
   karyawanId              String
   tanggal                 DateTime @db.Date
   totalTransaksiDitangani Int      @default(0)
-  totalPenjualanDitangani Int      @default(0)
+  totalPenjualanDitangani BigInt   @default(0)
   menitTerlambat          Int      @default(0)
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id])
