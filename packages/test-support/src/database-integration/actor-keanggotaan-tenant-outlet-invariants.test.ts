@@ -242,8 +242,8 @@ async function testNotificationKeanggotaanLintasTenantDitolak(): Promise<void> {
       "Notification.keanggotaanTenantId menunjuk KeanggotaanTenant milik tenant LAIN",
       () =>
         client.query(
-          `INSERT INTO notification (id, "tenantId", "keanggotaanTenantId", tipe, judul, pesan, "createdAt")
-           VALUES ($1, $2, $3, 'STOK_KRITIS', 'Uji', 'Uji lintas tenant', now())`,
+          `INSERT INTO notification (id, "tenantId", "keanggotaanTenantId", "lingkupTarget", tipe, judul, pesan, "createdAt")
+           VALUES ($1, $2, $3, 'PENGGUNA_SPESIFIK', 'STOK_KRITIS', 'Uji', 'Uji lintas tenant', now())`,
           [fixtureId("notif"), fx.tenantId, aktorLintasTenant.keanggotaanTenantId],
         ),
     );

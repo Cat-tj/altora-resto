@@ -44,7 +44,12 @@ const contohDomainOutboxEvent = {
 const contohNotification = {
   id: "01J...NOTIFIKASI",
   tenantId: "01J...TENANT",
-  outletId: "01J...OUTLET",
+  // ADR-040: lingkupTarget PENGGUNA_SPESIFIK -> outletId+peranId WAJIB null
+  // (lihat matriks kombinasi di komentar model Notification/ADR-040), hanya
+  // keanggotaanTenantId yang diisi.
+  outletId: null,
+  peranId: null,
+  lingkupTarget: "PENGGUNA_SPESIFIK",
   // ADR-033: penggunaId (FK langsung ke Pengguna) diganti keanggotaanTenantId
   // (composite-FK ke KeanggotaanTenant).
   keanggotaanTenantId: "01J...KEANGGOTAAN_TENANT",
@@ -54,10 +59,52 @@ const contohNotification = {
   data: { orderId: "01J...PESANAN" },
 } satisfies Prisma.NotificationUncheckedCreateInput;
 
+// ADR-040: fixture tambahan membuktikan kombinasi OUTLET/PERAN_DI_TENANT/
+// PERAN_DI_OUTLET/SELURUH_TENANT juga type-check terhadap tipe Prisma yang
+// digenerate - bukan cuma PENGGUNA_SPESIFIK.
+const contohNotificationBroadcastOutlet = {
+  id: "01J...NOTIFIKASI_OUTLET",
+  tenantId: "01J...TENANT",
+  outletId: "01J...OUTLET",
+  keanggotaanTenantId: null,
+  peranId: null,
+  lingkupTarget: "OUTLET",
+  tipe: "STOK_KRITIS",
+  judul: "Stok kritis",
+  pesan: "Beberapa bahan di outlet ini sudah di bawah ambang minimum.",
+} satisfies Prisma.NotificationUncheckedCreateInput;
+
+const contohNotificationBroadcastPeranDiOutlet = {
+  id: "01J...NOTIFIKASI_PERAN_OUTLET",
+  tenantId: "01J...TENANT",
+  outletId: "01J...OUTLET",
+  keanggotaanTenantId: null,
+  peranId: "01J...PERAN",
+  lingkupTarget: "PERAN_DI_OUTLET",
+  tipe: "PERSETUJUAN_DIBUTUHKAN",
+  judul: "Persetujuan dibutuhkan",
+  pesan: "Ada permintaan yang menunggu persetujuan supervisor outlet ini.",
+} satisfies Prisma.NotificationUncheckedCreateInput;
+
+const contohNotificationSeluruhTenant = {
+  id: "01J...NOTIFIKASI_TENANT",
+  tenantId: "01J...TENANT",
+  outletId: null,
+  keanggotaanTenantId: null,
+  peranId: null,
+  lingkupTarget: "SELURUH_TENANT",
+  tipe: "PESANAN_BERUBAH",
+  judul: "Pengumuman tenant",
+  pesan: "Pengumuman untuk seluruh anggota tenant.",
+} satisfies Prisma.NotificationUncheckedCreateInput;
+
 // Ekspor no-op supaya file ini dianggap modul (isolatedModules) dan supaya
 // eslint/tsc tidak menganggap konstanta di atas "unused" pada build strict.
 export const contohObjekAssertionTipePlatformInfra = {
   contohIdempotencyKey,
   contohDomainOutboxEvent,
   contohNotification,
+  contohNotificationBroadcastOutlet,
+  contohNotificationBroadcastPeranDiOutlet,
+  contohNotificationSeluruhTenant,
 };

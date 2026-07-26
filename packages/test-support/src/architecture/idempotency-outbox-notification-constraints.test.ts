@@ -246,13 +246,13 @@ export function jalankanSemuaAssertion(): void {
   assertContains(schema, "model Notification {", "Model Notification harus ada.");
   const notificationBody = getModelBody(schema, "Notification");
   // ADR-033: penggunaId (FK langsung ke Pengguna) diganti keanggotaanTenantId
-  // (composite-FK ke KeanggotaanTenant(tenantId, id)) - tetap nullable untuk
-  // broadcast (ADR-016 Keputusan 5). Redesain targeting lebih dalam
-  // (keanggotaanOutletId/peranId) TETAP belum dikerjakan - lihat ADR-033.
+  // (composite-FK ke KeanggotaanTenant(tenantId, id)) - tetap nullable karena
+  // hanya wajib diisi saat lingkupTarget = PENGGUNA_SPESIFIK (ADR-040 -
+  // redesain targeting yang menutup deferral ADR-033 Keputusan 4).
   assertContains(
     notificationBody,
     "keanggotaanTenantId String?",
-    "Notification.keanggotaanTenantId harus nullable (broadcast ke role/outlet, ADR-016 Keputusan 5).",
+    "Notification.keanggotaanTenantId harus nullable (hanya wajib untuk lingkupTarget PENGGUNA_SPESIFIK, ADR-040).",
   );
   assertContains(
     notificationBody,
@@ -292,6 +292,43 @@ export function jalankanSemuaAssertion(): void {
     "@@index([keanggotaanTenantId, dibacaPada])",
     "Notification harus punya index (keanggotaanTenantId, dibacaPada) untuk query unread.",
   );
+
+  // --- ADR-040: redesain targeting (peranId, lingkupTarget, outlet FK) ---
+  assertContains(
+    notificationBody,
+    "peranId             String?",
+    "Notification.peranId harus ada dan nullable (ADR-040).",
+  );
+  assertContains(
+    notificationBody,
+    "lingkupTarget       LingkupTargetNotifikasi",
+    "Notification.lingkupTarget harus ada dan wajib diisi (ADR-040) - bukan nullable, supaya niat targeting selalu eksplisit.",
+  );
+  assertContains(
+    notificationBody,
+    'outlet            Outlet?            @relation("NotificationOutlet", fields: [tenantId, outletId], references: [tenantId, id])',
+    "Notification.outlet harus composite-FK opsional ke Outlet (ADR-040) - outletId dipromosikan dari informational-only menjadi FK tervalidasi.",
+  );
+  assertContains(
+    notificationBody,
+    'peran             Peran?             @relation("NotificationPeran", fields: [tenantId, peranId], references: [tenantId, id])',
+    "Notification.peran harus composite-FK opsional ke Peran (ADR-040).",
+  );
+  assertContains(
+    notificationBody,
+    "@@index([tenantId, outletId, peranId])",
+    "Notification harus punya index (tenantId, outletId, peranId) untuk mendukung predikat query pembaca tenant/outlet/peran-scoped (ADR-040).",
+  );
+  assertContains(schema, "enum LingkupTargetNotifikasi {", "Enum LingkupTargetNotifikasi harus ada (ADR-040).");
+  for (const lingkup of [
+    "PENGGUNA_SPESIFIK",
+    "OUTLET",
+    "PERAN_DI_TENANT",
+    "PERAN_DI_OUTLET",
+    "SELURUH_TENANT",
+  ]) {
+    assertContains(schema, lingkup, `LingkupTargetNotifikasi harus punya varian ${lingkup}.`);
+  }
   assertContains(schema, "enum TipeNotifikasi {", "Enum TipeNotifikasi harus ada.");
   for (const tipe of [
     "PESANAN_QR_MASUK",
