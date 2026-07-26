@@ -147,6 +147,8 @@ model Tenant {
   pesananPerubahan           PesananPerubahan[]
   pesananPenolakan           PesananPenolakan[]
   pesananPembatalan          PesananPembatalan[]
+  pesananRetur               PesananRetur[]
+  pesananReturBaris          PesananReturBaris[]
   mutasiStok                 MutasiStok[]
   stokOpname                 StokOpname[]
   // ALT-DEF-008: model baru domain persediaan (ADR-023/024/025).
@@ -209,6 +211,7 @@ model Outlet {
   meja                       Meja[]
   reservasi                  Reservasi[]
   pesanan                    Pesanan[]
+  pesananRetur               PesananRetur[]
   stasiunDapur               StasiunDapur[]
   tiketDapur                 TiketDapur[]
   giliranKasir               GiliranKasir[]
@@ -357,6 +360,7 @@ model KeanggotaanTenant {
   pesananPerubahanDiubah          PesananPerubahan[]        @relation("PesananPerubahanDiubahOleh")
   pesananPenolakanDitolak         PesananPenolakan[]        @relation("PesananPenolakanDitolakOleh")
   pesananPembatalanDibatalkan     PesananPembatalan[]       @relation("PesananPembatalanDibatalkanOleh")
+  pesananPembatalanDisetujui      PesananPembatalan[]       @relation("PesananPembatalanDisetujuiOleh")
   riwayatStatusTiketDapurDiubah   RiwayatStatusTiketDapur[] @relation("RiwayatStatusTiketDapurDiubahOleh")
   gelombangDapurDipicu            GelombangDapur[]          @relation("GelombangDapurDipicuOleh")
   koreksiPembayaranDikoreksi      KoreksiPembayaran[]       @relation("KoreksiPembayaranDikoreksiOleh")
@@ -430,6 +434,8 @@ model KeanggotaanOutlet {
   giliranKasir                    GiliranKasir[]           @relation("GiliranKasirPengguna")
   rekapKasHarianDiverifikasi      RekapKasHarian[]         @relation("RekapDiverifikasiOleh")
   biayaOperasionalDicatat         BiayaOperasional[]       @relation("BiayaDicatatOleh")
+  pesananReturDiajukan            PesananRetur[]           @relation("PesananReturDiajukanOleh")
+  pesananReturDisetujui           PesananRetur[]           @relation("PesananReturDisetujuiOleh")
 
   // ADR-033: aktor tenant-scoped OUTLET-LEVEL (mis. ProsesProduksi.dibuatOlehId,
   // PenyesuaianStok.disetujuiOlehId, dst.) memakai composite-FK
@@ -2449,13 +2455,28 @@ enum StatusPesanan {
   DISAJIKAN
   SELESAI
   // Terminal - lihat PesananPembatalan untuk alasan+approval. TIDAK bisa
-  // dicapai dari SIAP/DISAJIKAN/SELESAI (lihat guard per baris di
-  // STATE-MACHINES.md).
+  // dicapai dari SIAP/DISAJIKAN/SELESAI dalam kondisi normal - PENGECUALIAN:
+  // PesananPembatalan.jenisPembatalan = SETELAH_PRODUKSI SENGAJA BISA dicapai
+  // dari SEDANG_DISIAPKAN/SIAP/DISAJIKAN (void setelah produksi - lihat ADR-036
+  // dan STATE-MACHINES.md bagian "Void Setelah Produksi").
   DIBATALKAN
-  // HANYA dicapai dari SELESAI (retur setelah lunas) - lihat catatan di
-  // STATE-MACHINES.md; model detail PesananRetur adalah scope ALT-PES-018,
-  // batch domain kasir berikutnya, BUKAN batch ini.
-  DIRETUR
+  // ADR-036 (batch retur/void): nilai DIRETUR DIHAPUS dari enum ini. Alasan:
+  // "retur" BUKAN status lifecycle order yang eksklusif terhadap status lain -
+  // sebuah pesanan bisa SELESAI (lifecycle order) SEKALIGUS punya sebagian
+  // item yang diretur (dimensi retur), dua hal yang independen/ORTOGONAL.
+  // Meng-overload satu enum status untuk merepresentasikan keduanya membuat
+  // "3 dari 5 item diretur" (retur SEBAGIAN) mustahil direpresentasikan
+  // (order harus tetap SELESAI, bukan berubah jadi status lain). Diganti oleh
+  // model penuh `PesananRetur`/`PesananReturBaris` (statusnya sendiri,
+  // `StatusRetur`) + field ringkasan cache `Pesanan.statusRetur`
+  // (`StatusRingkasanRetur`) yang ORTOGONAL terhadap `StatusPesanan` di sini.
+  // Lihat ADR-036 untuk audit grep yang membuktikan tidak ada model/test lain
+  // yang bergantung pada exhaustiveness "DIRETUR sebagai StatusPesanan" itu
+  // sendiri (StatusItemPesanan.DIRETUR, granularitas ITEM, TIDAK dihapus -
+  // baris item individual tetap bisa langsung ditandai DIRETUR tanpa lewat
+  // model PesananRetur bila retur itemnya trivial/tanpa approval, meskipun
+  // pola yang direkomendasikan tetap lewat PesananReturBaris untuk audit
+  // penuh).
 }
 
 // ALT-DEF-005/ALT-DEF-016: diselaraskan ke daftar penuh dari correction spec
@@ -2493,30 +2514,64 @@ enum JenisPerubahanPesanan {
   LAINNYA
 }
 
+// ADR-036: state machine retur (PesananRetur) - MENGGANTIKAN nilai enum
+// StatusPesanan.DIRETUR yang dihapus (lihat catatan di enum StatusPesanan di
+// atas). Tabel transisi lengkap (aktor/guard/side-effect/audit event) ada di
+// docs/arsitektur/STATE-MACHINES.md bagian "Retur (PesananRetur)".
+enum StatusRetur {
+  // Draf lokal staf sebelum diajukan resmi (mis. masih memilih baris item).
+  DRAF
+  DIAJUKAN
+  DISETUJUI
+  DITOLAK
+  // Sedang dieksekusi (refund/waste/mutasi stok reversal berjalan).
+  DIPROSES
+  SELESAI
+  DIBATALKAN
+}
+
+// ADR-036: ringkasan/cache TERTURUNAN (derived) di level Pesanan - SUMBER
+// KEBENARAN tetap baris PesananRetur/PesananReturBaris berstatus SELESAI;
+// field ini murni mempercepat baca tanpa agregasi berulang, mengikuti pola
+// ledger-vs-cache yang sama dengan StokBahan/saldo (lihat ADR-023/ADR-027).
+// Direkomputasi oleh trigger `recompute_status_retur_pesanan` setiap
+// PesananRetur mencapai SELESAI - lihat migrasi retur dan
+// INVARIAN-BELUM-DITEGAKKAN.md untuk invariant rekonsiliasi.
+enum StatusRingkasanRetur {
+  TANPA_RETUR
+  RETUR_SEBAGIAN
+  RETUR_PENUH
+}
+
 model Pesanan {
-  id                 String        @id
+  id                 String               @id
   tenantId           String
   outletId           String
   mejaId             String?
   pelangganId        String?
   kanal              KanalPesanan
   nomorPesanan       String
-  status             StatusPesanan @default(DRAF)
-  subtotal           BigInt        @default(0)
-  totalDiskon        BigInt        @default(0)
-  totalPajak         BigInt        @default(0)
-  totalServiceCharge BigInt        @default(0)
-  totalAkhir         BigInt        @default(0)
+  status             StatusPesanan        @default(DRAF)
+  subtotal           BigInt               @default(0)
+  totalDiskon        BigInt               @default(0)
+  totalPajak         BigInt               @default(0)
+  totalServiceCharge BigInt               @default(0)
+  totalAkhir         BigInt               @default(0)
   dibuatOlehId       String
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
   // ADR-035: optimistic locking - lihat trigger generik `trg_bump_version` di
   // migrasi optimistic-locking. Aplikasi TIDAK BOLEH mengasumsikan bisa
   // men-SET nilai ini secara bebas - trigger selalu meng-override ke
   // OLD.version + 1 pada setiap UPDATE. Command WAJIB membawa
   // `expectedVersion` dan menulis `WHERE id = ? AND version = expectedVersion`.
-  version            Int           @default(1)
+  version            Int                  @default(1)
   dibatalkanPada     DateTime?
+  // ADR-036: cache/ringkasan retur - ORTOGONAL terhadap `status` di atas (mis.
+  // pesanan bisa SELESAI pada `status` DAN RETUR_SEBAGIAN pada `statusRetur`
+  // sekaligus). Derived dari PesananRetur/PesananReturBaris, lihat komentar
+  // enum StatusRingkasanRetur.
+  statusRetur        StatusRingkasanRetur @default(TANPA_RETUR)
 
   tenant     Tenant            @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
@@ -2533,6 +2588,10 @@ model Pesanan {
   perubahan         PesananPerubahan[]
   penolakan         PesananPenolakan?
   pembatalan        PesananPembatalan?
+  // ADR-036: satu pesanan bisa punya banyak PesananRetur (retur bertahap -
+  // mis. retur item A hari ini, item B minggu depan, selama masih dalam
+  // kebijakan batas waktu retur tenant).
+  retur             PesananRetur[]
   // ALT-DEF-014: relasi lama `pembayaran Pembayaran[]` DIHAPUS - Pesanan tidak
   // lagi terhubung langsung ke Pembayaran. Berapa yang sudah dibayar untuk
   // pesanan ini = SUM(alokasiPembayaran.jumlah) atas Pembayaran berstatus
@@ -2615,6 +2674,7 @@ model ItemPesanan {
   modifier            ItemPesananModifier[]
   tiketDapurBaris     TiketDapurBaris?
   PromoPemakaianBaris PromoPemakaianBaris[]
+  pesananReturBaris   PesananReturBaris[]
 
   @@map("item_pesanan")
 }
@@ -2725,6 +2785,16 @@ model PesananPenolakan {
   @@map("pesanan_penolakan")
 }
 
+// ADR-036: membedakan pembatalan SEBELUM bahan terpakai (pra-produksi, sekadar
+// melepas reservasi stok) dari pembatalan SETELAH bahan sudah dimasak/terpakai
+// (pasca-produksi - bahan TIDAK BISA "di-un-consume", jadi side-effect-nya
+// WASTE, bukan pelepasan reservasi). Lihat STATE-MACHINES.md bagian "Void
+// Setelah Produksi" untuk guard/side-effect lengkap per nilai.
+enum JenisPembatalan {
+  SEBELUM_PRODUKSI
+  SETELAH_PRODUKSI
+}
+
 // ALT-PES-011/ADR-017: pembatalan SELURUH pesanan (order-level) - BERBEDA
 // dari pembatalan SATU item (`ItemPesanan.status = DIBATALKAN`, yang bisa
 // terjadi berkali-kali untuk item berbeda dalam satu pesanan yang sama tanpa
@@ -2732,19 +2802,107 @@ model PesananPenolakan {
 // adalah status TERMINAL pada StatusPesanan (tidak ada transisi keluar dari
 // DIBATALKAN, lihat enum StatusPesanan/STATE-MACHINES.md) - satu pesanan
 // hanya bisa dibatalkan SATU KALI sepanjang hidupnya.
+//
+// ADR-036 (diperluas, BUKAN model baru - lihat rasional "prefer extending"
+// di ADR-036): `jenisPembatalan` membedakan pembatalan biasa
+// (SEBELUM_PRODUKSI, default - guard existing: TIDAK BISA dari
+// SIAP/DISAJIKAN/SELESAI) dari void setelah produksi (SETELAH_PRODUKSI -
+// SATU-SATUNYA jalur yang boleh membatalkan dari SEDANG_DISIAPKAN/SIAP/
+// DISAJIKAN, lihat STATE-MACHINES.md). `disetujuiOlehId` WAJIB-secara-app
+// (bukan DB CHECK - lihat INVARIAN-BELUM-DITEGAKKAN.md kategori C) ketika
+// `jenisPembatalan = SETELAH_PRODUKSI`, merekam supervisor yang menyetujui
+// lewat `PermintaanPersetujuan` (jenisAksi = "PEMBATALAN_SETELAH_PRODUKSI",
+// referensiJenis = "PesananPembatalan", referensiId = id baris ini - pola
+// generik yang sudah ada, TIDAK perlu FK baru ke PermintaanPersetujuan).
 model PesananPembatalan {
-  id               String   @id
+  id               String          @id
   tenantId         String
-  pesananId        String   @unique
+  pesananId        String          @unique
   alasan           String
+  jenisPembatalan  JenisPembatalan @default(SEBELUM_PRODUKSI)
   dibatalkanOlehId String
-  createdAt        DateTime @default(now())
+  // Nullable - hanya WAJIB diisi (invariant level-aplikasi) ketika
+  // `jenisPembatalan = SETELAH_PRODUKSI`. Pembatalan SEBELUM_PRODUKSI boleh
+  // tidak butuh approval supervisor tergantung status asal (lihat
+  // STATE-MACHINES.md bagian "Pesanan" baris DIKONFIRMASI/DIKIRIM_KE_DAPUR/
+  // SEDANG_DISIAPKAN yang sudah butuh approval sejak ADR-017).
+  disetujuiOlehId  String?
+  createdAt        DateTime        @default(now())
 
-  tenant         Tenant            @relation(fields: [tenantId], references: [id])
-  pesanan        Pesanan           @relation(fields: [pesananId], references: [id])
-  dibatalkanOleh KeanggotaanTenant @relation("PesananPembatalanDibatalkanOleh", fields: [tenantId, dibatalkanOlehId], references: [tenantId, id])
+  tenant         Tenant             @relation(fields: [tenantId], references: [id])
+  pesanan        Pesanan            @relation(fields: [pesananId], references: [id])
+  dibatalkanOleh KeanggotaanTenant  @relation("PesananPembatalanDibatalkanOleh", fields: [tenantId, dibatalkanOlehId], references: [tenantId, id])
+  disetujuiOleh  KeanggotaanTenant? @relation("PesananPembatalanDisetujuiOleh", fields: [tenantId, disetujuiOlehId], references: [tenantId, id])
 
   @@map("pesanan_pembatalan")
+}
+
+// ADR-036: retur/pengembalian sebagian atau seluruh item pesanan yang SUDAH
+// SELESAI (atau kondisi lain yang diizinkan kebijakan tenant) - MENGGANTIKAN
+// nilai enum lama `StatusPesanan.DIRETUR` yang hanya bisa merepresentasikan
+// "seluruh pesanan diretur" sebagai flag tunggal. `nomorRetur` unik PER
+// TENANT+OUTLET (pola sama seperti `Pesanan.nomorPesanan`/`Struk.nomorStruk`).
+// `version`/optimistic-locking: PesananRetur adalah aggregate root TAMBAHAN
+// (lihat ADR-035) - dua supervisor bisa menyetujui/menolak retur yang sama
+// secara bersamaan (race sejenis PermintaanPersetujuan).
+model PesananRetur {
+  id              String      @id
+  tenantId        String
+  outletId        String
+  pesananId       String
+  nomorRetur      String
+  status          StatusRetur @default(DRAF)
+  alasan          String
+  diajukanOlehId  String
+  disetujuiOlehId String?
+  totalNilaiRetur BigInt      @default(0)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  // ADR-035/ADR-036: lihat catatan optimistic locking di model Pesanan.
+  version         Int         @default(1)
+
+  tenant        Tenant             @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
+  outlet        Outlet             @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ALT-DEF-010: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
+  pesanan       Pesanan            @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  // ADR-033 pola outlet-scoped (sama seperti Pesanan.dibuatOleh/
+  // CatatanWaste.dicatatOleh) - retur adalah operasi fisik outlet tertentu.
+  diajukanOleh  KeanggotaanOutlet  @relation("PesananReturDiajukanOleh", fields: [tenantId, outletId, diajukanOlehId], references: [tenantId, outletId, id])
+  disetujuiOleh KeanggotaanOutlet? @relation("PesananReturDisetujuiOleh", fields: [tenantId, outletId, disetujuiOlehId], references: [tenantId, outletId, id])
+
+  baris PesananReturBaris[]
+
+  @@unique([tenantId, outletId, nomorRetur])
+  // Diperlukan agar PesananReturBaris bisa memakai composite-FK
+  // (tenantId, pesananReturId) -> PesananRetur(tenantId, id).
+  @@unique([tenantId, id])
+  @@map("pesanan_retur")
+}
+
+// ADR-036: baris detail retur PER ITEM PESANAN - inilah yang membuat retur
+// SEBAGIAN ("3 dari 5 item") representable, BERBEDA dari StatusPesanan.DIRETUR
+// lama yang hanya flag order-level. `kuantitasDikembalikan` bertipe `Int`
+// (sama seperti `ItemPesanan.kuantitas`, ADR-036 mengikuti tipe kolom sumber).
+model PesananReturBaris {
+  id                    String   @id
+  tenantId              String
+  pesananReturId        String
+  itemPesananId         String
+  kuantitasDikembalikan Int
+  nilaiPengembalian     BigInt
+  alasanBaris           String?
+  createdAt             DateTime @default(now())
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  // ALT-DEF-010: composite-FK (tenantId, pesananReturId) -> PesananRetur(tenantId, id).
+  pesananRetur PesananRetur @relation(fields: [tenantId, pesananReturId], references: [tenantId, id])
+  // ItemPesanan tidak membawa tenantId sendiri (baris di bawah Pesanan, lihat
+  // ADR-013) - FK tunggal, konsisten dengan pola ItemPesananModifier/
+  // TiketDapurBaris di atas.
+  itemPesanan  ItemPesanan  @relation(fields: [itemPesananId], references: [id])
+
+  @@map("pesanan_retur_baris")
 }
 
 // =====================================================================================
@@ -2856,6 +3014,13 @@ model TiketDapur {
   masukPada         DateTime         @default(now())
   mulaiDiprosesPada DateTime?
   siapPada          DateTime?
+  // ADR-036 (sub-problem D): alasan pembatalan tiket - nullable di level Prisma
+  // karena HANYA wajib ketika `status = DIBATALKAN` (kondisional-per-nilai-enum
+  // tidak bisa dinyatakan lewat `String` polos non-null di Prisma DSL) - WAJIB
+  // DIISI ditegakkan lewat CHECK constraint Postgres eksplisit
+  // `tiket_dapur_alasan_wajib_saat_dibatalkan` (lihat migrasi retur/void, dan
+  // catatan "order ready predicate" di STATE-MACHINES.md bagian "Dapur").
+  alasanPembatalan  String?
 
   tenant        Tenant                    @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).

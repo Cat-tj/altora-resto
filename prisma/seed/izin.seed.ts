@@ -265,7 +265,8 @@ export const IZIN_SEED: readonly IzinSeedEntry[] = [
   { kode: "pesanan.tolak", nama: "Tolak pesanan QR pelanggan", domain: "pesanan", deskripsi: "Menolak pesanan kanal QR_PELANGGAN yang berstatus MENUNGGU_PERSETUJUAN, wajib mengisi alasan (MENUNGGU_PERSETUJUAN -> DITOLAK)." },
   { kode: "pesanan.status.ubah", nama: "Ubah status pesanan (generik)", domain: "pesanan", deskripsi: "Menjalankan transisi status pesanan generik (konfirmasi, kirim ke dapur, tandai disajikan, selesaikan) di luar transisi yang punya izin khusus (terima/tolak/batalkan)." },
   { kode: "pesanan.batalkan", nama: "Batalkan pesanan", domain: "pesanan", deskripsi: "Membatalkan seluruh pesanan (menulis PesananPembatalan); butuh approval supervisor bila status sudah DIKONFIRMASI/DIKIRIM_KE_DAPUR/SEDANG_DISIAPKAN." },
-  { kode: "pesanan.retur.kelola", nama: "Kelola retur pesanan", domain: "pesanan", deskripsi: "Memproses retur pesanan yang sudah SELESAI (SELESAI -> DIRETUR); model detail retur adalah scope ALT-PES-018 batch berikutnya." },
+  { kode: "pesanan.retur.kelola", nama: "Kelola retur pesanan", domain: "pesanan", deskripsi: "Mengajukan/menyetujui/menolak/memproses PesananRetur (model detail retur, ADR-036 - menggantikan makna lama StatusPesanan.DIRETUR yang sudah dihapus)." },
+  { kode: "pesanan.void-setelah-produksi", nama: "Void pesanan setelah produksi", domain: "pesanan", deskripsi: "Membatalkan pesanan/item yang bahannya SUDAH terpakai (PesananPembatalan.jenisPembatalan = SETELAH_PRODUKSI) - WAJIB approval supervisor via PermintaanPersetujuan dan memicu CatatanWaste/MutasiStok(WASTE), BUKAN pelepasan reservasi stok (ADR-036)." },
   { kode: "pesanan.riwayat.lihat", nama: "Lihat riwayat pesanan", domain: "pesanan", deskripsi: "Membaca daftar pesanan, riwayat status, dan riwayat perubahan (PesananRiwayatStatus/PesananPerubahan)." },
 
   // dapur / KDS (baru, ALT-DEF-006 - lihat docs/keamanan/PERMISSION-MATRIX.md
