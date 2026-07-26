@@ -237,6 +237,13 @@ model Outlet {
   // ALT-DEF-019: outletUtamaId DIHAPUS dari Karyawan - lihat KaryawanOutlet
   // (many-to-many, isUtama menandai outlet utama) di bawah, ADR-028.
   karyawanOutlet             KaryawanOutlet[]
+  // ADR-040: broadcast notifikasi ke "siapa pun yang punya akses outlet ini"
+  // (lingkupTarget OUTLET/PERAN_DI_OUTLET) memakai composite-FK
+  // (tenantId, outletId) -> Outlet(tenantId, id) pada kolom outletId yang
+  // SUDAH ADA di Notification sejak ADR-016 (sebelumnya informational-only,
+  // pola AuditLog.outletId) - lihat DECISION-LOG.md ADR-040 kenapa tidak
+  // dibuat kolom baru terpisah untuk kasus ini.
+  notification               Notification[]              @relation("NotificationOutlet")
   templateShift              TemplateShift[]
   jadwalKerja                JadwalKerja[]
   polaJadwalBerulang         PolaJadwalBerulang[]
@@ -470,8 +477,17 @@ model Peran {
   peranIzin        PeranIzin[]
   keanggotaanPeran KeanggotaanPeran[]
   batasIzin        BatasIzin?
+  // ADR-040: broadcast notifikasi per-peran (lingkupTarget PERAN_DI_TENANT/
+  // PERAN_DI_OUTLET) memakai composite-FK (tenantId, peranId) ->
+  // Peran(tenantId, id) - butuh @@unique([tenantId, id]) baru di bawah
+  // (sebelumnya Peran hanya punya @@unique([tenantId, kode])).
+  notification     Notification[]     @relation("NotificationPeran")
 
   @@unique([tenantId, kode])
+  // Baru di ADR-040 - diperlukan agar composite-FK (tenantId, peranId) ->
+  // Peran(tenantId, id) valid, pola yang sama seperti Outlet/ItemMenu/dst di
+  // seluruh schema ini (lihat ALT-DEF-010/ADR-013).
+  @@unique([tenantId, id])
   @@map("peran")
 }
 
@@ -5538,43 +5554,85 @@ enum TipeNotifikasi {
   KARYAWAN_TERLAMBAT
 }
 
+// ADR-040: deklarasi eksplisit lingkup/niat targeting sebuah Notification -
+// lihat matriks kombinasi lengkap di komentar model Notification dan
+// DECISION-LOG.md ADR-040. Setiap nilai berkorespondensi dengan kombinasi
+// keanggotaanTenantId/outletId/peranId yang WAJIB (dan yang WAJIB null),
+// ditegakkan CHECK constraint di migrasi.
+enum LingkupTargetNotifikasi {
+  // Satu keanggotaan tenant spesifik (single-recipient).
+  PENGGUNA_SPESIFIK
+  // Semua orang dengan akses (KeanggotaanOutlet aktif) ke outlet tertentu.
+  OUTLET
+  // Semua pemegang peran tertentu di seluruh tenant (lintas outlet).
+  PERAN_DI_TENANT
+  // Semua pemegang peran tertentu, dibatasi pada satu outlet tertentu.
+  PERAN_DI_OUTLET
+  // Broadcast ke seluruh tenant tanpa filter apa pun.
+  SELURUH_TENANT
+}
+
 // ALT-DEF-017/ALT-PLT-020: notifikasi in-app Altora SAJA - TIDAK ADA
 // WhatsApp/SMS/push ke sistem eksternal apa pun di batch ini maupun yang
 // direncanakan menggantikan model ini; "notifikasi" di sini murni berarti
 // baris yang dibaca klien Altora sendiri (polling/realtime in-app), lihat
 // ADR-016 untuk rasional pembatasan cakupan ini secara eksplisit.
 //
-// penggunaId NULLABLE: notifikasi bisa berupa broadcast ke SEMUA pengguna
-// dengan role/akses tertentu di suatu outlet (mis. "STOK_KRITIS" ditujukan ke
-// siapa pun berperan GUDANG di outlet itu), bukan selalu satu Pengguna
-// spesifik. Keputusan pass ini: TIDAK menambah model NotificationTarget
-// terpisah (yang akan memetakan satu Notification ke banyak target
-// peran/outlet) - dicatat sebagai simplifikasi yang diketahui/disengaja,
-// bukan kelalaian (lihat ADR-016). Saat penggunaId NULL, targeting nyata
-// (siapa yang berhak melihat baris ini) adalah tanggung jawab service-layer
-// query (mis. filter berdasarkan outletId + peran pemanggil), bukan
-// dijamin skema.
-// ADR-033 - BATAS CAKUPAN EKSPLISIT: batch ini HANYA mengganti
-// `penggunaId` (FK langsung ke Pengguna) menjadi `keanggotaanTenantId`
-// (composite-FK ke KeanggotaanTenant(tenantId, id)) - penerapan TRIVIAL dari
-// pola yang sama dipakai di seluruh model lain pada batch ini, karena
-// Notification SUDAH membawa tenantId sendiri. Redesain targeting yang lebih
-// dalam (keanggotaanOutletId untuk notifikasi outlet-scoped, peranId untuk
-// broadcast-per-peran, model NotificationTarget terpisah untuk banyak
-// penerima) TETAP BELUM DIKERJAKAN di batch ini - itu masalah TARGETING
-// (siapa SEHARUSNYA menerima notifikasi ini), bukan masalah VALIDASI ACTOR
-// (apakah kolom aktor yang ada mengarah ke record yang sah). Dicadangkan
-// eksplisit untuk batch "PERBAIKI NOTIFICATION TARGETING" terpisah - lihat
-// ADR-016 untuk keputusan lama yang batch tsb akan revisit.
+// ADR-040 - REDESAIN TARGETING (menutup deferral eksplisit ADR-033
+// Keputusan 4). Instruksi batch ini eksplisit: "Jangan gunakan kombinasi
+// longgar tenantId/outletId/penggunaId global - gunakan target:
+// keanggotaanTenantId / keanggotaanOutletId opsional / peranId opsional -
+// bila broadcast, simpan aturan target EKSPLISIT, jangan hanya memakai
+// penggunaId = NULL." Field `lingkupTarget` (enum) di bawah membuat NIAT
+// targeting eksplisit dan non-ambigu - NULL-nya keanggotaanTenantId/
+// outletId/peranId menjadi KONSEKUENSI dari nilai enum yang dipilih
+// (diverifikasi CHECK constraint di migrasi), bukan default diam-diam.
+//
+// Catatan desain field "keanggotaanOutletId opsional" dari instruksi: kolom
+// `outletId` (informational-only sejak ADR-016, pola sama seperti
+// AuditLog.outletId) DIPROMOSIKAN pada batch ini menjadi composite-FK
+// tervalidasi (tenantId, outletId) -> Outlet(tenantId, id), BUKAN kolom baru
+// terpisah. Alasan: targeting "OUTLET"/"PERAN_DI_OUTLET" berarti "SIAPA PUN
+// yang punya akses ke outlet ini", yaitu identitas OUTLET itu sendiri, bukan
+// satu baris KeanggotaanOutlet spesifik (yang hanya mewakili SATU membership
+// satu orang) - FK ke satu baris KeanggotaanOutlet tidak bisa berarti
+// "semua". Menambah kolom kedua yang membawa informasi identik dengan
+// outletId yang sudah ada akan redundan (bertentangan dengan pola composite-
+// FK lain di schema ini yang selalu reuse kolom identitas yang sudah ada -
+// lihat ALT-DEF-010/ADR-013). Lihat DECISION-LOG.md ADR-040 untuk detail.
+//
+// Matriks kombinasi valid (ditegakkan CHECK constraint level-DB, lihat
+// migrasi + ADR-040):
+//   lingkupTarget       | keanggotaanTenantId | outletId  | peranId
+//   PENGGUNA_SPESIFIK   | WAJIB ada           | WAJIB null| WAJIB null
+//   OUTLET              | WAJIB null          | WAJIB ada | WAJIB null
+//   PERAN_DI_TENANT     | WAJIB null          | WAJIB null| WAJIB ada
+//   PERAN_DI_OUTLET     | WAJIB null          | WAJIB ada | WAJIB ada
+//   SELURUH_TENANT      | WAJIB null          | WAJIB null| WAJIB null
+// keanggotaanTenantId + peranId sekaligus TIDAK PERNAH valid (kontradiktif -
+// satu orang spesifik tidak butuh filter peran) - tidak ada baris matriks
+// untuk kombinasi itu, ditolak CHECK constraint.
 model Notification {
-  id                  String         @id
+  id                  String                  @id
   tenantId            String
+  // Identitas OUTLET yang ditarget (lingkupTarget OUTLET/PERAN_DI_OUTLET) -
+  // composite-FK (tenantId, outletId) -> Outlet(tenantId, id) sejak ADR-040
+  // (sebelumnya informational-only tanpa FK).
   outletId            String?
-  // Nullable - notifikasi bisa berupa broadcast (lihat catatan cakupan di
-  // atas model ini). Composite-FK ke KeanggotaanTenant(tenantId, id) -
-  // menggantikan FK langsung ke Pengguna (identitas global) yang dipakai
-  // sebelum ADR-033; sebelumnya field ini bernama `penggunaId`.
+  // Nullable - hanya wajib diisi saat lingkupTarget = PENGGUNA_SPESIFIK.
+  // Composite-FK ke KeanggotaanTenant(tenantId, id) - menggantikan FK
+  // langsung ke Pengguna (identitas global) yang dipakai sebelum ADR-033;
+  // sebelumnya field ini bernama `penggunaId`.
   keanggotaanTenantId String?
+  // Nullable - hanya wajib diisi saat lingkupTarget = PERAN_DI_TENANT atau
+  // PERAN_DI_OUTLET. Composite-FK (tenantId, peranId) -> Peran(tenantId, id)
+  // - baru di ADR-040.
+  peranId             String?
+  // Deklarasi EKSPLISIT niat targeting - lihat matriks kombinasi di atas dan
+  // ADR-040. Wajib diisi setiap baris (tidak ada default) supaya penulis baris
+  // selalu secara sadar memilih lingkup, bukan mengandalkan NULL-ness kolom
+  // lain secara implisit.
+  lingkupTarget       LingkupTargetNotifikasi
   tipe                TipeNotifikasi
   judul               String
   pesan               String
@@ -5582,12 +5640,19 @@ model Notification {
   // agar tap notifikasi langsung membuka pesanan terkait).
   data                Json?
   dibacaPada          DateTime?
-  createdAt           DateTime       @default(now())
+  createdAt           DateTime                @default(now())
 
   tenant            Tenant             @relation(fields: [tenantId], references: [id])
+  outlet            Outlet?            @relation("NotificationOutlet", fields: [tenantId, outletId], references: [tenantId, id])
   keanggotaanTenant KeanggotaanTenant? @relation("NotificationKeanggotaan", fields: [tenantId, keanggotaanTenantId], references: [tenantId, id])
+  peran             Peran?             @relation("NotificationPeran", fields: [tenantId, peranId], references: [tenantId, id])
 
   // Index untuk query "notifikasi belum dibaca milik keanggotaan X" yang efisien.
   @@index([keanggotaanTenantId, dibacaPada])
+  // Index untuk query pembaca tenant/outlet/peran-scoped (lihat kontrak di
+  // API-CONTRACT.md dan ADR-040) - mendukung predikat OR yang memfilter atas
+  // outletId dan peranId sekaligus per tenant.
+  @@index([tenantId, outletId, peranId])
+  @@index([tenantId, lingkupTarget])
   @@map("notification")
 }
