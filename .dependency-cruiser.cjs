@@ -43,7 +43,15 @@ const TRANSACTIONAL_WRITE_PACKAGES = [
 
 function businessPackagePattern(exclude = []) {
   const list = BUSINESS_PACKAGES.filter((p) => !exclude.includes(p));
-  return `^@altora/(${list.join("|")})(/.*)?$`;
+  // ALT-DEF-055: bentuk `(/.*)?$` (grup opsional berisi `*`) ditandai "unsafe
+  // regular expression" oleh validator bawaan dependency-cruiser (paket
+  // `safe-regex`, heuristik star-height - bukan ReDoS nyata untuk pola ini,
+  // tapi validator tetap membatalkan seluruh run sebelum menganalisis satu
+  // file pun). Bentuk `($|/.*)` (alternasi, bukan grup opsional) SECARA
+  // SEMANTIK setara (cocok akhir-string ATAU "/apa saja setelahnya") dan lolos
+  // validator - dipakai di sini dan dua rule lain di bawah yang sebelumnya
+  // memakai bentuk `(/.*)?$`.
+  return `^@altora/(${list.join("|")})($|/.*)`;
 }
 
 module.exports = {
@@ -65,7 +73,8 @@ module.exports = {
       severity: "error",
       from: { path: "^packages/dapur" },
       to: {
-        path: "^@altora/pesanan(?!/kontrak-dapur)(/.*)?$",
+        // ALT-DEF-055: bentuk alternasi `($|/.*)`, lihat komentar businessPackagePattern() di atas.
+        path: "^@altora/pesanan(?!/kontrak-dapur)($|/.*)",
       },
     },
     {
@@ -77,7 +86,8 @@ module.exports = {
       severity: "error",
       from: { path: "^packages/analitik" },
       to: {
-        path: `^@altora/(${TRANSACTIONAL_WRITE_PACKAGES.join("|")})(?!/read-model)(/.*)?$`,
+        // ALT-DEF-055: bentuk alternasi `($|/.*)`, lihat komentar businessPackagePattern() di atas.
+        path: `^@altora/(${TRANSACTIONAL_WRITE_PACKAGES.join("|")})(?!/read-model)($|/.*)`,
       },
     },
     {
@@ -116,10 +126,13 @@ module.exports = {
       exportsFields: ["exports"],
       conditionNames: ["import", "require", "node", "default"],
     },
-    reporterOptions: {
-      err: {
-        collapsePattern: "node_modules",
-      },
-    },
+    // ALT-DEF-054: `reporterOptions.err` DIHAPUS - bukan kunci yang valid pada
+    // schema dependency-cruiser 16.x (`ReporterOptionsType` hanya menerima
+    // anon/archi/dot/ddot/flat/markdown/metrics/mermaid/text; "err" bukan salah
+    // satunya, dan `collapsePattern` adalah opsi reporter dot-family, tidak
+    // dipakai oleh `--output-type err`). Konfigurasi lama ini membuat SETIAP
+    // pemanggilan `depcruise --config .dependency-cruiser.cjs` gagal validasi
+    // schema sebelum sempat menganalisis satu file pun - ditemukan saat
+    // menjalankan `depcheck` nyata pertama kali untuk batch CI ini.
   },
 };

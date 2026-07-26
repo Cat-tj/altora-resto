@@ -20,6 +20,12 @@
     "prisma:format": "prisma format --schema prisma/schema/schema.prisma",
     "prisma:validate": "prisma validate --schema prisma/schema/schema.prisma",
     "prisma:generate": "prisma generate --schema prisma/schema/schema.prisma",
+    "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema/schema.prisma",
+    "test:architecture": "bash scripts/test-architecture.sh",
+    "test:database-integration": "bash scripts/test-database-integration.sh",
+    "test:concurrency": "bash scripts/test-database-integration.sh 'konkurensi-dua-koneksi-lanjutan|optimistic-locking-version-invariants'",
+    "test:security": "bash scripts/test-database-integration.sh 'actor-keanggotaan-tenant-outlet-invariants|notification-target-lintas-tenant-invariants'",
+    "test:migration-invariants": "bash scripts/test-database-integration.sh 'inventaris-trigger-constraint-lengkap'",
     "clean": "turbo run clean && rimraf node_modules"
   },
   "devDependencies": {

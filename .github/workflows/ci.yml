@@ -1,0 +1,524 @@
+name: CI
+
+# Pipeline CI untuk Altora Resto (ADR-043). Environment ini (GitHub-hosted
+# runner) BERBEDA TOTAL dari environment eksekusi batch correction-loop lokal
+# (yang punya Postgres 16 persisten `altora_resto_dev` dan pnpm TIDAK
+# tersedia) - setiap job di sini menjalankan `pnpm install` NYATA lewat
+# `pnpm/action-setup`, dan setiap job yang butuh Postgres menyalakan
+# container `services:` `postgres:16` KOSONG sendiri (bukan database dev
+# yang persisten) supaya migrasi benar-benar dibuktikan berjalan dari NOL,
+# di environment yang tidak kita kendalikan.
+#
+# CATATAN JUJUR (lihat docs/engineering/RELEASE-EVIDENCE.md bagian ADR-043
+# untuk detail lengkap): file YAML ini BELUM PERNAH dijalankan oleh GitHub
+# Actions sungguhan pada saat ditulis - setiap command di dalamnya sudah
+# dijalankan NYATA secara lokal (lewat workaround `npm install --no-save`
+# untuk tsx, dan database throwaway `altora_resto_ci_test` yang di-drop+
+# create+migrate dari nol persis seperti yang akan dilakukan job
+# `migration-from-empty`) sebagai proxy paling dekat yang bisa diverifikasi
+# di environment eksekusi ini - tapi orkestrasi `pnpm`+`turbo`+`actions/*`
+# yang SEBENARNYA lewat GitHub Actions tetap belum diverifikasi end-to-end.
+#
+# BATAS BRANCH PROTECTION: workflow YAML ini TIDAK BISA memaksa "tidak boleh
+# merge bila job gagal" - itu butuh konfigurasi "Require status checks to
+# pass" di GitHub repo Settings > Branches, yang di luar jangkauan sebuah
+# commit ke file ini. Lihat catatan di bagian bawah file ini dan
+# RELEASE-EVIDENCE.md untuk detail siapa yang perlu mengaktifkannya dan di
+# mana.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Node 22 dipakai (bukan 20, walau package.json root "engines.node" masih
+# menulis ">=20.0.0") karena job `architecture-tests` menjalankan file
+# packages/test-support/src/architecture/*.test.ts lewat
+# `node --experimental-strip-types`, sebuah flag yang baru ada mulai Node
+# >=22.6 - lihat ADR-043 Keputusan untuk diskusi mismatch ini (dicatat jujur,
+# tidak diam-diam disembunyikan; TIDAK diperbaiki di batch ini karena
+# mengubah `engines.node` root berpotensi menyentuh ekspektasi tooling paket
+# lain yang di luar scope batch CI murni).
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "9.12.0"
+  # Kredensial database CI - HANYA dipakai terhadap container `services:`
+  # Postgres yang baru dibuat kosong di runner GitHub Actions setiap kali
+  # job berjalan, tidak pernah menyentuh `altora_resto_dev` (dev database
+  # lokal persisten) atau environment eksekusi lain manapun.
+  CI_POSTGRES_DB: altora_resto_ci
+  CI_POSTGRES_USER: altora_ci
+  CI_POSTGRES_PASSWORD: altora_ci_password
+  DATABASE_URL: "postgresql://altora_ci:altora_ci_password@localhost:5432/altora_resto_ci?schema=public"
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Job tanpa Postgres - schema/tooling statis saja.
+  # ---------------------------------------------------------------------
+
+  lint:
+    name: lint (turbo run lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+      # Tidak ada pnpm-lock.yaml committed di repo ini pada saat batch CI ini
+      # ditulis (lihat RELEASE-EVIDENCE.md ADR-043) - `pnpm install` di sini
+      # akan MERESOLVE dependency fresh setiap run, bukan `--frozen-lockfile`.
+      # Ini bukan praktik ideal jangka panjang (reproducibility), tapi jujur
+      # merefleksikan keadaan repo saat ini - didorong sebagai perbaikan
+      # terpisah (commit pnpm-lock.yaml) di batch mendatang yang punya akses
+      # pnpm lokal yang berfungsi.
+      - run: pnpm install --no-frozen-lockfile
+      # KNOWN-BROKEN (ALT-DEF-056, TIDAK diperbaiki di batch ini - di luar
+      # scope "konfigurasi CI + script package.json minimal"): setiap
+      # `package.json` paket punya script `lint: "eslint . --max-warnings=0"`
+      # tapi `eslint` BUKAN devDependency di package manapun dan TIDAK ADA
+      # `eslint.config.*` di repo ini sama sekali - job ini DIPASTIKAN GAGAL
+      # (bukan no-op) sampai eslint benar-benar disiapkan di batch aplikasi
+      # mendatang. Job ini SENGAJA TETAP DIJALANKAN (bukan dihapus/di-skip)
+      # supaya statusnya jujur (merah = gap tooling nyata), dan SENGAJA TIDAK
+      # dijadikan gate wajib (tidak ada job lain yang `needs: lint`).
+      - run: pnpm run lint
+
+  typecheck:
+    name: typecheck (turbo run typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run prisma:generate
+      # Diverifikasi lokal secara nyata: `tsc --noEmit -p packages/test-support`
+      # (satu-satunya paket dengan kode TS sungguhan - paket lain semua
+      # stub `export {};`) exit 0, nol error. `turbo run typecheck` sendiri
+      # TIDAK BISA dijalankan lokal (pnpm binary tidak ada di environment
+      # eksekusi batch ini) - lihat RELEASE-EVIDENCE.md ADR-043 untuk detail
+      # apa yang diverifikasi vs belum.
+      - run: pnpm run typecheck
+
+  dependency-check:
+    name: dependency-check (depcruise boundaries)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+      - run: pnpm install --no-frozen-lockfile
+      # ALT-DEF-054/ALT-DEF-055: dua bug config dependency-cruiser yang
+      # sebelumnya membuat `depcheck` GAGAL 100% (sebelum sempat menganalisis
+      # satu file) sudah diperbaiki dalam batch ini (lihat
+      # .dependency-cruiser.cjs) - diverifikasi lokal nyata: exit 0,
+      # "29 dependency violations (0 errors, 0 warnings)" (hanya info-level
+      # orphan notice).
+      - run: pnpm run depcheck
+
+  prisma-format-check:
+    name: prisma-format-check (schema formatting)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+      - run: pnpm install --no-frozen-lockfile
+      # `prisma format` menulis file di tempat - jalankan lalu GAGALKAN job
+      # bila itu menghasilkan diff (artinya schema.prisma yang di-commit
+      # tidak terformat rapi). Diverifikasi lokal: nol diff pada schema saat
+      # ini.
+      - run: pnpm run prisma:format
+      - run: git diff --exit-code -- prisma/schema/schema.prisma
+
+  prisma-validate:
+    name: prisma-validate (schema validity)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run prisma:validate
+
+  # ---------------------------------------------------------------------
+  # Job PALING PENTING (poin 12 instruksi): membuktikan seluruh 15 migrasi
+  # resmi benar-benar berlaku bersih dari database KOSONG, di environment
+  # yang tidak kita kendalikan. Ini adalah versi CI dari "DROP+CREATE+
+  # migrate deploy" yang selama ini dilakukan MANUAL tiap batch correction-
+  # loop terhadap altora_resto_dev.
+  # ---------------------------------------------------------------------
+
+  migration-from-empty:
+    name: migration-from-empty (prisma migrate deploy dari database kosong)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ${{ env.CI_POSTGRES_DB }}
+          POSTGRES_USER: ${{ env.CI_POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.CI_POSTGRES_PASSWORD }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run prisma:generate
+      - name: prisma migrate deploy (dari database kosong)
+        run: pnpm run prisma:migrate:deploy | tee migrate-deploy.log
+      - name: prisma migrate status (bukti "up to date")
+        run: npx prisma migrate status --schema prisma/schema/schema.prisma | tee -a migrate-deploy.log
+      - name: prisma migrate diff (bukti nol drift terhadap schema.prisma)
+        run: |
+          npx prisma migrate diff \
+            --from-schema-datasource prisma/schema/schema.prisma \
+            --to-schema-datamodel prisma/schema/schema.prisma \
+            --script | tee prisma-diff.log
+      - name: Simpan artifact - Log migrasi dan Prisma diff
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-from-empty-evidence
+          path: |
+            migrate-deploy.log
+            prisma-diff.log
+          retention-days: 30
+
+  # ---------------------------------------------------------------------
+  # Job KEDUA paling penting (poin 12): memverifikasi SELURUH trigger/CHECK
+  # constraint/index bisnis-kritis yang diharapkan benar-benar ada di
+  # pg_catalog setelah migrasi. Keputusan desain (ADR-043): file
+  # packages/test-support/src/database-integration/inventaris-trigger-constraint-lengkap.test.ts
+  # (ditambahkan batch ADR-041) SUDAH PERSIS "tripwire regresi tunggal" yang
+  # diminta poin 3 instruksi - mendaftar LENGKAP 32 trigger + 4 CHECK
+  # constraint + 14 index unique/partial bisnis-kritis dan memverifikasi
+  # SETIAP SATU ada, PLUS memverifikasi jumlah trigger `trg_*` PERSIS 32
+  # (bukan subset). Job ini TIDAK menulis test baru yang duplikatif - job ini
+  # HANYA menjalankan test yang sudah ada, terhadap database yang baru saja
+  # dimigrasi dari nol oleh job `migration-from-empty` (di container Postgres
+  # BARU - lihat catatan di atas soal kenapa setiap job DB perlu migrate
+  # ulang sendiri, bukan mewarisi state job lain).
+  # ---------------------------------------------------------------------
+
+  migration-invariant-verification:
+    name: migration-invariant-verification (tripwire trigger/CHECK/index lengkap)
+    needs: migration-from-empty
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ${{ env.CI_POSTGRES_DB }}
+          POSTGRES_USER: ${{ env.CI_POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.CI_POSTGRES_PASSWORD }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run prisma:generate
+      - run: pnpm run prisma:migrate:deploy
+      - name: Dump daftar constraint (pg_constraint) - artifact
+        run: |
+          psql "$DATABASE_URL" -c \
+            "SELECT conname, contype, conrelid::regclass FROM pg_constraint WHERE connamespace = 'public'::regnamespace ORDER BY conname;" \
+            > constraints.txt
+      - name: Dump daftar trigger (pg_trigger) - artifact
+        run: |
+          psql "$DATABASE_URL" -c \
+            "SELECT tgname, tgrelid::regclass FROM pg_trigger WHERE NOT tgisinternal ORDER BY tgname;" \
+            > triggers.txt
+      - name: Jalankan tripwire inventaris trigger/CHECK/index lengkap
+        run: pnpm run test:migration-invariants | tee migration-invariant-report.log
+      - name: Simpan artifact - Daftar constraint, Daftar trigger, Test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-invariant-evidence
+          path: |
+            constraints.txt
+            triggers.txt
+            migration-invariant-report.log
+          retention-days: 30
+
+  # ---------------------------------------------------------------------
+  # Job tanpa Postgres - 22 file plain Node script (bukan vitest).
+  # ---------------------------------------------------------------------
+
+  architecture-tests:
+    name: architecture-tests (22 file test-support/src/architecture)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run test:architecture | tee architecture-test-report.log
+      - name: Simpan artifact - Test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: architecture-tests-report
+          path: architecture-test-report.log
+          retention-days: 30
+
+  # ---------------------------------------------------------------------
+  # Job dengan Postgres - 17 file tsx (database-integration lengkap).
+  # ---------------------------------------------------------------------
+
+  database-integration-tests:
+    name: database-integration-tests (17 file test-support/src/database-integration)
+    needs: migration-from-empty
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ${{ env.CI_POSTGRES_DB }}
+          POSTGRES_USER: ${{ env.CI_POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.CI_POSTGRES_PASSWORD }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run prisma:generate
+      - run: pnpm run prisma:migrate:deploy
+      - run: pnpm run test:database-integration | tee database-integration-report.log
+      - name: Simpan artifact - Test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-integration-tests-report
+          path: database-integration-report.log
+          retention-days: 30
+
+  # ---------------------------------------------------------------------
+  # ADR-043 keputusan pengelompokan (poin 6 instruksi): "concurrency-tests"
+  # BUKAN direktori terpisah secara fisik di repo ini - test race dua-koneksi
+  # (konkurensi-dua-koneksi-lanjutan.test.ts, optimistic-locking-version-
+  # invariants.test.ts) hidup DI DALAM database-integration/ bersama file
+  # lain. Job ini adalah PENGELOMPOKAN LOGIS (menjalankan SUBSET file yang
+  # SAMA lewat filter nama file di scripts/test-database-integration.sh),
+  # BUKAN direktori terpisah - dipilih dibanding memindahkan file (opsi a)
+  # karena: (1) memindahkan file BUTUH mengubah import relatif ke
+  # _pg-helper.ts di banyak file, risiko regresi tanpa manfaat cakupan
+  # tambahan; (2) file-file ini SUDAH dijalankan lengkap oleh job
+  # `database-integration-tests` di atas - job ini murni memberi SINYAL CI
+  # terpisah ("apakah race konkurensi spesifik lulus?") untuk visibilitas,
+  # bukan cakupan baru. Lihat docs/engineering/DECISION-LOG.md ADR-043.
+  # ---------------------------------------------------------------------
+
+  concurrency-tests:
+    name: concurrency-tests (subset logis - race dua-koneksi)
+    needs: migration-from-empty
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ${{ env.CI_POSTGRES_DB }}
+          POSTGRES_USER: ${{ env.CI_POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.CI_POSTGRES_PASSWORD }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run prisma:generate
+      - run: pnpm run prisma:migrate:deploy
+      - run: pnpm run test:concurrency | tee concurrency-test-report.log
+      - name: Simpan artifact - Test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: concurrency-tests-report
+          path: concurrency-test-report.log
+          retention-days: 30
+
+  # ---------------------------------------------------------------------
+  # ADR-043 keputusan pengelompokan (poin 7 instruksi): sama seperti
+  # concurrency-tests di atas - "security-tests" di batch correction-loop ini
+  # selalu berarti test tenant-isolation (actor lintas-tenant ditolak,
+  # notifikasi lintas-tenant ditolak, composite-FK lintas-tenant ditolak),
+  # yang sudah tersebar di database-integration/ (bukan direktori terpisah).
+  # Job ini adalah PENGELOMPOKAN LOGIS yang sama, alasan sama seperti di
+  # atas (tidak direstrukturisasi secara fisik).
+  # ---------------------------------------------------------------------
+
+  security-tests:
+    name: security-tests (subset logis - isolasi lintas-tenant)
+    needs: migration-from-empty
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ${{ env.CI_POSTGRES_DB }}
+          POSTGRES_USER: ${{ env.CI_POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.CI_POSTGRES_PASSWORD }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run prisma:generate
+      - run: pnpm run prisma:migrate:deploy
+      - run: pnpm run test:security | tee security-test-report.log
+      - name: Simpan artifact - Test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-tests-report
+          path: security-test-report.log
+          retention-days: 30
+
+  # ---------------------------------------------------------------------
+  # "Coverage" (poin 11 instruksi "Simpan artifact ... Coverage"): TIDAK ADA
+  # tool code-coverage yang terpasang di mana pun di repo ini, karena TIDAK
+  # ADA kode aplikasi (service/handler) yang bisa diukur cakupannya - seluruh
+  # pekerjaan correction-loop sejauh ini adalah schema+dokumentasi+test
+  # struktur/integrasi (bukan implementasi fitur). Menjalankan
+  # `vitest run --coverage` di paket manapun akan mengukur cakupan test
+  # ATAS DIRINYA SENDIRI (nol nilai) - itu MENYESATKAN, bukan informatif.
+  # Artifact ini SENGAJA berupa catatan jujur, bukan laporan coverage palsu.
+  # ---------------------------------------------------------------------
+
+  coverage-placeholder:
+    name: coverage-placeholder (catatan jujur - belum ada kode untuk diukur)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tulis catatan coverage
+        run: |
+          cat > COVERAGE-NOTE.txt << 'EOF'
+          "Coverage" TIDAK diukur pada batch CI ini (ADR-043).
+
+          Alasan: repo ini per 2026-07-26 100% berisi schema Prisma,
+          dokumentasi, dan test struktur/integrasi (packages/test-support) -
+          TIDAK ADA kode aplikasi (service/handler/command-handler) di
+          package manapun (semua package.json bisnis berisi stub
+          `export {};`). Tidak ada "kode" untuk diukur cakupannya.
+
+          Menjalankan alat coverage (mis. `vitest run --coverage`) sekarang
+          hanya akan mengukur cakupan test-support ATAS DIRINYA SENDIRI (file
+          test menguji file test lain) - angka yang dihasilkan akan
+          menyesatkan (bisa terlihat seperti "100% coverage" padahal tidak
+          ada logika bisnis nyata yang tercakup).
+
+          Keputusan (ADR-043): TIDAK memasang tool coverage palsu di batch
+          CI ini. Artifact ini adalah pengganti jujur - "Coverage" akan
+          menjadi laporan yang berarti begitu batch implementasi kode
+          aplikasi dimulai dan ada logika nyata untuk diukur.
+          EOF
+      - name: Simpan artifact - Coverage (placeholder jujur)
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-placeholder-note
+          path: COVERAGE-NOTE.txt
+          retention-days: 30
+
+# ---------------------------------------------------------------------------
+# CATATAN MERGE GATE (poin 12 instruksi, "Tidak boleh merge bila invariant
+# migration gagal"):
+#
+# Di dalam file workflow ini, `migration-invariant-verification` sudah
+# `needs: migration-from-empty` - kalau migrasi dasar gagal, verifikasi
+# invariant otomatis tidak pernah berjalan (default GitHub Actions untuk
+# dependency antar job). Job lain yang butuh Postgres juga `needs:
+# migration-from-empty` untuk alasan yang sama.
+#
+# TAPI: file workflow ini SENDIRI TIDAK BISA memaksa "PR tidak boleh di-merge
+# kalau job ini gagal" pada level repository/GitHub UI. Itu butuh konfigurasi
+# terpisah di GitHub repo Settings > Branches > Branch protection rules >
+# "Require status checks to pass before merging", lalu memilih job
+# `migration-from-empty` dan `migration-invariant-verification` (nama job
+# persis seperti di atas) sebagai status check WAJIB. Itu adalah tindakan
+# konfigurasi UI/API repo GitHub yang TIDAK BISA dilakukan lewat commit ke
+# file YAML ini - didokumentasikan di sini secara jujur sebagai batasan,
+# bukan diklaim seolah sudah terpasang otomatis. Lihat
+# docs/engineering/RELEASE-EVIDENCE.md bagian ADR-043 untuk detail.
+# ---------------------------------------------------------------------------
