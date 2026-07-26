@@ -3126,3 +3126,246 @@ absolut" (`BigInt`/`int8` secara teoretis tetap punya ceiling-nya sendiri).
    `docs/engineering/PLATFORM-BUILD-MATRIX.md`.
 3. Setiap defect yang ditemukan selama verifikasi rilis wajib masuk
    `docs/engineering/DEFECT-LEDGER.md` sebelum rilis dianggap selesai.
+
+## Batch ADR-035: Optimistic locking (`version`) - bukti nyata
+
+### 1. Migrasi diff (`prisma migrate diff --from-schema-datasource --to-schema-datamodel --script`)
+
+Dijalankan terhadap `altora_resto_dev` SEBELUM migrasi ditulis manual,
+menghasilkan `ALTER TABLE ... ADD COLUMN` murni untuk 13 tabel:
+
+```
+-- AlterTable
+ALTER TABLE "absensi" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
+ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+-- AlterTable
+ALTER TABLE "giliran_kasir" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
+ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+-- AlterTable
+ALTER TABLE "jadwal_kerja" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
+ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+-- AlterTable
+ALTER TABLE "keanggotaan" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
+ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+-- AlterTable
+ALTER TABLE "pembayaran" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
+ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+-- AlterTable
+ALTER TABLE "permintaan_persetujuan" ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+-- AlterTable
+ALTER TABLE "pesanan" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
+ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+-- AlterTable
+ALTER TABLE "promo" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
+ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+-- AlterTable
+ALTER TABLE "purchase_order" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
+ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+-- AlterTable
+ALTER TABLE "reservasi" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
+ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+-- AlterTable
+ALTER TABLE "stok_bahan" ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+-- AlterTable
+ALTER TABLE "stok_opname" ADD COLUMN     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
+ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+-- AlterTable
+ALTER TABLE "transfer_stok" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
+ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+```
+
+Review: `stok_opname` juga mendapat `createdAt` baru (dengan `DEFAULT
+CURRENT_TIMESTAMP`) karena model itu SEBELUMNYA tidak punya `createdAt`
+sama sekali - ditambahkan karena `@updatedAt` semantically membutuhkan
+"kapan dibuat" sebagai pasangannya, bukan scope creep tanpa alasan.
+`permintaan_persetujuan`/`stok_bahan` hanya dapat `version` (keduanya SUDAH
+punya `updatedAt` sebelum batch ini). Seluruh 13 tabel dikonfirmasi 0 baris
+sebelum migrasi diterapkan (query di bawah), sehingga `updatedAt NOT NULL`
+tanpa `DEFAULT` aman tanpa backfill:
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -t -c "
+select 'pesanan', count(*) from pesanan
+union all select 'pembayaran', count(*) from pembayaran
+union all select 'giliran_kasir', count(*) from giliran_kasir
+union all select 'transfer_stok', count(*) from transfer_stok
+union all select 'stok_opname', count(*) from stok_opname
+union all select 'purchase_order', count(*) from purchase_order
+union all select 'promo', count(*) from promo
+union all select 'keanggotaan', count(*) from keanggotaan
+union all select 'jadwal_kerja', count(*) from jadwal_kerja
+union all select 'reservasi', count(*) from reservasi
+union all select 'absensi', count(*) from absensi
+union all select 'stok_bahan', count(*) from stok_bahan
+union all select 'permintaan_persetujuan', count(*) from permintaan_persetujuan
+;"
+ pesanan                |     0
+ pembayaran             |     0
+ giliran_kasir          |     0
+ transfer_stok          |     0
+ stok_opname            |     0
+ purchase_order         |     0
+ promo                  |     0
+ keanggotaan            |     0
+ jadwal_kerja            |     0
+ reservasi              |     0
+ absensi                |     0
+ stok_bahan             |     0
+ permintaan_persetujuan |     0
+```
+
+### 2. Penerapan lewat psql + resolve
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -f prisma/schema/migrations/20260726110000_optimistic_locking_version/migration.sql
+ALTER TABLE (x13)
+CREATE FUNCTION
+CREATE TRIGGER (x13)
+
+$ npx prisma migrate resolve --applied 20260726110000_optimistic_locking_version --schema prisma/schema/schema.prisma
+Migration 20260726110000_optimistic_locking_version marked as applied.
+
+$ npx prisma migrate status --schema prisma/schema/schema.prisma
+8 migrations found in prisma/migrations
+Database schema is up to date!
+```
+
+Verifikasi trigger terpasang di seluruh 13 tabel:
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -c "select tgname, tgrelid::regclass from pg_trigger where tgname like 'trg_%bump_version%' order by 1;"
+                 tgname                  |        tgrelid
+-----------------------------------------+------------------------
+ trg_absensi_bump_version                | absensi
+ trg_giliran_kasir_bump_version          | giliran_kasir
+ trg_jadwal_kerja_bump_version           | jadwal_kerja
+ trg_keanggotaan_bump_version            | keanggotaan
+ trg_pembayaran_bump_version             | pembayaran
+ trg_permintaan_persetujuan_bump_version | permintaan_persetujuan
+ trg_pesanan_bump_version                | pesanan
+ trg_promo_bump_version                  | promo
+ trg_purchase_order_bump_version         | purchase_order
+ trg_reservasi_bump_version              | reservasi
+ trg_stok_bahan_bump_version             | stok_bahan
+ trg_stok_opname_bump_version            | stok_opname
+ trg_transfer_stok_bump_version          | transfer_stok
+(13 rows)
+```
+
+### 3. CRUX PROOF: dua koneksi Postgres NYATA membuktikan deteksi konflik konkurensi
+
+Output nyata dari `optimistic-locking-version-invariants.test.ts` (fungsi
+`testDuaKoneksiNyataKonflikTerdeteksi`) - dua koneksi `pg.Client` fisik
+terpisah (`connA`, `connB`), BUKAN dua transaksi di client yang sama:
+
+```
+$ node node_modules/.pnpm/tsx@4.23.1/node_modules/tsx/dist/cli.mjs packages/test-support/src/database-integration/optimistic-locking-version-invariants.test.ts
+  -> CRUX two-connection proof: A dan B sama-sama baca version=1; B menang (UPDATE berhasil, version->2); A mencoba UPDATE WHERE version=1 (stale) -> rowCount=0 (KONFLIK_DATA terdeteksi, dua koneksi pg NYATA).
+OK: database-integration ADR-035 (optimistic locking version, 13 tabel, proof konflik dua-koneksi nyata) lulus.
+```
+
+Urutan kejadian nyata yang dibuktikan (kode di
+`testDuaKoneksiNyataKonflikTerdeteksi`, lihat baris `SELECT version FROM
+pesanan WHERE id = $1` untuk masing-masing koneksi):
+1. Fixture `pesanan` (`version=1`) di-`INSERT` lewat pool setup dan
+   di-COMMIT (bukan di dalam transaksi test) supaya terlihat oleh KEDUA
+   koneksi fisik.
+2. `connA.query(SELECT version ...)` -> `version = 1` (dibaca).
+3. `connB.query(SELECT version ...)` -> `version = 1` juga (baca konkuren,
+   sebelum siapa pun menulis).
+4. `connB.query(UPDATE pesanan SET status='DIKIRIM' WHERE id=? AND
+   version=1)` -> `rowCount = 1` (BERHASIL, versi di DB sekarang 2).
+5. `connA.query(UPDATE pesanan SET status='DITERIMA' WHERE id=? AND
+   version=1)` -> **`rowCount = 0`** - INILAH CRUX: koneksi A memakai
+   version basi (1) yang dibacanya SEBELUM koneksi B menang, dan Postgres
+   menolak (0 baris cocok klausa `WHERE`) tanpa perlu logika tambahan
+   apa pun - murni akibat conditional `UPDATE ... WHERE version = ?`.
+6. Verifikasi akhir: baris tetap `status='DIKIRIM'`/`version=2` (tulisan B)
+   - percobaan A yang gagal TIDAK mengubah apa pun.
+
+Juga dibuktikan pada tabel yang sama (`Pesanan`) dalam test terpisah
+(`testPesananAutoIncrementDanOverride`) di SATU transaksi:
+- UPDATE dengan `WHERE version=1` yang cocok -> berhasil, version jadi 2
+  TEPAT (bukan 1, bukan 3).
+- UPDATE berikutnya dengan `WHERE version=1` (sekarang basi karena sudah 2)
+  -> `rowCount=0`.
+- UPDATE dengan `SET status=..., version=999 WHERE version=2` (mencoba
+  melompat version secara sembarang) -> berhasil (version WHERE cocok),
+  TAPI hasil akhir `version=3` (bukan 999) - trigger meng-override lompatan
+  itu kembali ke `OLD.version+1`.
+
+Pola yang sama (auto-increment + override, tanpa proof dua-koneksi
+terpisah lagi supaya runtime test wajar) diulang untuk `GiliranKasir` dan
+`Promo` sebagai representasi lintas domain kasir/marketing.
+
+### 4. Regresi ditemukan + diperbaiki saat re-run SELURUH suite
+
+Setelah migrasi diterapkan, menjalankan ulang SELURUH test-support (bukan
+hanya test baru) menemukan 3 file gagal:
+
+```
+=== actor-keanggotaan-tenant-outlet-invariants.test.ts ===
+error: null value in column "updatedAt" of relation "stok_opname" violates not-null constraint
+=== ledger-reversal-membalik-invariants.test.ts ===
+(gagal serupa pada INSERT keanggotaan)
+=== uang-bigint-overflow.test.ts ===
+(gagal serupa - transient, hilang setelah perbaikan di atas diterapkan)
+```
+
+Diperbaiki dengan menambahkan `"updatedAt"` eksplisit (`now()`) ke 3 lokasi
+`INSERT` mentah (`_pg-helper.ts` `createKeanggotaanFixtures`,
+`actor-keanggotaan-tenant-outlet-invariants.test.ts` x2 untuk
+`stok_opname`, `ledger-reversal-membalik-invariants.test.ts` untuk
+`keanggotaan`). Setelah perbaikan, seluruh 3 file lulus kembali.
+
+### 5. Fresh-database redeploy (DROP+CREATE dari kosong, 8 migrasi)
+
+```
+$ psql -U icat -h localhost -d postgres -c "DROP DATABASE altora_resto_dev;"
+DROP DATABASE
+$ psql -U icat -h localhost -d postgres -c "CREATE DATABASE altora_resto_dev;"
+CREATE DATABASE
+$ npx prisma migrate deploy --schema prisma/schema/schema.prisma
+8 migrations found in prisma/migrations
+Applying migration `20260725154045_baseline_correction_loop`
+Applying migration `20260725154310_harden_manual_invariants`
+Applying migration `20260726084007_migrasi_uang_int_ke_bigint`
+Applying migration `20260726084323_migrasi_uang_int_ke_bigint_lanjutan`
+Applying migration `20260726085206_migrasi_uang_int_ke_bigint_ambang_opname`
+Applying migration `20260726090000_redesign_ledger_reversal_membalik_pattern`
+Applying migration `20260726100000_actor_tenant_outlet_scoped`
+Applying migration `20260726110000_optimistic_locking_version`
+All migrations have been successfully applied.
+
+$ psql -U icat -h localhost -d altora_resto_dev -t -c "select count(*) from information_schema.tables where table_schema='public';"
+   134
+$ psql -U icat -h localhost -d altora_resto_dev -t -c "select count(*) from pg_trigger where tgname like 'trg_%bump_version%';"
+    13
+```
+
+134 tabel - IDENTIK dengan jumlah sebelum batch ini (schema-only ADD COLUMN,
+tidak menambah/menghapus tabel). 13 trigger bump-version terpasang.
+
+### 6. Seluruh test (29 file: 7 database-integration + 22 architecture) - SETELAH redeploy fresh
+
+```
+architecture: 22 / 22 passed
+database-integration: 7 / 7 passed
+```
+
+Naik dari 28 file (6 database-integration + 22 architecture) pada baseline
+sebelum batch ini - 1 file test baru (`optimistic-locking-version-
+invariants.test.ts`), 0 file dihapus. Seluruhnya lulus tanpa pengecualian.
+
+### 7. Pemeriksaan versioning ad-hoc lama (Step 5 instruksi)
+
+Grep menyeluruh `prisma/schema/schema.prisma` untuk kolom `version`/
+timestamp-staleness-check pra-existing pada 13 model target SEBELUM batch
+ini ditulis: **tidak ditemukan satu pun** mekanisme versioning/staleness
+ad-hoc lama pada kesepuluh-tiga model tersebut (satu-satunya kemunculan
+kata "versi" terkait di schema adalah `VersiResep`/`versi_resep` - itu
+adalah ENTITAS "versi resep" domain kuliner, konsep yang sama sekali
+berbeda dari version counter concurrency control, bukan sesuatu yang perlu
+disupersede). Tidak ada defect baru yang perlu dicatat untuk item ini -
+dilaporkan jujur sebagai "tidak ditemukan", bukan diam-diam dilewati.

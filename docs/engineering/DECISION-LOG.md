@@ -3352,3 +3352,171 @@ ADR-034 ini murni MENGAMANDEMEN bagian "disimpan sebagai `Int`" menjadi
 "disimpan sebagai `BigInt`" untuk field yang teridentifikasi di atas -
 keduanya dipertahankan di log ini untuk jejak sejarah keputusan sesuai
 konvensi ADR/DECISION-LOG proyek ini.
+
+## ADR-035: Optimistic locking (`version`/`updatedAt`) pada aggregate root + trigger auto-increment generik
+
+**Konteks.** Sebelum batch ini, TIDAK SATU PUN model di schema ini punya
+mekanisme deteksi konflik konkurensi apa pun - dua penulis konkuren ke baris
+yang sama akan silently last-write-wins saling menimpa tanpa terdeteksi.
+Kategori C `INVARIAN-BELUM-DITEGAKKAN.md` sudah mencatat ini eksplisit sejak
+awal ("optimistic concurrency ... belum ada di schema sama sekali ... scope
+batch deep-correction-loop berikutnya"). Batch ini adalah batch tersebut.
+Instruksi eksplisit: tambahkan `version`/`updatedAt` ke 10 model minimum,
+lalu rancang penegakan DB-level yang REAL (bukan sekadar kolom dekoratif
+yang aplikasi "diharapkan" memakainya dengan benar).
+
+**Keputusan 1 - Daftar model: 10 minimum + 3 tambahan, dengan rasional
+konkret per penambahan (bukan stempel mekanis).**
+
+10 model minimum (persis seperti instruksi): `Pesanan`, `Pembayaran`,
+`GiliranKasir`, `TransferStok`, `StokOpname`, `PurchaseOrder`, `Promo`,
+`Keanggotaan`, `JadwalKerja`, `Reservasi`.
+
+3 model TAMBAHAN, masing-masing dengan skenario concurrent-write konkret
+yang TIDAK dicakup daftar minimum:
+- **`Absensi`** - baris presensi bisa diedit KONKUREN oleh dua jalur
+  berbeda: device presensi karyawan yang menulis `jamPulang`/
+  `jamPulangEfektif` saat checkout, DAN supervisor yang melakukan koreksi
+  manual (`KoreksiAbsensi` disetujui, menulis balik ke
+  `jamMasukEfektif`/`jamPulangEfektif` baris `Absensi` yang SAMA) - dua
+  penulis yang secara wajar terjadi berdekatan waktu pada baris yang sama.
+- **`StokBahan`** - baris cache saldo gudang ini SECARA EKSPLISIT sudah
+  diidentifikasi (`INV-016` di `INVARIAN-BELUM-DITEGAKKAN.md`) sebagai
+  korban race condition baca-lalu-tulis dari mutasi stok konkuren ("dua
+  mutasi keluar bersamaan lolos validasi karena baca-lalu-tulis tanpa
+  lock"). `version` di sini adalah lapisan TAMBAHAN yang MELENGKAPI
+  (bukan menggantikan) rencana `SELECT ... FOR UPDATE` yang sudah dicatat
+  di baris invariant tersebut.
+- **`PermintaanPersetujuan`** - dua supervisor bisa menyetujui/menolak
+  permintaan approval yang SAMA secara bersamaan ("double-approval race")
+  - tanpa version, keduanya bisa "berhasil" menulis keputusan berbeda pada
+  baris yang sama tanpa satu pun terdeteksi menimpa yang lain.
+
+**Model yang SENGAJA TIDAK ditambah, dengan rasional eksplisit (bukan
+kelalaian):**
+- **`KonfigurasiQris`** - race "aktifkan konfigurasi QRIS baru" SUDAH
+  dijamin STRUKTURAL oleh partial unique index
+  `konfigurasi_qris_satu_aktif_per_outlet` (`INV-001`, `DITUTUP`) - dua
+  request "aktifkan konfigurasi X" konkuren akan salah satunya ditolak
+  Postgres pada level constraint, terlepas dari version apa pun.
+  Menambahkan `version` di sini adalah proteksi berlapis TANPA skenario
+  konkret baru yang belum tercakup - persis kasus yang instruksi minta
+  untuk TIDAK dilakukan mekanis.
+- **`MutasiStok`/`PoinRiwayat`/`LedgerStempel`/`LedgerSaldoToko` (keempat
+  ledger append-only, ADR-032)** - baris di keempat tabel ini TIDAK PERNAH
+  di-`UPDATE` sama sekali (trigger `ledger_tolak_ubah` menolak SEMUA
+  `UPDATE` tanpa pengecualian). Konsep "version yang naik saat `UPDATE`"
+  tidak bermakna untuk tabel yang baris-barisnya immutable sejak
+  di-`INSERT` - append-only dan optimistic locking menyelesaikan masalah
+  yang berbeda (yang pertama mencegah PERUBAHAN sejarah, yang kedua
+  mencegah PENIMPAAN diam-diam antar penulis konkuren pada baris yang
+  MEMANG boleh berubah).
+
+Total: **13 model** (`Pesanan`, `Pembayaran`, `GiliranKasir`, `TransferStok`,
+`StokOpname`, `PurchaseOrder`, `Promo`, `Keanggotaan`, `JadwalKerja`,
+`Reservasi`, `Absensi`, `StokBahan`, `PermintaanPersetujuan`) - dalam rentang
+"2-4 tambahan" yang diminta instruksi (3 ditambahkan).
+
+**Keputusan 2 - Trigger generik `optimistic_lock_bump_version()`, dipasang
+SEBAGAI SATU FUNGSI di seluruh 13 tabel (mengikuti filosofi "fungsi generik
+dipakai ulang lintas tabel" dari `ledger_tolak_ubah`/`ledger_validasi_pembalik`,
+ADR-032).**
+
+Desain fungsi (`BEFORE UPDATE ... FOR EACH ROW`):
+
+```sql
+CREATE FUNCTION optimistic_lock_bump_version()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW."version" := OLD."version" + 1;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+Mekanisme dan pembagian tanggung jawab (INI BAGIAN PALING PENTING untuk
+dipahami dengan benar):
+- **Trigger MENGAMBIL ALIH PENUH kolom `version`** - apa pun yang dikirim
+  aplikasi sebagai `NEW.version` (termasuk bila TIDAK dikirim sama sekali,
+  atau dikirim sebagai lompatan sembarang seperti `999`, atau bahkan
+  `-1`) DIABAIKAN SEPENUHNYA dan di-override menjadi `OLD.version + 1`.
+  Ini BUKAN validasi yang bisa gagal (tidak ada `RAISE EXCEPTION` di
+  fungsi ini) - override diam-diam dipilih dibanding REJECT keras karena
+  aplikasi TIDAK PERNAH punya alasan sah untuk men-set `version` secara
+  manual; override membuat perilaku itu aman-secara-default tanpa
+  memaksa SETIAP caller (termasuk ORM yang menulis ulang seluruh kolom,
+  atau operator lewat `psql`) untuk secara sadar menghindari klausa
+  `SET version = ...`.
+- **Deteksi konflik konkurensi TETAP SEPENUHNYA di klausa `WHERE version =
+  expectedVersion` pada `UPDATE` aplikasi itu sendiri** - trigger ini SAMA
+  SEKALI TIDAK menggantikan tanggung jawab itu. `WHERE version =
+  expectedVersion` yang tidak match secara alami menghasilkan `0` baris
+  ter-`UPDATE` di SQL standar (tidak butuh logika trigger APA PUN untuk
+  ini - ini murni bagaimana `WHERE` bekerja). Yang dijamin trigger HANYA:
+  angka `version` yang dibaca aplikasi berikutnya benar-benar jujur
+  mencerminkan "berapa kali baris ini sudah pernah di-`UPDATE`", bukan
+  angka yang bisa dipalsukan/dilewati oleh kode caller yang lupa atau
+  sengaja menaikkannya secara salah.
+- Konsekuensi gabungan: `command` app-level TIDAK PERNAH perlu (dan TIDAK
+  BOLEH) menyertakan logika "naikkan version" sendiri - cukup baca
+  `version` saat ini, kirim balik sebagai `expectedVersion` di command,
+  dan tulis dengan `WHERE id = ? AND version = expectedVersion`. Trigger
+  menjamin sisi "version selalu benar", aplikasi menjamin sisi "tulis
+  hanya bila version masih seperti yang dibaca".
+
+**Keputusan 3 - `KONFLIK_DATA` sebagai kode error API baru, dan
+`Idempotency-Key` TIDAK menggantikan optimistic locking.** Didokumentasikan
+penuh di `docs/api/API-CONTRACT.md` bagian 1b (kontrak lintas-endpoint,
+bukan per-endpoint) - ringkasan keputusan intinya: idempotency menjawab
+"request YANG SAMA yang diulang tidak boleh diterapkan dua kali" (kunci:
+identitas request), optimistic locking menjawab "dua request BERBEDA yang
+sama-sama membaca versi lama tidak boleh saling menimpa diam-diam" (kunci:
+versi data yang dibaca) - keduanya independen, bisa dan seharusnya
+digunakan BERSAMAAN pada endpoint yang sama, bukan salah satu dianggap
+cukup menggantikan yang lain.
+
+**Keputusan 4 - Migrasi `20260726110000_optimistic_locking_version`
+diterapkan dengan cara yang SAMA seperti batch-batch sebelumnya**
+(`prisma migrate dev` diblokir non-interaktif di lingkungan ini): `prisma
+migrate diff --from-schema-datasource --to-schema-datamodel --script`
+menghasilkan `ALTER TABLE ... ADD COLUMN` murni (seluruh 13 tabel
+dikonfirmasi 0 baris di `altora_resto_dev` sebelum migrasi ditulis, jadi
+`updatedAt TIMESTAMP(3) NOT NULL` tanpa default aman tanpa backfill),
+ditambah bagian trigger generik yang ditulis manual mengikuti migrasi SQL
+yang sudah dihasilkan Prisma, diterapkan lewat `psql`, dicatat resmi lewat
+`prisma migrate resolve --applied`. Diverifikasi: `prisma migrate status`
+melaporkan "up to date", dan redeploy dari `DROP DATABASE`+`CREATE DATABASE`
+kosong menerapkan seluruh 8 migrasi berurutan tanpa error menghasilkan 134
+tabel yang sama dan 13 trigger `trg_*_bump_version` - lihat
+`RELEASE-EVIDENCE.md`.
+
+**Keputusan 5 - Regresi ditemukan dan diperbaiki saat menjalankan ulang
+SELURUH suite test-support setelah migrasi diterapkan (bukan hanya test
+baru).** Tiga file fixture lama (`_pg-helper.ts` fungsi
+`createKeanggotaanFixtures`, `actor-keanggotaan-tenant-outlet-invariants.test.ts`
+untuk `stok_opname`, `ledger-reversal-membalik-invariants.test.ts` untuk
+`keanggotaan`) melakukan `INSERT` mentah ke tabel yang SEKARANG mewajibkan
+kolom `updatedAt` (`NOT NULL`, tanpa default di level SQL - `@updatedAt`
+Prisma murni ditegakkan oleh Prisma Client, bukan oleh Postgres) tanpa
+menyertakannya - `INSERT` itu gagal dengan
+`null value in column "updatedAt" violates not-null constraint`. Diperbaiki
+dengan menambahkan `"updatedAt"` eksplisit (`now()`) ke ketiga `INSERT`
+tersebut, mengikuti konvensi yang SUDAH dipakai test lain (mis.
+`qris-konfigurasi-invariant.test.ts`) yang selalu menyertakan
+`createdAt`/`updatedAt` eksplisit di fixture raw-SQL. Pelajaran proses:
+menambah kolom `NOT NULL` tanpa default ke tabel yang SUDAH punya banyak
+fixture raw-SQL di test lain WAJIB diverifikasi dengan menjalankan ULANG
+SELURUH suite (bukan hanya test baru) sebelum migrasi dianggap aman -
+persis yang dilakukan di sini, ditemukan 3 file terdampak, seluruhnya
+diperbaiki, seluruh 29 file (naik dari 28) lulus setelahnya.
+
+**Status.** Kategori C `INVARIAN-BELUM-DITEGAKKAN.md` diperbarui dengan
+`INV-048` (kategori A - migrasi resmi, trigger generik terpasang dan
+teruji) untuk mekanisme version itu sendiri; catatan "belum ada optimistic
+concurrency di schema sama sekali" pada baris `INV-015` s.d. `INV-024`/
+`INV-045`/`INV-046` TIDAK dicabut - baris-baris itu tetap butuh guard
+transaksi/`SELECT FOR UPDATE` app-level TERPISAH untuk domain masing-masing
+(version melengkapi, bukan menggantikan, guard-guard tersebut sesuai
+Keputusan 1 di atas untuk `StokBahan`). Tidak ada kode handler command yang
+ditulis pada batch ini - murni schema, trigger, dan dokumentasi kontrak
+untuk diikuti batch implementasi mendatang.

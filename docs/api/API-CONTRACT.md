@@ -39,7 +39,12 @@ adalah rancangan kontrak, bukan API yang sudah berjalan. Lihat
 - Kode status HTTP: `200` OK, `201` Created, `400` validasi gagal, `401` tidak
   terautentikasi, `403` tidak punya permission (lihat
   `docs/keamanan/PERMISSION-MATRIX.md`), `404` tidak ditemukan, `409` konflik state
-  (mis. transisi status tidak valid), `422` bisnis-rule gagal, `500` galat server.
+  (mis. transisi status tidak valid, atau `KONFLIK_DATA` - lihat bagian 1b),
+  `422` bisnis-rule gagal, `500` galat server.
+- Kode error standar tambahan (lintas-endpoint, lihat bagian 1b): **`KONFLIK_DATA`**
+  - baris yang ditulis sudah diubah oleh permintaan lain sejak terakhir dibaca;
+    klien wajib re-fetch dan retry. Berlaku pada seluruh endpoint mutasi 13 model
+    aggregate root ber-`version` (ADR-035).
 
 ## 1a. Serialisasi uang sebagai string (ADR-034, `Int`→`BigInt`)
 
@@ -120,6 +125,114 @@ total akhir yang menentukan jumlah tagihan) - klien hanya menampilkan nilai
 yang sudah dihitung server; kalkulasi klien-side (jika ada, mis. preview UI
 sebelum submit) harus memakai `BigInt` JS native juga, tidak pernah
 `number`/floating point.
+
+## 1b. Optimistic locking: `expectedVersion` dan `KONFLIK_DATA` (ADR-035)
+
+Sejak ADR-035 (`docs/engineering/DECISION-LOG.md`), 13 model aggregate root
+(`Pesanan`, `Pembayaran`, `GiliranKasir`, `TransferStok`, `StokOpname`,
+`PurchaseOrder`, `Promo`, `Keanggotaan`, `JadwalKerja`, `Reservasi`,
+`Absensi`, `StokBahan`, `PermintaanPersetujuan`) punya kolom `version Int
+@default(1)` yang dijamin database naik TEPAT 1 pada setiap `UPDATE` lewat
+trigger generik `optimistic_lock_bump_version()` (lihat migrasi
+`20260726110000_optimistic_locking_version`). Ini adalah kontrak
+**LINTAS-ENDPOINT** (cross-cutting), bukan sesuatu yang didokumentasikan
+per-endpoint satu-satu - **belum ada handler API sungguhan di repo ini**
+(batch ADR-035 murni schema+migrasi+trigger+dokumentasi kontrak), jadi
+bagian ini adalah kontrak WAJIB untuk SETIAP endpoint mutasi (`PATCH`/`PUT`/
+aksi transisi status) pada kesepuluh-tiga model di atas, untuk diikuti batch
+implementasi handler mendatang.
+
+**(a) Setiap command mutasi WAJIB membawa `expectedVersion`.** Body request
+untuk endpoint yang meng-update salah satu dari 13 model di atas wajib
+menyertakan field `expectedVersion` (integer, versi yang dibaca klien saat
+GET/list terakhir kali), sejajar dengan field-field lain yang diubah:
+
+```json
+{
+  "status": "DITERIMA",
+  "expectedVersion": 4
+}
+```
+
+**(b) Handler WAJIB meng-update dengan `WHERE id = ? AND version =
+expectedVersion`.** Bukan `WHERE id = ?` saja. Contoh pola Prisma yang
+BENAR (ilustrasi kontrak, BUKAN kode yang sudah berjalan):
+
+```ts
+const hasil = await prisma.pesanan.updateMany({
+  where: { id: pesananId, version: expectedVersion },
+  data: { status: "DITERIMA" }, // TIDAK PERNAH menyertakan `version` di data -
+                                  // trigger yang menaikkannya, bukan aplikasi.
+});
+if (hasil.count === 0) {
+  // baris tidak ditemukan ATAU version sudah berubah sejak dibaca klien -
+  // handler WAJIB membedakan kedua kasus dengan SELECT terpisah sebelum
+  // memutuskan 404 vs 409 (lihat (c)).
+}
+```
+
+`updateMany` (bukan `update`) dipakai secara sengaja di ilustrasi ini karena
+`prisma.model.update({ where: { id } })` di Prisma Client akan melempar
+`P2025` bila `id` tidak ditemukan, tapi TIDAK punya cara native menyatakan
+"ditemukan tapi `version` tidak cocok, affected 0 baris" - `updateMany`
+dengan `where` gabungan `id` + `version` dan memeriksa `count` adalah pola
+yang benar-benar merepresentasikan conditional-update SQL murni
+(`WHERE id = ? AND version = ?`) yang menjadi crux mekanisme ini.
+
+**(c) Bila `expectedVersion` tidak cocok: respons `409` dengan kode error
+baru `KONFLIK_DATA`.**
+
+```json
+{
+  "error": {
+    "kode": "KONFLIK_DATA",
+    "pesan": "Data ini sudah diubah oleh permintaan lain sejak terakhir Anda baca. Muat ulang data terbaru lalu coba lagi.",
+    "detail": { "id": "01J9...", "expectedVersion": 4, "versionSaatIni": 6 }
+  }
+}
+```
+
+**Arti `KONFLIK_DATA` secara presisi: baris ini sudah diubah oleh request
+LAIN sejak terakhir kali klien membacanya; klien WAJIB mengambil ulang
+(`GET`) data terbaru sebelum mencoba menulis lagi** - BUKAN error validasi
+(`400`), BUKAN "tidak ditemukan" (`404`, yang tetap dipakai bila baris
+benar-benar tidak ada), dan BUKAN bisnis-rule gagal (`422`). Ditambahkan ke
+daftar kode error standar di bagian 1 di atas, berlaku SERAGAM untuk seluruh
+13 model di atas - bukan kode error yang didefinisikan ulang berbeda-beda
+per domain.
+
+**(d) `Idempotency-Key` (bagian 17) TIDAK menggantikan optimistic locking -
+keduanya menyelesaikan masalah yang BERBEDA:**
+
+- **Idempotency** menjawab: "request YANG SAMA (network retry klien yang
+  sama, mis. tombol disubmit dua kali atau timeout lalu klien retry
+  otomatis) tidak boleh diterapkan dua kali." Kuncinya adalah *identitas
+  request* (`Idempotency-Key` yang sama = permintaan yang sama, walau
+  datang lewat koneksi HTTP terpisah) - solusinya adalah menyimpan/
+  mengembalikan hasil eksekusi pertama untuk key yang sama, TANPA peduli
+  apakah data yang mendasarinya berubah di antara percobaan.
+- **Optimistic locking** menjawab: "dua request BERBEDA (dua pengguna,
+  atau dua tab/perangkat pengguna yang sama) yang SAMA-SAMA membaca versi
+  lama data sebelum salah satu menulis, tidak boleh saling menimpa diam-diam
+  (last-write-wins)." Kuncinya adalah *versi data yang dibaca* - solusinya
+  adalah menolak (0 baris ter-`UPDATE`, `409 KONFLIK_DATA`) percobaan tulis
+  yang berdiri di atas bacaan basi, TERLEPAS dari apakah kedua request itu
+  identik atau sama sekali berbeda isinya.
+
+Keduanya independen dan BISA terjadi bersamaan pada request yang sama:
+sebuah `PATCH` bisa membawa `Idempotency-Key` (mencegah efek ganda bila
+klien retry request YANG SAMA) **dan** `expectedVersion` (mencegah
+menimpa perubahan pihak LAIN yang terjadi di antara baca dan tulis klien
+ini) - keduanya wajib dievaluasi, bukan saling menggantikan salah satu.
+Contoh kegagalan bila salah satunya diasumsikan cukup sendirian: idempotency
+key SAJA tidak mencegah race antara dua PENGGUNA berbeda yang mengedit baris
+yang sama secara konkuren (idempotency key mereka BERBEDA, jadi keduanya
+lolos idempotency check, tapi salah satunya harus tetap ditolak oleh version
+check); version check SAJA tidak mencegah efek ganda dari SATU klien yang
+retry request identik berkali-kali sebelum server sempat menaikkan version
+(tanpa idempotency key, retry itu masing-masing dianggap "permintaan
+baru yang sah" oleh version check, karena version-nya memang masih cocok
+pada percobaan retry pertama).
 
 ## 2. Autentikasi & Sesi (`packages/autentikasi`)
 
