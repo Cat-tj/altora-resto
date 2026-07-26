@@ -1784,6 +1784,9 @@ model MutasiStok {
   transferBarisKeluar TransferStokBaris[] @relation("TransferBarisMutasiKeluar")
   transferBarisMasuk  TransferStokBaris[] @relation("TransferBarisMutasiMasuk")
   opnameBarisKoreksi  StokOpnameBaris?
+  // ADR-037: sisi kebalikan dari ReservasiStok.mutasiStok - reservasi (bila
+  // ada) yang DITUTUP oleh baris mutasi PEMAKAIAN_RESEP ini.
+  reservasiDikonsumsi ReservasiStok?
 
   // ALT-DEF-008: agar PenyesuaianStok/CatatanWaste/TransferStokBaris/
   // StokOpnameBaris bisa memakai composite-FK (tenantId, mutasiStokId).
@@ -1850,15 +1853,45 @@ model BatchStok {
   @@map("batch_stok")
 }
 
-// ALT-DEF-008/ALT-PSD-008/ALT-PSD-009 (ADR-024 Keputusan 2): reservasi stok.
-// Reservasi mengurangi stok TERSEDIA tanpa menyentuh stok FISIK - ia BUKAN
-// mutasi dan SENGAJA tidak menulis baris `MutasiStok`. Barulah saat
-// DIKONSUMSI, satu mutasi `PEMAKAIAN_RESEP` ditulis.
+// ALT-DEF-008/ALT-PSD-008/ALT-PSD-009 (ADR-024 Keputusan 2, LINKAGE ADR-037):
+// reservasi stok. Reservasi mengurangi stok TERSEDIA tanpa menyentuh stok
+// FISIK - ia BUKAN mutasi dan SENGAJA tidak menulis baris `MutasiStok` saat
+// AKTIF. Barulah saat DIKONSUMSI, satu mutasi `PEMAKAIAN_RESEP` ditulis DAN
+// ditautkan lewat `mutasiStokId` (ADR-037) - lihat aturan tunggal siklus hidup
+// stok di ADR-037: DITERIMA membuat baris ini, DIKIRIM_KE_DAPUR (tiket dapur
+// dibuat/diterima dapur) melepasnya jadi DIKONSUMSI + menulis MutasiStok,
+// DIBATALKAN sebelum produksi melepasnya jadi DILEPAS tanpa mutasi apa pun.
+//
+// `@@unique([itemPesananId])` (ADR-037, idempotency): SATU baris pesanan
+// paling banyak PERNAH punya SATU reservasi sepanjang hidupnya - mencegah
+// command "buat reservasi" yang dijalankan ulang (retry/idempotency key
+// gagal, double-submit) dari diam-diam membuat reservasi kedua untuk item
+// yang sama. Ini JUGA berarti satu ItemPesanan tidak bisa direservasi ulang
+// setelah DILEPAS/KEDALUWARSA - keputusan SADAR: re-reservasi (mis. pesanan
+// dibuka kembali) harus membuat ItemPesanan/Pesanan baru, bukan menulis ulang
+// baris reservasi lama. Bila kelak dibutuhkan re-reservasi atas baris yang
+// sama, itu perubahan skema terpisah dengan pertimbangan sendiri.
+//
+// `mutasiStokId String? @unique` (ADR-037): tautan eksplisit dari reservasi
+// ke MUTASI PERSIS yang mengonsumsinya - sebelumnya hubungan ini implisit
+// (harus di-infer dari `referensiJenis/referensiId` di MutasiStok, yang
+// menunjuk ItemPesanan, bukan baris reservasi spesifik). Nullable karena
+// hanya terisi saat status = DIKONSUMSI. `@unique` mencegah SATU mutasi
+// dipakai untuk menutup DUA reservasi berbeda. Immutability (reservasi yang
+// SUDAH dikonsumsi tidak boleh ditautkan ulang ke mutasi lain) BUKAN sesuatu
+// yang bisa dinyatakan Prisma DSL (butuh baca OLD vs NEW pada UPDATE) -
+// ditegakkan trigger `trg_reservasi_stok_kunci_konsumsi` (lihat migrasi
+// ADR-037).
 //
 // INVARIANT LEVEL-APLIKASI (tidak bisa diekspresikan Prisma - ia invariant
-// SUM lintas-baris): SUM(jumlah) atas reservasi AKTIF untuk satu bahan di satu
-// gudang tidak boleh melebihi saldo fisik bahan tsb. Penegakannya adalah guard
-// transaksi + SELECT ... FOR UPDATE pada baris StokBahan.
+// SUM lintas-baris, TETAP app-level, lihat INV-015/016 di
+// INVARIAN-BELUM-DITEGAKKAN.md): SUM(jumlah) atas reservasi AKTIF untuk satu
+// bahan di satu gudang tidak boleh melebihi saldo fisik bahan tsb.
+// Penegakannya adalah guard transaksi + `SELECT ... FOR UPDATE` pada baris
+// StokBahan - lihat rasional row-lock-vs-optimistic di ADR-037 (StokBahan
+// SUDAH punya `version`/ADR-035 untuk update konkuren biasa, tapi kontensi
+// TINGGI pada item populer/stok terbatas butuh `SELECT ... FOR UPDATE`
+// pesimistik, bukan optimistic retry, untuk menghindari thundering herd).
 model ReservasiStok {
   id              String              @id
   tenantId        String
@@ -1873,6 +1906,9 @@ model ReservasiStok {
   kedaluwarsaPada DateTime?
   createdAt       DateTime            @default(now())
   dilepasPada     DateTime?
+  // ADR-037: baris MutasiStok(jenis=PEMAKAIAN_RESEP) yang menutup reservasi
+  // ini. Terisi HANYA saat status berubah jadi DIKONSUMSI, sekali, permanen.
+  mutasiStokId    String?             @unique
 
   tenant      Tenant      @relation(fields: [tenantId], references: [id])
   outlet      Outlet      @relation(fields: [tenantId, outletId], references: [tenantId, id])
@@ -1881,7 +1917,16 @@ model ReservasiStok {
   // FK ID tunggal: ItemPesanan tidak membawa tenantId sendiri (baris di bawah
   // Pesanan, ADR-013) - konsisten dengan ItemPesanan.resepVersi (ADR-022 K7).
   itemPesanan ItemPesanan @relation(fields: [itemPesananId], references: [id])
+  // ADR-037: composite-FK (tenantId, mutasiStokId) -> MutasiStok(tenantId, id),
+  // pola sama seperti PenyesuaianStok.mutasiStok/CatatanWaste.mutasiStok.
+  mutasiStok  MutasiStok? @relation(fields: [tenantId, mutasiStokId], references: [tenantId, id])
 
+  // ADR-037: idempotency - satu ItemPesanan paling banyak SATU reservasi
+  // sepanjang hidupnya (lihat catatan di atas model).
+  @@unique([itemPesananId])
+  // Prisma mewajibkan unique yang mencakup seluruh field composite pada FK
+  // 1-1 opsional ini (pola sama seperti PenyesuaianStok/CatatanWaste).
+  @@unique([tenantId, mutasiStokId])
   @@index([tenantId, bahanId, status])
   @@index([itemPesananId, status])
   @@map("reservasi_stok")
