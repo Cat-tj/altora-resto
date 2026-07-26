@@ -4389,3 +4389,119 @@ handler/endpoint `GET /api/v1/notifikasi` dan `POST
 /api/v1/notifikasi/{id}/read` yang benar-benar menjalankan predikat di
 Keputusan 4 - scope batch ini murni schema+migrasi+dokumentasi+test
 integrasi struktural, sama seperti seluruh batch platform sejak ADR-016.
+
+---
+
+## ADR-041: Batch konsolidasi audit cakupan konkurensi - mengisi gap genuine, TIDAK menduplikasi cakupan yang sudah baik
+
+**Status:** DITERIMA
+
+**Konteks.** Instruksi correction-loop asli (section 14) mendaftar skenario
+test yang wajib ada di 5 kategori: Migrasi, Tenant, Concurrency, Ledger,
+State machine. Sembilan batch sebelumnya (ADR-032 s.d. ADR-040) sudah
+mencakup BANYAK dari daftar ini sebagai efek samping mengimplementasikan
+tiap fitur, tapi tidak pernah ada audit EKSPLISIT yang membaca ke-13 file
+`database-integration` yang sudah ada secara penuh dan mencocokkannya
+baris-per-baris terhadap daftar asli. Batch ini adalah audit itu, plus
+mengisi HANYA gap yang genuine (bukan menulis ulang test yang sudah baik).
+
+**Keputusan 1 - audit dulu, baru menulis test.** Seluruh 13 file
+`database-integration` dibaca penuh (bukan ditebak dari nama file) dan
+dicocokkan terhadap setiap baris daftar asli, menghasilkan
+`docs/engineering/AUDIT-CONCURRENCY-COVERAGE.md` dengan status ✅/⚠️/❌ per
+skenario dan kutipan fungsi test sebagai bukti. Hasil: sebagian besar
+skenario Migrasi/Tenant/Ledger/State-machine SUDAH ✅ (lihat dokumen audit),
+kategori Concurrency-lah yang punya gap paling nyata.
+
+**Keputusan 2 - 4 file test baru, scope sempit dan bertarget.**
+- `konkurensi-dua-koneksi-lanjutan.test.ts`: 6 skenario. TIGA proteksi yang
+  SUDAH ADA (version conflict generik ADR-035, unique-index reversal
+  ADR-032) diverifikasi ULANG secara spesifik pada tabel yang diminta
+  instruksi asli (`pembayaran`, `stok_opname`) dan dalam mode CONCURRENT
+  NYATA (dua koneksi `pg` fisik overlap, bukan sekuensial) untuk reversal
+  ledger - generalisasi dari test lain TIDAK diasumsikan, dibuktikan
+  ulang. TIGA gap NYATA ditemukan dan dibuktikan JUJUR (test yang
+  mendemonstrasikan race benar-benar terjadi, bukan diasumsikan lalu
+  dilewati) - lihat Keputusan 4.
+- `migrasi-idempoten-dan-drift.test.ts`: dua skenario Migrasi yang
+  sebelumnya HANYA dicek manual per-batch (dicatat naratif di
+  `RELEASE-EVIDENCE.md`) sekarang punya test otomatis: `migrate deploy`
+  dijalankan dua kali ke database yang sudah bermigrasi (harus no-op,
+  dibuktikan lewat checksum `_prisma_migrations` yang identik persis
+  sebelum/sesudah), dan `prisma migrate diff` (live database vs
+  schema.prisma) harus kosong (drift detection, BERBEDA dari `migrate
+  status` yang hanya melihat migration history).
+- `inventaris-trigger-constraint-lengkap.test.ts`: tripwire regresi
+  tunggal untuk 29 trigger bisnis + 4 CHECK constraint bernama + 14
+  index unique/partial bisnis-kritis, diekstrak lengkap dari seluruh
+  `prisma/schema/migrations/*.sql` (bukan sampel) - kalau migrasi masa
+  depan menghapus satu trigger secara tidak sengaja, test ini menangkapnya
+  walau test domain terkait kebetulan tidak dijalankan/diperbarui. Sengaja
+  TIDAK mendaftar ~139 unique index generik Prisma satu per satu - itu
+  sudah dijaga lebih murah oleh drift detection.
+- `tiket-dapur-order-ready-predikat.test.ts`: predikat "order ready" yang
+  didokumentasikan `STATE-MACHINES.md` sejak ADR-036 (`INV-055`) tapi tidak
+  pernah dijalankan terhadap data `TiketDapur` nyata - sekarang dibuktikan
+  dengan 6 skenario termasuk CRUX (tiket `DIBATALKAN` tidak menahan
+  kesiapan pesanan) dan vacuous-truth (pesanan tanpa tiket sama sekali).
+
+**Keputusan 3 - kasus "state machine transisi valid/invalid" dikonfirmasi
+sebagai legitimately untestable hari ini, bukan disamarkan.** Diperiksa
+langsung: tidak ada trigger DB yang menegakkan tabel transisi status
+Pesanan/Pembayaran/TiketDapur (grep menyeluruh atas migrasi, tidak
+ditemukan), dan tidak ada kode handler/command sama sekali di repo ini
+(dikonfirmasi berulang sejak ADR-036). Konsekuensinya, `UPDATE` SQL mentah
+bisa menyetel `status` ke enum value apa pun tanpa ditolak Postgres - ini
+BUKAN kelalaian test, tapi gap struktural yang sudah tercatat jujur di
+`INV-031` s.d. `INV-042` (kategori E). Tidak dibuat test palsu yang
+"lulus" untuk sesuatu yang sebenarnya tidak ditegakkan.
+
+**Keputusan 4 - tiga gap konkurensi genuine, dibuktikan jujur, dicatat
+sebagai defect baru, TIDAK diperbaiki pada batch ini.**
+- `ALT-DEF-051`: `Promo.usageQuota` (kuota total lintas semua pelanggan)
+  tidak ditegakkan sama sekali di layer manapun - dua `PromoPemakaian`
+  pesanan berbeda pada promo `usageQuota=1`, keduanya berhasil commit
+  konkuren, kuota over-consumed 2/1.
+- `ALT-DEF-052`: `ReservasiStok` tidak divalidasi terhadap saldo tersedia
+  (`StokBahan.kuantitas - kuantitasDireservasi`) saat INSERT - dua
+  reservasi item berbeda terhadap unit stok terakhir, keduanya berhasil
+  commit konkuren, over-reserved 2/1. Manifestasi konkret dari `INV-015`
+  yang sudah dikenal sejak lama sebagai risiko teoretis.
+- `ALT-DEF-053`: `SUM(AlokasiPembayaran)` lintas `Pembayaran` BERBEDA ke
+  satu `Pesanan` tidak dibandingkan `Pesanan.totalAkhir` - dua Pembayaran
+  berbeda over-alokasi ke satu Pesanan, keduanya tetap berhasil `DIBAYAR`.
+
+Ketiganya BUTUH DESAIN LEBIH LANJUT (trigger baru dengan locking eksplisit,
+atau `SELECT ... FOR UPDATE` pesimistik di service-layer yang belum ada
+kodenya) - lihat kolom "Rencana koreksi" masing-masing di
+`DEFECT-LEDGER.md`. Keputusan sadar: batch ini adalah audit+test, bukan
+batch fix-schema; mendorong perbaikan yang butuh desain matang ke batch
+implementasi mendatang lebih aman daripada tergesa-gesa menambal dengan
+trigger yang belum dipikirkan matang locking-nya sendiri (risiko
+memindahkan race ke dalam trigger itu sendiri, lihat catatan di
+`ALT-DEF-051`).
+
+**Keputusan 5 - relasi multi-parent tenant lintas-tenant: proof-by-construction,
+tidak ditambah test baru.** Diperiksa apakah composite-FK ADR-013 punya
+mekanisme yang BERVARIASI per model - tidak, seluruhnya mengikuti SATU pola
+generik (`@@unique([tenantId, id])` di parent + FK composite di child),
+Postgres menegakkannya sebagai FK biasa tanpa variasi mekanisme. 5 relasi
+yang sudah diverifikasi BEHAVIORAL di `actor-keanggotaan-tenant-outlet-invariants.test.ts`
+representatif secara mekanisme - menambah lebih banyak model dengan pola
+identik menambah runtime test tanpa menambah cakupan risiko baru.
+
+**Dampak test suite:** 13 -> 17 file `database-integration` (+4 baru,
+0 dihapus/diganti). Total 22 `architecture` + 17 `database-integration` = 39
+file, 39/39 lulus, diverifikasi baik pada database yang sudah berjalan lama
+maupun setelah `DROP DATABASE` + `CREATE DATABASE` + `migrate deploy` dari
+nol (fresh-database redeploy, lihat `RELEASE-EVIDENCE.md`).
+
+**Dampak dokumentasi:** `docs/engineering/AUDIT-CONCURRENCY-COVERAGE.md`
+(baru), `DEFECT-LEDGER.md` (+3 baris, ALT-DEF-051/052/053),
+`INVARIAN-BELUM-DITEGAKKAN.md` (+3 baris kategori C, INV-062/063/064, total
+63 -> 66).
+
+**Yang TETAP di luar cakupan batch ini:** perbaikan schema/trigger untuk
+ketiga gap `ALT-DEF-051/052/053` (butuh desain locking/trigger yang matang,
+didorong ke batch mendatang); CI setup (batch terpisah berikutnya, di luar
+scope eksplisit batch ini).

@@ -4136,3 +4136,135 @@ gap yang ditemukan (nama field instruksi asli vs desain yang benar secara
 semantik) diselesaikan LANGSUNG dalam desain batch ini sendiri (didokumentasikan
 sebagai keputusan desain di ADR-040), bukan defect terbuka yang menunggu
 batch lain.
+
+---
+
+## ADR-041: Batch konsolidasi audit cakupan konkurensi - bukti nyata
+
+Batch ini murni audit+test (tidak ada migrasi schema baru) - lihat
+`docs/engineering/AUDIT-CONCURRENCY-COVERAGE.md` untuk checklist ✅/⚠️/❌
+lengkap terhadap seluruh daftar skenario correction-loop asli, dan ADR-041 di
+`DECISION-LOG.md` untuk rasional keputusan.
+
+### 1. Empat file test baru dijalankan satu per satu (`npx tsx`, bukan `vitest run`)
+
+Catatan penting: seluruh file di `src/database-integration/` dan
+`src/architecture/` (termasuk 13 file lama) BUKAN suite `vitest`
+(`describe`/`it`) - masing-masing adalah skrip standalone dengan `main()`
+sendiri yang dijalankan lewat `npx tsx <file>` (dikonfirmasi ulang: `vitest
+run` terhadap direktori ini SELALU melaporkan "No test suite found" untuk
+SETIAP file, termasuk file lama yang sudah lulus berbatch-batch - ini
+konvensi repo yang sudah ada sejak awal, bukan regresi batch ini).
+
+```
+$ node_modules/.bin/tsx src/database-integration/inventaris-trigger-constraint-lengkap.test.ts
+  -> Seluruh 29 trigger bisnis buatan-tangan TERVERIFIKASI ada.
+  -> Seluruh 4 CHECK constraint bernama TERVERIFIKASI ada.
+  -> Seluruh 14 index unique/partial bisnis-kritis TERVERIFIKASI ada.
+OK: database-integration ADR-041 (inventaris konsolidasi 29 trigger + 4 CHECK constraint + 14 index bisnis-kritis - tripwire regresi tunggal) lulus.
+
+$ node_modules/.bin/tsx src/database-integration/migrasi-idempoten-dan-drift.test.ts
+  -> (1) "migrate deploy" dijalankan DUA KALI ke database yang sudah bermigrasi penuh (14 migrasi): KEDUANYA no-op, _prisma_migrations TIDAK BERUBAH sama sekali - MIGRASI KEDUA TIDAK MENGUBAH SCHEMA DIAM-DIAM.
+  -> (2) `prisma migrate diff` (live database <-> schema.prisma): KOSONG, tidak ada drift - PRISMA DRIFT DETECTION BERSIH.
+  -> (bonus) `prisma migrate status`: up to date - konsisten dengan (1) dan (2) di atas.
+OK: database-integration ADR-041 (migrate deploy kedua no-op verified via _prisma_migrations checksum stability + prisma migrate diff drift-detection bersih) lulus.
+
+$ node_modules/.bin/tsx src/database-integration/tiket-dapur-order-ready-predikat.test.ts
+OK: database-integration ADR-041 (predikat order-ready STATE-MACHINES.md dijalankan terhadap data TiketDapur nyata - tiket batal tidak membuat order macet, vacuous-truth terdokumentasi) lulus.
+
+$ node_modules/.bin/tsx src/database-integration/konkurensi-dua-koneksi-lanjutan.test.ts
+  -> (1) Dua konfirmasi Pembayaran bersamaan pada baris SAMA: version conflict TERDETEKSI (dua koneksi pg nyata) - PROTEKSI SUDAH ADA.
+  -> (2) Dua posting StokOpname bersamaan pada baris SAMA: version conflict TERDETEKSI (dua koneksi pg nyata) - PROTEKSI SUDAH ADA.
+  -> (3) Dua reversal ledger CONCURRENT (bukan sekuensial) ke baris asal SAMA: unique index membalikMutasiId TETAP menolak yang kalah - PROTEKSI SUDAH ADA.
+  -> (4) GAP NYATA (ALT-DEF-051): dua PromoPemakaian pesanan berbeda pada promo usageQuota=1 KEDUANYA berhasil commit (kuota over-consumed 2/1) - TIDAK ADA proteksi DB sama sekali.
+  -> (5) GAP NYATA (ALT-DEF-052): dua ReservasiStok item berbeda mengklaim unit stok terakhir yang SAMA, KEDUANYA berhasil commit (over-reserved 2 dari stok fisik 1) - TIDAK ADA proteksi DB saat INSERT reservasi.
+  -> (6) GAP NYATA (ALT-DEF-053): dua Pembayaran berbeda ke SATU Pesanan, total alokasi (40000) MELEBIHI totalAkhir (20000) - KEDUANYA tetap berhasil DIBAYAR, tidak ada proteksi jumlah.
+OK: database-integration ADR-041 (konsolidasi audit konkurensi - 3 proteksi terverifikasi ulang lewat dua-koneksi nyata + 3 gap nyata terdokumentasi ALT-DEF-051/052/053) lulus.
+```
+
+Ketiga gap (4)/(5)/(6) di atas adalah bukti nyata yang mendasari
+`ALT-DEF-051`/`ALT-DEF-052`/`ALT-DEF-053` di `DEFECT-LEDGER.md` dan
+`INV-062`/`INV-063`/`INV-064` di `INVARIAN-BELUM-DITEGAKKAN.md` - test ini
+dijalankan lulus SECARA SENGAJA membuktikan racenya terjadi (bukan
+mencegahnya), sesuai Keputusan 4 ADR-041.
+
+### 2. Full test suite (sebelum redeploy)
+
+```
+$ for f in src/database-integration/*.test.ts src/architecture/*.test.ts; do node_modules/.bin/tsx "$f"; done
+architecture: 22 passed, 0 failed
+database-integration: 17 passed, 0 failed
+tsc --noEmit -p packages/test-support: exit 0
+```
+
+Naik dari 35 file (22 architecture + 13 database-integration) sebelum batch
+ini menjadi 39 file (22 architecture + 17 database-integration) - empat file
+database-integration baru (`inventaris-trigger-constraint-lengkap.test.ts`,
+`konkurensi-dua-koneksi-lanjutan.test.ts`, `migrasi-idempoten-dan-drift.test.ts`,
+`tiket-dapur-order-ready-predikat.test.ts`).
+
+### 3. Redeploy fresh-database
+
+```
+$ psql -U icat -h localhost -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='altora_resto_dev' AND pid <> pg_backend_pid();"
+$ dropdb altora_resto_dev
+$ createdb altora_resto_dev
+$ npx prisma migrate deploy --schema=prisma/schema/schema.prisma
+... 14 migrations applied (baseline_correction_loop ... redesain_target_notifikasi) ...
+All migrations have been successfully applied.
+
+$ npx prisma validate --schema=prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+
+$ npx prisma migrate status --schema=prisma/schema/schema.prisma
+14 migrations found in prisma/migrations
+Database schema is up to date!
+```
+
+**Tidak ada migrasi baru** dibanding sebelum batch ini (masih 14 migrasi
+total) - mengonfirmasi batch ini murni audit+test, TIDAK ADA fix schema
+(sesuai Keputusan 4 ADR-041: ketiga gap konkurensi ditemukan didorong ke
+batch mendatang, bukan ditambal tergesa-gesa pada batch ini).
+
+Seluruh 39 file test (22 architecture + 17 database-integration) dijalankan
+ulang terhadap database fresh - SEMUA lulus lagi:
+
+```
+architecture fresh: 22 passed, 0 failed
+database-integration fresh: 17 passed, 0 failed
+```
+
+**Before/after batch ini:** SEBELUM = 35 file (22 architecture + 13
+database-integration), 35/35 passed. SESUDAH = 39 file (22 architecture +
+17 database-integration), 39/39 passed - baik sebelum maupun sesudah
+fresh-database redeploy.
+
+### 4. Traceability
+
+`INVARIAN-BELUM-DITEGAKKAN.md`: tiga baris baru kategori C (`INV-062`,
+`INV-063`, `INV-064`), masing-masing cross-ref satu defect baru di bawah.
+Total baris invariant naik dari 63 (sebelum batch ini) menjadi 66
+(kategori A=23, B=3, C=21, D=6, E=13).
+
+`DEFECT-LEDGER.md`: tiga defect baru, SEMUANYA `TINGGI`, SEMUANYA dibuktikan
+lewat test dua-koneksi nyata (bukan hipotesis) di
+`konkurensi-dua-koneksi-lanjutan.test.ts`:
+- `ALT-DEF-051` - `Promo.usageQuota` (kuota total lintas-pelanggan) tidak
+  ditegakkan sama sekali.
+- `ALT-DEF-052` - `ReservasiStok` tidak divalidasi terhadap saldo tersedia
+  saat INSERT (manifestasi konkret `INV-015`).
+- `ALT-DEF-053` - `SUM(AlokasiPembayaran)` lintas-`Pembayaran` ke satu
+  `Pesanan` tidak dibandingkan `totalAkhir`.
+
+Ketiganya berstatus "DIKONFIRMASI dengan bukti test nyata, belum diperbaiki
+(deferred)" - butuh desain locking/trigger lebih matang, didorong ke batch
+implementasi mendatang (lihat kolom "Rencana koreksi" masing-masing di
+`DEFECT-LEDGER.md`).
+
+`DECISION-LOG.md`: ADR-041 baru - audit lengkap 13 file database-integration
+lama terhadap daftar skenario asli, rasional 4 file test baru, dan
+keputusan sadar untuk TIDAK memperbaiki tiga gap konkurensi pada batch ini.
+
+`docs/engineering/AUDIT-CONCURRENCY-COVERAGE.md` (baru): checklist ✅/⚠️/❌
+lengkap per kategori (Migrasi, Tenant, Concurrency, Ledger, State machine)
+terhadap seluruh daftar skenario correction-loop asli.
