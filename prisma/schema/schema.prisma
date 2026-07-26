@@ -292,78 +292,23 @@ model Pengguna {
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
 
-  keanggotaanTenant               KeanggotaanTenant[]
-  sesi                            Sesi[]
-  tokenResetKataSandi             TokenResetKataSandi[]
-  riwayatPerangkat                RiwayatPerangkat[]
-  auditLog                        AuditLog[]
-  karyawan                        Karyawan?
-  giliranKasir                    GiliranKasir[]
-  purchaseOrderDibuat             PurchaseOrder[]           @relation("PoDibuatOleh")
-  penerimaanBarangDiterima        PenerimaanBarang[]        @relation("PenerimaanDiterimaOleh")
-  stokOpnameDibuat                StokOpname[]              @relation("OpnameDibuatOleh")
-  // ALT-DEF-008: aktor domain persediaan. Seluruhnya FK ID TUNGGAL ke
-  // Pengguna - identitas global, tidak pernah di-composite-kan ke tenant
-  // (ADR-013 poin 5).
-  stokOpnameDihitung              StokOpname[]              @relation("OpnameDihitungOleh")
-  stokOpnameDikunci               StokOpname[]              @relation("OpnameDikunciOleh")
-  stokOpnameDisetujui             StokOpname[]              @relation("OpnameDisetujuiOleh")
-  mutasiStokDibuat                MutasiStok[]              @relation("MutasiStokDibuatOleh")
-  penyesuaianStokDicatat          PenyesuaianStok[]         @relation("PenyesuaianStokDicatatOleh")
-  penyesuaianStokDisetujui        PenyesuaianStok[]         @relation("PenyesuaianStokDisetujuiOleh")
-  catatanWasteDicatat             CatatanWaste[]            @relation("CatatanWasteDicatatOleh")
-  catatanWasteDisetujui           CatatanWaste[]            @relation("CatatanWasteDisetujuiOleh")
-  transferStokDibuat              TransferStok[]            @relation("TransferStokDibuatOleh")
-  transferStokDisetujui           TransferStok[]            @relation("TransferStokDisetujuiOleh")
-  transferStokDikirim             TransferStok[]            @relation("TransferStokDikirimOleh")
-  transferStokDiterima            TransferStok[]            @relation("TransferStokDiterimaOleh")
-  pesananDibuat                   Pesanan[]                 @relation("PesananDibuatOleh")
-  pesananRiwayatStatusDiubah      PesananRiwayatStatus[]    @relation("RiwayatStatusDiubahOleh")
-  // ALT-DEF-005/ALT-PES-010/ALT-PES-011: pengguna yang melakukan
-  // perubahan/penolakan/pembatalan pesanan - lihat model PesananPerubahan/
-  // PesananPenolakan/PesananPembatalan di bagian 7 (Pesanan).
-  pesananPerubahanDiubah          PesananPerubahan[]        @relation("PesananPerubahanDiubahOleh")
-  pesananPenolakanDitolak         PesananPenolakan[]        @relation("PesananPenolakanDitolakOleh")
-  pesananPembatalanDibatalkan     PesananPembatalan[]       @relation("PesananPembatalanDibatalkanOleh")
-  pembayaranDikonfirmasi          Pembayaran[]              @relation("PembayaranDikonfirmasiOleh")
-  // ALT-DEF-007/ALT-RSP-009: pembuat proses produksi.
-  prosesProduksiDibuat            ProsesProduksi[]          @relation("ProsesProduksiDibuatOleh")
-  qrisKonfirmasiDiverifikasi      QrisKonfirmasiManual[]    @relation("QrisDiverifikasiOleh")
-  pembayaranRefundDisetujui       PembayaranRefund[]        @relation("RefundDisetujuiOleh")
-  // ALT-DEF-014/ALT-DEF-015: aktor koreksi pembayaran dan konfigurasi QRIS.
-  koreksiPembayaranDikoreksi      KoreksiPembayaran[]       @relation("KoreksiPembayaranDikoreksiOleh")
-  konfigurasiQrisDibuat           KonfigurasiQris[]         @relation("KonfigurasiQrisDibuatOleh")
-  konfigurasiQrisDiverifikasi     KonfigurasiQris[]         @relation("KonfigurasiQrisDiverifikasiOleh")
-  // ALT-DEF-009: aktor yang menjalankan simulasi/dry-run promo (ALT-PRM-015).
-  promoSimulasiDijalankan         PromoSimulasi[]           @relation("PromoSimulasiDijalankanOleh")
-  riwayatKonfigurasiQrisDilakukan RiwayatKonfigurasiQris[]  @relation("RiwayatKonfigurasiQrisDilakukanOleh")
-  cutiIzinDisetujui               CutiIzin[]                @relation("CutiDisetujuiOleh")
-  // ALT-DEF-019/ALT-DEF-025: aktor domain HR/absensi (koreksi absensi, tukar
-  // shift, lembur, penilaian kinerja) - identitas GLOBAL, tidak di-composite-
-  // kan ke tenant (ADR-013 poin 5), sama seperti aktor domain lain di atas.
-  koreksiAbsensiDiajukan          KoreksiAbsensi[]          @relation("KoreksiAbsensiDiajukanOleh")
-  koreksiAbsensiDisetujui         KoreksiAbsensi[]          @relation("KoreksiAbsensiDisetujuiOleh")
-  permintaanTukarShiftDisetujui   PermintaanTukarShift[]    @relation("TukarShiftDisetujuiOleh")
-  permintaanLemburDisetujui       PermintaanLembur[]        @relation("LemburDisetujuiOleh")
-  penilaianKinerjaDinilai         PenilaianKinerja[]        @relation("PenilaianDinilaiOleh")
-  rekapKasHarianDiverifikasi      RekapKasHarian[]          @relation("RekapDiverifikasiOleh")
-  biayaOperasionalDicatat         BiayaOperasional[]        @relation("BiayaDicatatOleh")
-  izinSementaraDiberikan          IzinSementara[]           @relation("IzinSementaraDiberikanOleh")
-  permintaanPersetujuanDiputuskan PermintaanPersetujuan[]   @relation("PersetujuanDisetujuiOleh")
-  // ALT-DEF-017: notifikasi in-app - Pengguna adalah identitas GLOBAL (ADR-011),
-  // sengaja TIDAK di-composite-kan ke tenant, sama seperti relasi Pengguna lain
-  // di seluruh skema ini (lihat ADR-013 poin 5).
-  notifikasi                      Notification[]
-  // ALT-DEF-006: aktor (nullable) yang mengubah status TiketDapur / memicu GelombangDapur.
-  riwayatStatusTiketDapurDiubah   RiwayatStatusTiketDapur[]
-  gelombangDapurDipicu            GelombangDapur[]
-  // ALT-DEF-018/ALT-DEF-039/ALT-DEF-023: aktor (nullable untuk baris sistem)
-  // domain keanggotaan/loyalitas - ledger poin/stempel/saldo toko dan merge
-  // pelanggan (ADR-027).
-  poinRiwayatDicatat              PoinRiwayat[]             @relation("PoinRiwayatDicatatOleh")
-  ledgerStempelDicatat            LedgerStempel[]           @relation("LedgerStempelDicatatOleh")
-  ledgerSaldoTokoDicatat          LedgerSaldoToko[]         @relation("LedgerSaldoTokoDicatatOleh")
-  riwayatGabungPelangganDilakukan RiwayatGabungPelanggan[]  @relation("RiwayatGabungDigabungOleh")
+  keanggotaanTenant          KeanggotaanTenant[]
+  sesi                       Sesi[]
+  tokenResetKataSandi        TokenResetKataSandi[]
+  riwayatPerangkat           RiwayatPerangkat[]
+  auditLog                   AuditLog[]
+  // ADR-033 (membalikkan sebagian ADR-013 poin 5): field aktor TENANT-SCOPED
+  // (persediaan, pesanan, dapur, pembayaran, QRIS, promo, ledger keanggotaan,
+  // HR/absensi, notifikasi, dst.) SEKARANG di-composite-kan ke
+  // KeanggotaanTenant/KeanggotaanOutlet - back-relation-nya karena itu
+  // dipindah ke model-model tersebut, BUKAN lagi terdaftar di sini. Lihat
+  // DECISION-LOG.md ADR-033 untuk audit lengkap dan rasionalnya. Relasi yang
+  // TETAP ada di Pengguna di bawah ini adalah relasi yang BUKAN aktor
+  // tenant-scoped: identitas global murni (sesi/token reset/riwayat
+  // perangkat), snapshot audit immutable (AuditLog.penggunaId), atau baris
+  // riwayat tanpa kolom denormalisasi tenant sendiri (PesananRiwayatStatus -
+  // lihat catatan gap pada modelnya).
+  pesananRiwayatStatusDiubah PesananRiwayatStatus[] @relation("RiwayatStatusDiubahOleh")
 
   @@map("pengguna")
 }
@@ -385,14 +330,51 @@ model KeanggotaanTenant {
   pengguna Pengguna @relation(fields: [penggunaId], references: [id])
   tenant   Tenant   @relation(fields: [tenantId], references: [id])
 
-  keanggotaanOutlet             KeanggotaanOutlet[]
-  keanggotaanOutletTenantScoped KeanggotaanOutlet[]     @relation("KeanggotaanOutletTenantScoped")
-  keanggotaanPeran              KeanggotaanPeran[]
-  izinSementara                 IzinSementara[]
-  permintaanPersetujuanPemohon  PermintaanPersetujuan[] @relation("PersetujuanPemohon")
-  sesi                          Sesi[]
-  pinOutlet                     PinOutlet[]
-  pinOutletTenantScoped         PinOutlet[]             @relation("PinOutletTenantScoped")
+  keanggotaanOutlet               KeanggotaanOutlet[]
+  keanggotaanOutletTenantScoped   KeanggotaanOutlet[]     @relation("KeanggotaanOutletTenantScoped")
+  keanggotaanPeran                KeanggotaanPeran[]
+  izinSementara                   IzinSementara[]         @relation("IzinSementaraPenerima")
+  izinSementaraDiberikan          IzinSementara[]         @relation("IzinSementaraDiberikanOleh")
+  permintaanPersetujuanPemohon    PermintaanPersetujuan[] @relation("PersetujuanPemohon")
+  permintaanPersetujuanDiputuskan PermintaanPersetujuan[] @relation("PersetujuanDisetujuiOleh")
+  sesi                            Sesi[]
+  pinOutlet                       PinOutlet[]
+  pinOutletTenantScoped           PinOutlet[]             @relation("PinOutletTenantScoped")
+
+  // ADR-033: aktor tenant-scoped (bukan cuma identitas Pengguna global) -
+  // menggantikan relasi FK langsung ke Pengguna. Lihat DECISION-LOG.md ADR-033
+  // untuk daftar lengkap dan rasional tenant-level vs outlet-level.
+  transferStokDibuat              TransferStok[]            @relation("TransferStokDibuatOleh")
+  transferStokDisetujui           TransferStok[]            @relation("TransferStokDisetujuiOleh")
+  transferStokDikirim             TransferStok[]            @relation("TransferStokDikirimOleh")
+  transferStokDiterima            TransferStok[]            @relation("TransferStokDiterimaOleh")
+  stokOpnameDibuat                StokOpname[]              @relation("OpnameDibuatOleh")
+  stokOpnameDihitung              StokOpname[]              @relation("OpnameDihitungOleh")
+  stokOpnameDikunci               StokOpname[]              @relation("OpnameDikunciOleh")
+  stokOpnameDisetujui             StokOpname[]              @relation("OpnameDisetujuiOleh")
+  penerimaanBarangDiterima        PenerimaanBarang[]        @relation("PenerimaanDiterimaOleh")
+  pesananPerubahanDiubah          PesananPerubahan[]        @relation("PesananPerubahanDiubahOleh")
+  pesananPenolakanDitolak         PesananPenolakan[]        @relation("PesananPenolakanDitolakOleh")
+  pesananPembatalanDibatalkan     PesananPembatalan[]       @relation("PesananPembatalanDibatalkanOleh")
+  riwayatStatusTiketDapurDiubah   RiwayatStatusTiketDapur[] @relation("RiwayatStatusTiketDapurDiubahOleh")
+  gelombangDapurDipicu            GelombangDapur[]          @relation("GelombangDapurDipicuOleh")
+  koreksiPembayaranDikoreksi      KoreksiPembayaran[]       @relation("KoreksiPembayaranDikoreksiOleh")
+  qrisKonfirmasiDiverifikasi      QrisKonfirmasiManual[]    @relation("QrisDiverifikasiOleh")
+  pembayaranRefundDisetujui       PembayaranRefund[]        @relation("RefundDisetujuiOleh")
+  promoSimulasiDijalankan         PromoSimulasi[]           @relation("PromoSimulasiDijalankanOleh")
+  poinRiwayatDicatat              PoinRiwayat[]             @relation("PoinRiwayatDicatatOleh")
+  ledgerStempelDicatat            LedgerStempel[]           @relation("LedgerStempelDicatatOleh")
+  ledgerSaldoTokoDicatat          LedgerSaldoToko[]         @relation("LedgerSaldoTokoDicatatOleh")
+  riwayatGabungPelangganDilakukan RiwayatGabungPelanggan[]  @relation("RiwayatGabungDigabungOleh")
+  permintaanTukarShiftDisetujui   PermintaanTukarShift[]    @relation("TukarShiftDisetujuiOleh")
+  koreksiAbsensiDiajukan          KoreksiAbsensi[]          @relation("KoreksiAbsensiDiajukanOleh")
+  koreksiAbsensiDisetujui         KoreksiAbsensi[]          @relation("KoreksiAbsensiDisetujuiOleh")
+  cutiIzinDisetujui               CutiIzin[]                @relation("CutiDisetujuiOleh")
+  permintaanLemburDisetujui       PermintaanLembur[]        @relation("LemburDisetujuiOleh")
+  penilaianKinerjaDinilai         PenilaianKinerja[]        @relation("PenilaianDinilaiOleh")
+  karyawanIdentitas               Karyawan[]                @relation("KaryawanKeanggotaan")
+  auditLog                        AuditLog[]                @relation("AuditLogKeanggotaan")
+  notifikasiKeanggotaan           Notification[]            @relation("NotificationKeanggotaan")
 
   @@unique([penggunaId, tenantId])
   // Diperlukan agar KeanggotaanOutlet bisa memakai composite FK
@@ -431,7 +413,31 @@ model KeanggotaanOutlet {
   keanggotaanTenant             KeanggotaanTenant @relation(fields: [keanggotaanTenantId], references: [id])
   keanggotaanTenantTenantScoped KeanggotaanTenant @relation("KeanggotaanOutletTenantScoped", fields: [tenantId, keanggotaanTenantId], references: [tenantId, id])
 
+  // ADR-033: aktor OUTLET-scoped - lihat DECISION-LOG.md ADR-033.
+  prosesProduksiDibuat            ProsesProduksi[]         @relation("ProsesProduksiDibuatOleh")
+  mutasiStokDibuat                MutasiStok[]             @relation("MutasiStokDibuatOleh")
+  penyesuaianStokDicatat          PenyesuaianStok[]        @relation("PenyesuaianStokDicatatOleh")
+  penyesuaianStokDisetujui        PenyesuaianStok[]        @relation("PenyesuaianStokDisetujuiOleh")
+  catatanWasteDicatat             CatatanWaste[]           @relation("CatatanWasteDicatatOleh")
+  catatanWasteDisetujui           CatatanWaste[]           @relation("CatatanWasteDisetujuiOleh")
+  purchaseOrderDibuat             PurchaseOrder[]          @relation("PoDibuatOleh")
+  pesananDibuat                   Pesanan[]                @relation("PesananDibuatOleh")
+  pembayaranDikonfirmasi          Pembayaran[]             @relation("PembayaranDikonfirmasiOleh")
+  konfigurasiQrisDibuat           KonfigurasiQris[]        @relation("KonfigurasiQrisDibuatOleh")
+  konfigurasiQrisDiverifikasi     KonfigurasiQris[]        @relation("KonfigurasiQrisDiverifikasiOleh")
+  riwayatKonfigurasiQrisDilakukan RiwayatKonfigurasiQris[] @relation("RiwayatKonfigurasiQrisDilakukanOleh")
+  giliranKasir                    GiliranKasir[]           @relation("GiliranKasirPengguna")
+  rekapKasHarianDiverifikasi      RekapKasHarian[]         @relation("RekapDiverifikasiOleh")
+  biayaOperasionalDicatat         BiayaOperasional[]       @relation("BiayaDicatatOleh")
+
+  // ADR-033: aktor tenant-scoped OUTLET-LEVEL (mis. ProsesProduksi.dibuatOlehId,
+  // PenyesuaianStok.disetujuiOlehId, dst.) memakai composite-FK
+  // (tenantId, outletId, xxxOlehId) -> KeanggotaanOutlet(tenantId, outletId, id) -
+  // menjamin di level database bahwa aktor bukan cuma anggota TENANT yang benar,
+  // tapi juga punya AKSES OUTLET yang sama dengan baris yang diaksesnya. Lihat
+  // DECISION-LOG.md ADR-033.
   @@unique([keanggotaanTenantId, outletId])
+  @@unique([tenantId, outletId, id])
   @@map("keanggotaan_outlet")
 }
 
@@ -547,6 +553,11 @@ model BatasIzin {
 // "transaksi.diskon" sementara untuk satu shift.
 model IzinSementara {
   id                  String              @id
+  // ADR-033: tenantId didenormalisasi (pola KeanggotaanOutlet/PinOutlet,
+  // ADR-011/ADR-015) - dipakai oleh DUA composite-FK di bawah (penerima dan
+  // pemberi izin sementara), menjamin di level database bahwa pemberi izin
+  // adalah anggota TENANT YANG SAMA dengan penerima.
+  tenantId            String
   keanggotaanTenantId String
   izinId              String
   diberikanOlehId     String
@@ -556,9 +567,9 @@ model IzinSementara {
   status              StatusAktifNonaktif @default(AKTIF)
   createdAt           DateTime            @default(now())
 
-  keanggotaanTenant KeanggotaanTenant @relation(fields: [keanggotaanTenantId], references: [id])
+  keanggotaanTenant KeanggotaanTenant @relation("IzinSementaraPenerima", fields: [tenantId, keanggotaanTenantId], references: [tenantId, id])
   izin              Izin              @relation(fields: [izinId], references: [id])
-  diberikanOleh     Pengguna          @relation("IzinSementaraDiberikanOleh", fields: [diberikanOlehId], references: [id])
+  diberikanOleh     KeanggotaanTenant @relation("IzinSementaraDiberikanOleh", fields: [tenantId, diberikanOlehId], references: [tenantId, id])
 
   @@map("izin_sementara")
 }
@@ -591,9 +602,9 @@ model PermintaanPersetujuan {
   createdAt                  DateTime                    @default(now())
   updatedAt                  DateTime                    @updatedAt
 
-  tenant                   Tenant            @relation(fields: [tenantId], references: [id])
-  keanggotaanTenantPemohon KeanggotaanTenant @relation("PersetujuanPemohon", fields: [keanggotaanTenantIdPemohon], references: [id])
-  disetujuiOleh            Pengguna?         @relation("PersetujuanDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+  tenant                   Tenant             @relation(fields: [tenantId], references: [id])
+  keanggotaanTenantPemohon KeanggotaanTenant  @relation("PersetujuanPemohon", fields: [keanggotaanTenantIdPemohon], references: [id])
+  disetujuiOleh            KeanggotaanTenant? @relation("PersetujuanDisetujuiOleh", fields: [tenantId, disetujuiOlehId], references: [tenantId, id])
 
   @@map("permintaan_persetujuan")
 }
@@ -772,20 +783,35 @@ model RiwayatPerangkat {
   @@map("riwayat_perangkat")
 }
 
+// ADR-033 (kasus KHUSUS - "audit log exception" per instruksi batch):
+// `penggunaId` DIPERTAHANKAN sebagai FK langsung ke Pengguna - ini SNAPSHOT
+// identitas historis-immutable ("siapa secara fisik melakukan aksi ini"),
+// yang harus tetap terbaca dengan benar bahkan bila pengguna tsb kemudian
+// kehilangan keanggotaan tenant (dikeluarkan/nonaktif) - audit log TIDAK
+// boleh "kehilangan" siapa pelakunya hanya karena status keanggotaan berubah
+// belakangan. `keanggotaanTenantId` (BARU) ditambahkan DI SAMPING-nya sebagai
+// SUMBER VALIDASI ACTOR: composite-FK ke KeanggotaanTenant(tenantId, id)
+// menjamin (di level DB, pada saat baris ini ditulis) bahwa aktor benar-benar
+// tercatat sebagai anggota tenant yang sama dengan tenantId baris ini.
+// Nullable: baris audit yang dihasilkan proses SISTEM (bukan aksi pengguna
+// tertentu, mis. job terjadwal) tidak selalu punya keanggotaan tenant untuk
+// dirujuk.
 model AuditLog {
-  id         String   @id
-  tenantId   String
-  outletId   String?
-  penggunaId String
-  aksi       String
-  entitas    String
-  entitasId  String
-  sebelum    Json?
-  sesudah    Json?
-  createdAt  DateTime @default(now())
+  id                  String   @id
+  tenantId            String
+  outletId            String?
+  penggunaId          String
+  keanggotaanTenantId String?
+  aksi                String
+  entitas             String
+  entitasId           String
+  sebelum             Json?
+  sesudah             Json?
+  createdAt           DateTime @default(now())
 
-  tenant   Tenant   @relation(fields: [tenantId], references: [id])
-  pengguna Pengguna @relation(fields: [penggunaId], references: [id])
+  tenant            Tenant             @relation(fields: [tenantId], references: [id])
+  pengguna          Pengguna           @relation(fields: [penggunaId], references: [id])
+  keanggotaanTenant KeanggotaanTenant? @relation("AuditLogKeanggotaan", fields: [tenantId, keanggotaanTenantId], references: [tenantId, id])
 
   @@map("audit_log")
 }
@@ -1295,11 +1321,11 @@ model ProsesProduksi {
   dibuatOlehId     String
   createdAt        DateTime             @default(now())
 
-  tenant     Tenant     @relation(fields: [tenantId], references: [id])
-  outlet     Outlet     @relation(fields: [tenantId, outletId], references: [tenantId, id])
-  versiResep VersiResep @relation(fields: [tenantId, versiResepId], references: [tenantId, id])
+  tenant     Tenant            @relation(fields: [tenantId], references: [id])
+  outlet     Outlet            @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  versiResep VersiResep        @relation(fields: [tenantId, versiResepId], references: [tenantId, id])
   // ADR-013 poin 5: relasi ke Pengguna TIDAK PERNAH di-composite-kan ke tenant.
-  dibuatOleh Pengguna   @relation("ProsesProduksiDibuatOleh", fields: [dibuatOlehId], references: [id])
+  dibuatOleh KeanggotaanOutlet @relation("ProsesProduksiDibuatOleh", fields: [tenantId, outletId, dibuatOlehId], references: [tenantId, outletId, id])
 
   baris ProsesProduksiBaris[]
   batch BatchProduksi[]
@@ -1719,11 +1745,11 @@ model MutasiStok {
   // ALT-DEF-008: relasi-relasi baru. `dibuatOleh` sebelumnya hanya kolom
   // scalar TANPA FK sama sekali (gap yang sama seperti gudangId dulu) -
   // FK ID tunggal ke Pengguna per ADR-013 poin 5.
-  satuan       Satuan?     @relation(fields: [tenantId, satuanId], references: [tenantId, id])
-  lokasiSumber LokasiStok? @relation("MutasiStokLokasiSumber", fields: [tenantId, lokasiSumberId], references: [tenantId, id])
-  lokasiTujuan LokasiStok? @relation("MutasiStokLokasiTujuan", fields: [tenantId, lokasiTujuanId], references: [tenantId, id])
-  batchStok    BatchStok?  @relation(fields: [tenantId, batchStokId], references: [tenantId, id])
-  dibuatOleh   Pengguna    @relation("MutasiStokDibuatOleh", fields: [dibuatOlehId], references: [id])
+  satuan       Satuan?           @relation(fields: [tenantId, satuanId], references: [tenantId, id])
+  lokasiSumber LokasiStok?       @relation("MutasiStokLokasiSumber", fields: [tenantId, lokasiSumberId], references: [tenantId, id])
+  lokasiTujuan LokasiStok?       @relation("MutasiStokLokasiTujuan", fields: [tenantId, lokasiTujuanId], references: [tenantId, id])
+  batchStok    BatchStok?        @relation(fields: [tenantId, batchStokId], references: [tenantId, id])
+  dibuatOleh   KeanggotaanOutlet @relation("MutasiStokDibuatOleh", fields: [tenantId, outletId, dibuatOlehId], references: [tenantId, outletId, id])
 
   // Reversal (ADR-032, redesain dari ADR-023): `membalikMutasi` menunjuk
   // MUNDUR ke mutasi ASAL yang dibalikkan baris ini (hanya terisi pada baris
@@ -1861,12 +1887,12 @@ model PenyesuaianStok {
   dicatatOlehId   String
   createdAt       DateTime @default(now())
 
-  tenant        Tenant     @relation(fields: [tenantId], references: [id])
-  outlet        Outlet     @relation(fields: [tenantId, outletId], references: [tenantId, id])
-  bahan         Bahan      @relation(fields: [tenantId, bahanId], references: [tenantId, id])
-  mutasiStok    MutasiStok @relation(fields: [tenantId, mutasiStokId], references: [tenantId, id])
-  disetujuiOleh Pengguna?  @relation("PenyesuaianStokDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
-  dicatatOleh   Pengguna   @relation("PenyesuaianStokDicatatOleh", fields: [dicatatOlehId], references: [id])
+  tenant        Tenant             @relation(fields: [tenantId], references: [id])
+  outlet        Outlet             @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  bahan         Bahan              @relation(fields: [tenantId, bahanId], references: [tenantId, id])
+  mutasiStok    MutasiStok         @relation(fields: [tenantId, mutasiStokId], references: [tenantId, id])
+  disetujuiOleh KeanggotaanOutlet? @relation("PenyesuaianStokDisetujuiOleh", fields: [tenantId, outletId, disetujuiOlehId], references: [tenantId, outletId, id])
+  dicatatOleh   KeanggotaanOutlet  @relation("PenyesuaianStokDicatatOleh", fields: [tenantId, outletId, dicatatOlehId], references: [tenantId, outletId, id])
 
   // Prisma mewajibkan unique yang mencakup seluruh field composite pada
   // relasi 1-1 (pola yang sama seperti TiketDapur.pesananId, ADR-013).
@@ -1907,10 +1933,10 @@ model TransferStok {
   gudangAsal   Gudang @relation("TransferStokGudangAsal", fields: [outletAsalId, gudangAsalId], references: [outletId, id])
   gudangTujuan Gudang @relation("TransferStokGudangTujuan", fields: [outletTujuanId, gudangTujuanId], references: [outletId, id])
 
-  dibuatOleh    Pengguna  @relation("TransferStokDibuatOleh", fields: [dibuatOlehId], references: [id])
-  disetujuiOleh Pengguna? @relation("TransferStokDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
-  dikirimOleh   Pengguna? @relation("TransferStokDikirimOleh", fields: [dikirimOlehId], references: [id])
-  diterimaOleh  Pengguna? @relation("TransferStokDiterimaOleh", fields: [diterimaOlehId], references: [id])
+  dibuatOleh    KeanggotaanTenant  @relation("TransferStokDibuatOleh", fields: [tenantId, dibuatOlehId], references: [tenantId, id])
+  disetujuiOleh KeanggotaanTenant? @relation("TransferStokDisetujuiOleh", fields: [tenantId, disetujuiOlehId], references: [tenantId, id])
+  dikirimOleh   KeanggotaanTenant? @relation("TransferStokDikirimOleh", fields: [tenantId, dikirimOlehId], references: [tenantId, id])
+  diterimaOleh  KeanggotaanTenant? @relation("TransferStokDiterimaOleh", fields: [tenantId, diterimaOlehId], references: [tenantId, id])
 
   baris TransferStokBaris[]
 
@@ -2001,8 +2027,8 @@ model CatatanWaste {
   satuan      Satuan      @relation(fields: [tenantId, satuanId], references: [tenantId, id])
   mutasiStok  MutasiStok  @relation(fields: [tenantId, mutasiStokId], references: [tenantId, id])
 
-  dicatatOleh   Pengguna  @relation("CatatanWasteDicatatOleh", fields: [dicatatOlehId], references: [id])
-  disetujuiOleh Pengguna? @relation("CatatanWasteDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+  dicatatOleh   KeanggotaanOutlet  @relation("CatatanWasteDicatatOleh", fields: [tenantId, outletId, dicatatOlehId], references: [tenantId, outletId, id])
+  disetujuiOleh KeanggotaanOutlet? @relation("CatatanWasteDisetujuiOleh", fields: [tenantId, outletId, disetujuiOlehId], references: [tenantId, outletId, id])
 
   @@unique([tenantId, mutasiStokId])
   @@index([tenantId, bahanId, createdAt])
@@ -2091,12 +2117,12 @@ model StokOpname {
   pengunciId      String?
   penyetujuId     String?
 
-  tenant     Tenant            @relation(fields: [tenantId], references: [id])
-  gudang     Gudang            @relation(fields: [tenantId, gudangId], references: [tenantId, id])
-  dibuatOleh Pengguna          @relation("OpnameDibuatOleh", fields: [dibuatOlehId], references: [id])
-  penghitung Pengguna?         @relation("OpnameDihitungOleh", fields: [penghitungId], references: [id])
-  pengunci   Pengguna?         @relation("OpnameDikunciOleh", fields: [pengunciId], references: [id])
-  penyetuju  Pengguna?         @relation("OpnameDisetujuiOleh", fields: [penyetujuId], references: [id])
+  tenant     Tenant             @relation(fields: [tenantId], references: [id])
+  gudang     Gudang             @relation(fields: [tenantId, gudangId], references: [tenantId, id])
+  dibuatOleh KeanggotaanTenant  @relation("OpnameDibuatOleh", fields: [tenantId, dibuatOlehId], references: [tenantId, id])
+  penghitung KeanggotaanTenant? @relation("OpnameDihitungOleh", fields: [tenantId, penghitungId], references: [tenantId, id])
+  pengunci   KeanggotaanTenant? @relation("OpnameDikunciOleh", fields: [tenantId, pengunciId], references: [tenantId, id])
+  penyetuju  KeanggotaanTenant? @relation("OpnameDisetujuiOleh", fields: [tenantId, penyetujuId], references: [tenantId, id])
   baris      StokOpnameBaris[]
 
   @@unique([tenantId, id])
@@ -2185,7 +2211,7 @@ model PurchaseOrder {
   // ALT-DEF-010: composite-FK (tenantId, supplierId) -> Supplier(tenantId, id) -
   // menjamin PurchaseOrder↔Supplier tidak bisa lintas tenant.
   supplier   Supplier             @relation(fields: [tenantId, supplierId], references: [tenantId, id])
-  dibuatOleh Pengguna             @relation("PoDibuatOleh", fields: [dibuatOlehId], references: [id])
+  dibuatOleh KeanggotaanOutlet    @relation("PoDibuatOleh", fields: [tenantId, outletId, dibuatOlehId], references: [tenantId, outletId, id])
   baris      PurchaseOrderBaris[]
   penerimaan PenerimaanBarang[]   @relation("PenerimaanBarangPo")
 
@@ -2223,7 +2249,7 @@ model PenerimaanBarang {
 
   purchaseOrder  PurchaseOrder           @relation("PenerimaanBarangPo", fields: [tenantId, purchaseOrderId], references: [tenantId, id])
   gudang         Gudang                  @relation("PenerimaanBarangGudang", fields: [tenantId, gudangId], references: [tenantId, id])
-  diterimaOleh   Pengguna                @relation("PenerimaanDiterimaOleh", fields: [diterimaOlehId], references: [id])
+  diterimaOleh   KeanggotaanTenant       @relation("PenerimaanDiterimaOleh", fields: [tenantId, diterimaOlehId], references: [tenantId, id])
   baris          PenerimaanBarangBaris[]
   returPembelian ReturPembelian[]
 
@@ -2461,15 +2487,15 @@ model Pesanan {
   createdAt          DateTime      @default(now())
   dibatalkanPada     DateTime?
 
-  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  tenant     Tenant            @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
-  outlet     Outlet     @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  outlet     Outlet            @relation(fields: [tenantId, outletId], references: [tenantId, id])
   // ALT-DEF-010: composite-FK (outletId, mejaId) -> Meja(outletId, id) - meja
   // yang dirujuk dijamin berada di outlet yang sama dengan pesanan.
-  meja       Meja?      @relation(fields: [outletId, mejaId], references: [outletId, id])
+  meja       Meja?             @relation(fields: [outletId, mejaId], references: [outletId, id])
   // ALT-DEF-010: composite-FK (tenantId, pelangganId) -> Pelanggan(tenantId, id).
-  pelanggan  Pelanggan? @relation(fields: [tenantId, pelangganId], references: [tenantId, id])
-  dibuatOleh Pengguna   @relation("PesananDibuatOleh", fields: [dibuatOlehId], references: [id])
+  pelanggan  Pelanggan?        @relation(fields: [tenantId, pelangganId], references: [tenantId, id])
+  dibuatOleh KeanggotaanOutlet @relation("PesananDibuatOleh", fields: [tenantId, outletId, dibuatOlehId], references: [tenantId, outletId, id])
 
   itemPesanan       ItemPesanan[]
   riwayatStatus     PesananRiwayatStatus[]
@@ -2592,6 +2618,14 @@ model ItemPesananModifier {
 // StatusPesanan (BUKAN String bebas seperti sebelumnya) - transisi status
 // tidak valid tidak akan bisa ditulis ke riwayat sama sekali (type-safe di
 // level Prisma Client/TypeScript), dan query bisa difilter per nilai enum.
+// ADR-033 GAP DIKETAHUI (bukan diam-diam dilewati): model ini TIDAK punya
+// kolom `tenantId` sendiri (baris riwayat murni di bawah Pesanan, sama
+// seperti pengecualian tabel baris/junction ADR-013) sehingga TIDAK bisa
+// memakai composite-FK (tenantId, diubahOlehId) -> KeanggotaanTenant tanpa
+// menambah kolom tenantId denormalisasi terlebih dulu. `diubahOlehId` TETAP
+// menunjuk Pengguna langsung untuk batch ini - dicatat eksplisit sebagai
+// scope yang BELUM dikerjakan (bukan dievaluasi dan ditolak), lihat
+// DECISION-LOG.md ADR-033 dan INVARIAN-BELUM-DITEGAKKAN.md.
 model PesananRiwayatStatus {
   id               String        @id
   pesananId        String
@@ -2624,9 +2658,9 @@ model PesananPerubahan {
   diubahOlehId   String
   createdAt      DateTime              @default(now())
 
-  tenant     Tenant   @relation(fields: [tenantId], references: [id])
-  pesanan    Pesanan  @relation(fields: [pesananId], references: [id])
-  diubahOleh Pengguna @relation("PesananPerubahanDiubahOleh", fields: [diubahOlehId], references: [id])
+  tenant     Tenant            @relation(fields: [tenantId], references: [id])
+  pesanan    Pesanan           @relation(fields: [pesananId], references: [id])
+  diubahOleh KeanggotaanTenant @relation("PesananPerubahanDiubahOleh", fields: [tenantId, diubahOlehId], references: [tenantId, id])
 
   @@map("pesanan_perubahan")
 }
@@ -2653,9 +2687,9 @@ model PesananPenolakan {
   ditolakOlehId String
   createdAt     DateTime @default(now())
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  pesanan     Pesanan  @relation(fields: [pesananId], references: [id])
-  ditolakOleh Pengguna @relation("PesananPenolakanDitolakOleh", fields: [ditolakOlehId], references: [id])
+  tenant      Tenant            @relation(fields: [tenantId], references: [id])
+  pesanan     Pesanan           @relation(fields: [pesananId], references: [id])
+  ditolakOleh KeanggotaanTenant @relation("PesananPenolakanDitolakOleh", fields: [tenantId, ditolakOlehId], references: [tenantId, id])
 
   @@map("pesanan_penolakan")
 }
@@ -2675,9 +2709,9 @@ model PesananPembatalan {
   dibatalkanOlehId String
   createdAt        DateTime @default(now())
 
-  tenant         Tenant   @relation(fields: [tenantId], references: [id])
-  pesanan        Pesanan  @relation(fields: [pesananId], references: [id])
-  dibatalkanOleh Pengguna @relation("PesananPembatalanDibatalkanOleh", fields: [dibatalkanOlehId], references: [id])
+  tenant         Tenant            @relation(fields: [tenantId], references: [id])
+  pesanan        Pesanan           @relation(fields: [pesananId], references: [id])
+  dibatalkanOleh KeanggotaanTenant @relation("PesananPembatalanDibatalkanOleh", fields: [tenantId, dibatalkanOlehId], references: [tenantId, id])
 
   @@map("pesanan_pembatalan")
 }
@@ -2855,11 +2889,11 @@ model RiwayatStatusTiketDapur {
   diubahOlehId     String?
   createdAt        DateTime         @default(now())
 
-  tenant     Tenant     @relation(fields: [tenantId], references: [id])
-  tiketDapur TiketDapur @relation(fields: [tiketDapurId], references: [id])
+  tenant     Tenant             @relation(fields: [tenantId], references: [id])
+  tiketDapur TiketDapur         @relation(fields: [tiketDapurId], references: [id])
   // Nullable - event sistem/timer (mis. auto-hold karena SLA) tidak selalu
   // punya aktor manusia.
-  diubahOleh Pengguna?  @relation(fields: [diubahOlehId], references: [id])
+  diubahOleh KeanggotaanTenant? @relation("RiwayatStatusTiketDapurDiubahOleh", fields: [tenantId, diubahOlehId], references: [tenantId, id])
 
   @@map("riwayat_status_tiket_dapur")
 }
@@ -2882,10 +2916,10 @@ model GelombangDapur {
   status         StatusGelombangDapur @default(MENUNGGU)
   createdAt      DateTime             @default(now())
 
-  tenant     Tenant    @relation(fields: [tenantId], references: [id])
+  tenant     Tenant             @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
-  pesanan    Pesanan   @relation(fields: [tenantId, pesananId], references: [tenantId, id])
-  dipicuOleh Pengguna? @relation(fields: [dipicuOlehId], references: [id])
+  pesanan    Pesanan            @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  dipicuOleh KeanggotaanTenant? @relation("GelombangDapurDipicuOleh", fields: [tenantId, dipicuOlehId], references: [tenantId, id])
 
   @@unique([pesananId, nomorGelombang])
   @@map("gelombang_dapur")
@@ -2954,11 +2988,12 @@ model GiliranKasir {
   ditutupPada        DateTime?
 
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
-  outlet         Outlet           @relation(fields: [tenantId, outletId], references: [tenantId, id])
-  // pengguna: Pengguna adalah identitas GLOBAL (ALT-DEF-001) - sengaja TIDAK
-  // di-composite-kan ke tenant, sama seperti relasi Pengguna lain di seluruh
-  // skema ini.
-  pengguna       Pengguna         @relation(fields: [penggunaId], references: [id])
+  outlet         Outlet            @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  // ADR-033: kasir yang membuka shift ini divalidasi OUTLET-LEVEL - shift kas
+  // adalah operasi fisik di SATU outlet tertentu, jadi harus dijamin bukan
+  // cuma anggota tenant tapi juga punya akses ke outlet itu. Sebelumnya FK
+  // langsung ke Pengguna (identitas global).
+  pengguna       KeanggotaanOutlet @relation("GiliranKasirPengguna", fields: [tenantId, outletId, penggunaId], references: [tenantId, outletId, id])
   transaksiKasir TransaksiKasir[]
   rekapKasHarian RekapKasHarian?
 
@@ -3036,10 +3071,10 @@ model Pembayaran {
   createdAt          DateTime         @default(now())
   dikonfirmasiPada   DateTime?
 
-  tenant           Tenant    @relation(fields: [tenantId], references: [id])
+  tenant           Tenant             @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
-  outlet           Outlet    @relation(fields: [tenantId, outletId], references: [tenantId, id])
-  dikonfirmasiOleh Pengguna? @relation("PembayaranDikonfirmasiOleh", fields: [dikonfirmasiOlehId], references: [id])
+  outlet           Outlet             @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  dikonfirmasiOleh KeanggotaanOutlet? @relation("PembayaranDikonfirmasiOleh", fields: [tenantId, outletId, dikonfirmasiOlehId], references: [tenantId, outletId, id])
 
   alokasi         AlokasiPembayaran[]
   metodeBaris     PembayaranMetodeBaris[]
@@ -3126,10 +3161,10 @@ model KoreksiPembayaran {
   dikoreksiOlehId String
   createdAt       DateTime @default(now())
 
-  tenant        Tenant     @relation(fields: [tenantId], references: [id])
+  tenant        Tenant            @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010/ADR-013: composite-FK (tenantId, pembayaranId) -> Pembayaran(tenantId, id).
-  pembayaran    Pembayaran @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
-  dikoreksiOleh Pengguna   @relation("KoreksiPembayaranDikoreksiOleh", fields: [dikoreksiOlehId], references: [id])
+  pembayaran    Pembayaran        @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
+  dikoreksiOleh KeanggotaanTenant @relation("KoreksiPembayaranDikoreksiOleh", fields: [tenantId, dikoreksiOlehId], references: [tenantId, id])
 
   @@map("koreksi_pembayaran")
 }
@@ -3147,10 +3182,10 @@ model QrisKonfirmasiManual {
   diverifikasiOlehId String
   diverifikasiPada   DateTime @default(now())
 
-  tenant           Tenant     @relation(fields: [tenantId], references: [id])
+  tenant           Tenant            @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010/ADR-013: composite-FK (tenantId, pembayaranId) -> Pembayaran(tenantId, id).
-  pembayaran       Pembayaran @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
-  diverifikasiOleh Pengguna   @relation("QrisDiverifikasiOleh", fields: [diverifikasiOlehId], references: [id])
+  pembayaran       Pembayaran        @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
+  diverifikasiOleh KeanggotaanTenant @relation("QrisDiverifikasiOleh", fields: [tenantId, diverifikasiOlehId], references: [tenantId, id])
 
   // Diperlukan agar composite-FK di atas valid sebagai relasi one-to-one
   // (pembayaranId sudah @unique tunggal di atas) - pola yang sama dipakai
@@ -3196,10 +3231,10 @@ model PembayaranRefund {
   disetujuiOlehId String
   createdAt       DateTime @default(now())
 
-  tenant        Tenant     @relation(fields: [tenantId], references: [id])
+  tenant        Tenant            @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010/ADR-013: composite-FK (tenantId, pembayaranId) -> Pembayaran(tenantId, id).
-  pembayaran    Pembayaran @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
-  disetujuiOleh Pengguna   @relation("RefundDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+  pembayaran    Pembayaran        @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
+  disetujuiOleh KeanggotaanTenant @relation("RefundDisetujuiOleh", fields: [tenantId, disetujuiOlehId], references: [tenantId, id])
 
   @@map("pembayaran_refund")
 }
@@ -3270,11 +3305,11 @@ model KonfigurasiQris {
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
 
-  tenant           Tenant    @relation(fields: [tenantId], references: [id])
+  tenant           Tenant             @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010/ADR-013: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
-  outlet           Outlet    @relation(fields: [tenantId, outletId], references: [tenantId, id])
-  dibuatOleh       Pengguna  @relation("KonfigurasiQrisDibuatOleh", fields: [dibuatOlehId], references: [id])
-  diverifikasiOleh Pengguna? @relation("KonfigurasiQrisDiverifikasiOleh", fields: [diverifikasiOlehId], references: [id])
+  outlet           Outlet             @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  dibuatOleh       KeanggotaanOutlet  @relation("KonfigurasiQrisDibuatOleh", fields: [tenantId, outletId, dibuatOlehId], references: [tenantId, outletId, id])
+  diverifikasiOleh KeanggotaanOutlet? @relation("KonfigurasiQrisDiverifikasiOleh", fields: [tenantId, outletId, diverifikasiOlehId], references: [tenantId, outletId, id])
 
   riwayat RiwayatKonfigurasiQris[]
 
@@ -3306,12 +3341,12 @@ model RiwayatKonfigurasiQris {
   dilakukanOlehId   String
   createdAt         DateTime            @default(now())
 
-  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  tenant          Tenant            @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010/ADR-013: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
-  outlet          Outlet          @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  outlet          Outlet            @relation(fields: [tenantId, outletId], references: [tenantId, id])
   // ALT-DEF-010/ADR-013: composite-FK (tenantId, konfigurasiQrisId) -> KonfigurasiQris(tenantId, id).
-  konfigurasiQris KonfigurasiQris @relation(fields: [tenantId, konfigurasiQrisId], references: [tenantId, id])
-  dilakukanOleh   Pengguna        @relation("RiwayatKonfigurasiQrisDilakukanOleh", fields: [dilakukanOlehId], references: [id])
+  konfigurasiQris KonfigurasiQris   @relation(fields: [tenantId, konfigurasiQrisId], references: [tenantId, id])
+  dilakukanOleh   KeanggotaanOutlet @relation("RiwayatKonfigurasiQrisDilakukanOleh", fields: [tenantId, outletId, dilakukanOlehId], references: [tenantId, outletId, id])
 
   @@map("riwayat_konfigurasi_qris")
 }
@@ -3738,10 +3773,10 @@ model PromoSimulasi {
   disimulasikanOlehId String
   createdAt           DateTime @default(now())
 
-  tenant            Tenant   @relation(fields: [tenantId], references: [id])
+  tenant            Tenant            @relation(fields: [tenantId], references: [id])
   // ALT-DEF-009/ADR-013: composite-FK (tenantId, promoId) -> Promo(tenantId, id), nullable.
-  promo             Promo?   @relation(fields: [tenantId, promoId], references: [tenantId, id])
-  disimulasikanOleh Pengguna @relation("PromoSimulasiDijalankanOleh", fields: [disimulasikanOlehId], references: [id])
+  promo             Promo?            @relation(fields: [tenantId, promoId], references: [tenantId, id])
+  disimulasikanOleh KeanggotaanTenant @relation("PromoSimulasiDijalankanOleh", fields: [tenantId, disimulasikanOlehId], references: [tenantId, id])
 
   @@map("promo_simulasi")
 }
@@ -3963,14 +3998,14 @@ model PoinRiwayat {
   catatan          String?
   createdAt        DateTime         @default(now())
 
-  tenant         Tenant       @relation(fields: [tenantId], references: [id])
+  tenant         Tenant             @relation(fields: [tenantId], references: [id])
   // ALT-DEF-018/ADR-013: composite-FK (tenantId, keanggotaanId) -> Keanggotaan(tenantId, id).
-  keanggotaan    Keanggotaan  @relation(fields: [tenantId, keanggotaanId], references: [tenantId, id])
+  keanggotaan    Keanggotaan        @relation(fields: [tenantId, keanggotaanId], references: [tenantId, id])
   // ALT-DEF-018/ADR-013: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
-  pesanan        Pesanan?     @relation(fields: [tenantId, pesananId], references: [tenantId, id])
-  dicatatOleh    Pengguna?    @relation("PoinRiwayatDicatatOleh", fields: [dicatatOlehId], references: [id])
-  membalikMutasi PoinRiwayat? @relation("PoinRiwayatPembalik", fields: [membalikMutasiId], references: [id])
-  pembalik       PoinRiwayat? @relation("PoinRiwayatPembalik")
+  pesanan        Pesanan?           @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  dicatatOleh    KeanggotaanTenant? @relation("PoinRiwayatDicatatOleh", fields: [tenantId, dicatatOlehId], references: [tenantId, id])
+  membalikMutasi PoinRiwayat?       @relation("PoinRiwayatPembalik", fields: [membalikMutasiId], references: [id])
+  pembalik       PoinRiwayat?       @relation("PoinRiwayatPembalik")
 
   @@map("poin_riwayat")
 }
@@ -4033,16 +4068,16 @@ model LedgerStempel {
   catatan          String?
   createdAt        DateTime           @default(now())
 
-  tenant         Tenant         @relation(fields: [tenantId], references: [id])
+  tenant         Tenant             @relation(fields: [tenantId], references: [id])
   // ALT-DEF-039/ADR-013: composite-FK (tenantId, keanggotaanId) -> Keanggotaan(tenantId, id).
-  keanggotaan    Keanggotaan    @relation(fields: [tenantId, keanggotaanId], references: [tenantId, id])
+  keanggotaan    Keanggotaan        @relation(fields: [tenantId, keanggotaanId], references: [tenantId, id])
   // ALT-DEF-039/ADR-013: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
-  pesanan        Pesanan?       @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  pesanan        Pesanan?           @relation(fields: [tenantId, pesananId], references: [tenantId, id])
   // ALT-DEF-039/ADR-013: composite-FK (tenantId, hadiahStempelId) -> HadiahStempel(tenantId, id).
-  hadiahStempel  HadiahStempel? @relation(fields: [tenantId, hadiahStempelId], references: [tenantId, id])
-  dicatatOleh    Pengguna?      @relation("LedgerStempelDicatatOleh", fields: [dicatatOlehId], references: [id])
-  membalikMutasi LedgerStempel? @relation("LedgerStempelPembalik", fields: [membalikMutasiId], references: [id])
-  pembalik       LedgerStempel? @relation("LedgerStempelPembalik")
+  hadiahStempel  HadiahStempel?     @relation(fields: [tenantId, hadiahStempelId], references: [tenantId, id])
+  dicatatOleh    KeanggotaanTenant? @relation("LedgerStempelDicatatOleh", fields: [tenantId, dicatatOlehId], references: [tenantId, id])
+  membalikMutasi LedgerStempel?     @relation("LedgerStempelPembalik", fields: [membalikMutasiId], references: [id])
+  pembalik       LedgerStempel?     @relation("LedgerStempelPembalik")
 
   @@map("ledger_stempel")
 }
@@ -4082,16 +4117,16 @@ model LedgerSaldoToko {
   catatan          String?
   createdAt        DateTime             @default(now())
 
-  tenant         Tenant           @relation(fields: [tenantId], references: [id])
+  tenant         Tenant             @relation(fields: [tenantId], references: [id])
   // ALT-DEF-018/ADR-013: composite-FK (tenantId, pelangganId) -> Pelanggan(tenantId, id).
-  pelanggan      Pelanggan        @relation(fields: [tenantId, pelangganId], references: [tenantId, id])
+  pelanggan      Pelanggan          @relation(fields: [tenantId, pelangganId], references: [tenantId, id])
   // ALT-DEF-018/ADR-013: composite-FK (tenantId, pesananId) -> Pesanan(tenantId, id).
-  pesanan        Pesanan?         @relation(fields: [tenantId, pesananId], references: [tenantId, id])
+  pesanan        Pesanan?           @relation(fields: [tenantId, pesananId], references: [tenantId, id])
   // ALT-DEF-018/ADR-013: composite-FK (tenantId, pembayaranId) -> Pembayaran(tenantId, id).
-  pembayaran     Pembayaran?      @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
-  dicatatOleh    Pengguna?        @relation("LedgerSaldoTokoDicatatOleh", fields: [dicatatOlehId], references: [id])
-  membalikMutasi LedgerSaldoToko? @relation("LedgerSaldoTokoPembalik", fields: [membalikMutasiId], references: [id])
-  pembalik       LedgerSaldoToko? @relation("LedgerSaldoTokoPembalik")
+  pembayaran     Pembayaran?        @relation(fields: [tenantId, pembayaranId], references: [tenantId, id])
+  dicatatOleh    KeanggotaanTenant? @relation("LedgerSaldoTokoDicatatOleh", fields: [tenantId, dicatatOlehId], references: [tenantId, id])
+  membalikMutasi LedgerSaldoToko?   @relation("LedgerSaldoTokoPembalik", fields: [membalikMutasiId], references: [id])
+  pembalik       LedgerSaldoToko?   @relation("LedgerSaldoTokoPembalik")
 
   @@map("ledger_saldo_toko")
 }
@@ -4138,12 +4173,12 @@ model RiwayatGabungPelanggan {
   alasan              String?
   createdAt           DateTime @default(now())
 
-  tenant            Tenant    @relation(fields: [tenantId], references: [id])
+  tenant            Tenant            @relation(fields: [tenantId], references: [id])
   // ALT-DEF-023/ADR-013: composite-FK (tenantId, pelangganUtamaId) -> Pelanggan(tenantId, id).
-  pelangganUtama    Pelanggan @relation("RiwayatGabungUtama", fields: [tenantId, pelangganUtamaId], references: [tenantId, id])
+  pelangganUtama    Pelanggan         @relation("RiwayatGabungUtama", fields: [tenantId, pelangganUtamaId], references: [tenantId, id])
   // ALT-DEF-023/ADR-013: composite-FK (tenantId, pelangganGabunganId) -> Pelanggan(tenantId, id).
-  pelangganGabungan Pelanggan @relation("RiwayatGabungGabungan", fields: [tenantId, pelangganGabunganId], references: [tenantId, id])
-  digabungOleh      Pengguna  @relation("RiwayatGabungDigabungOleh", fields: [digabungOlehId], references: [id])
+  pelangganGabungan Pelanggan         @relation("RiwayatGabungGabungan", fields: [tenantId, pelangganGabunganId], references: [tenantId, id])
+  digabungOleh      KeanggotaanTenant @relation("RiwayatGabungDigabungOleh", fields: [tenantId, digabungOlehId], references: [tenantId, id])
 
   // Satu profil hanya bisa digabung (jadi korban) SEKALI - setelah digabung,
   // statusnya DIGABUNGKAN permanen (tidak ada un-merge dalam scope batch ini).
@@ -4277,15 +4312,21 @@ model Departemen {
 }
 
 model Karyawan {
-  id               String         @id
-  tenantId         String
-  penggunaId       String?        @unique
-  nomorInduk       String         @unique
-  status           StatusKaryawan @default(AKTIF)
-  tanggalBergabung DateTime
+  id                  String         @id
+  tenantId            String
+  // ADR-033: sebelumnya penggunaId FK langsung ke Pengguna (identitas global) -
+  // tidak ada jaminan bahwa akun login yang ditautkan ke record HR ini benar-
+  // benar anggota tenant tempat Karyawan ini bekerja. Sekarang composite-FK ke
+  // KeanggotaanTenant(tenantId, id) menjamin itu di level database. Fisik
+  // pengguna tetap bisa didapat satu join: karyawan.keanggotaanTenantId ->
+  // KeanggotaanTenant.penggunaId -> Pengguna.
+  keanggotaanTenantId String?        @unique
+  nomorInduk          String         @unique
+  status              StatusKaryawan @default(AKTIF)
+  tanggalBergabung    DateTime
 
   tenant                        Tenant                    @relation(fields: [tenantId], references: [id])
-  pengguna                      Pengguna?                 @relation(fields: [penggunaId], references: [id])
+  keanggotaanTenant             KeanggotaanTenant?        @relation("KaryawanKeanggotaan", fields: [tenantId, keanggotaanTenantId], references: [tenantId, id])
   // ALT-DEF-019 (ADR-028 Keputusan 2): outletUtamaId DIHAPUS - digantikan
   // KaryawanOutlet many-to-many (isUtama menandai outlet utama). Ini
   // perubahan BREAKING TAPI BENAR, sejalan dengan pola ALT-DEF-001 yang
@@ -4490,14 +4531,14 @@ model PermintaanTukarShift {
   status    StatusPermintaanTukarShift @default(DIAJUKAN)
   createdAt DateTime                   @default(now())
 
-  tenant            Tenant      @relation(fields: [tenantId], references: [id])
+  tenant            Tenant             @relation(fields: [tenantId], references: [id])
   // Composite-FK (tenantId, jadwalKerjaAsalId) -> JadwalKerja(tenantId, id).
-  jadwalKerjaAsal   JadwalKerja @relation(fields: [tenantId, jadwalKerjaAsalId], references: [tenantId, id])
+  jadwalKerjaAsal   JadwalKerja        @relation(fields: [tenantId, jadwalKerjaAsalId], references: [tenantId, id])
   // ALT-DEF-010: composite-FK (tenantId, karyawanPemohonId) -> Karyawan(tenantId, id).
-  karyawanPemohon   Karyawan    @relation("TukarShiftPemohon", fields: [tenantId, karyawanPemohonId], references: [tenantId, id])
+  karyawanPemohon   Karyawan           @relation("TukarShiftPemohon", fields: [tenantId, karyawanPemohonId], references: [tenantId, id])
   // ALT-DEF-010: composite-FK (tenantId, karyawanPenggantiId) -> Karyawan(tenantId, id).
-  karyawanPengganti Karyawan?   @relation("TukarShiftPengganti", fields: [tenantId, karyawanPenggantiId], references: [tenantId, id])
-  disetujuiOleh     Pengguna?   @relation("TukarShiftDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+  karyawanPengganti Karyawan?          @relation("TukarShiftPengganti", fields: [tenantId, karyawanPenggantiId], references: [tenantId, id])
+  disetujuiOleh     KeanggotaanTenant? @relation("TukarShiftDisetujuiOleh", fields: [tenantId, disetujuiOlehId], references: [tenantId, id])
 
   @@map("permintaan_tukar_shift")
 }
@@ -4580,11 +4621,11 @@ model KoreksiAbsensi {
   status           StatusKoreksiAbsensi @default(DIAJUKAN)
   createdAt        DateTime             @default(now())
 
-  tenant        Tenant    @relation(fields: [tenantId], references: [id])
+  tenant        Tenant             @relation(fields: [tenantId], references: [id])
   // Composite-FK (tenantId, absensiId) -> Absensi(tenantId, id).
-  absensi       Absensi   @relation(fields: [tenantId, absensiId], references: [tenantId, id])
-  diajukanOleh  Pengguna  @relation("KoreksiAbsensiDiajukanOleh", fields: [diajukanOlehId], references: [id])
-  disetujuiOleh Pengguna? @relation("KoreksiAbsensiDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+  absensi       Absensi            @relation(fields: [tenantId, absensiId], references: [tenantId, id])
+  diajukanOleh  KeanggotaanTenant  @relation("KoreksiAbsensiDiajukanOleh", fields: [tenantId, diajukanOlehId], references: [tenantId, id])
+  disetujuiOleh KeanggotaanTenant? @relation("KoreksiAbsensiDisetujuiOleh", fields: [tenantId, disetujuiOlehId], references: [tenantId, id])
 
   @@map("koreksi_absensi")
 }
@@ -4628,11 +4669,11 @@ model CutiIzin {
   tanggalSelesai DateTime       @db.Date
   status         StatusCutiIzin @default(DIAJUKAN)
 
-  tenant        Tenant    @relation(fields: [tenantId], references: [id])
+  tenant        Tenant             @relation(fields: [tenantId], references: [id])
   // ALT-DEF-019: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id)
   // (SEBELUMNYA FK ID tunggal - gap tenant-safety, lihat catatan di atas).
-  karyawan      Karyawan  @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
-  disetujuiOleh Pengguna? @relation("CutiDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+  karyawan      Karyawan           @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
+  disetujuiOleh KeanggotaanTenant? @relation("CutiDisetujuiOleh", fields: [tenantId, disetujuiOlehId], references: [tenantId, id])
 
   @@map("cuti_izin")
 }
@@ -4652,10 +4693,10 @@ model PermintaanLembur {
   status     StatusPermintaanLembur @default(DIAJUKAN)
   createdAt  DateTime               @default(now())
 
-  tenant        Tenant    @relation(fields: [tenantId], references: [id])
+  tenant        Tenant             @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
-  karyawan      Karyawan  @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
-  disetujuiOleh Pengguna? @relation("LemburDisetujuiOleh", fields: [disetujuiOlehId], references: [id])
+  karyawan      Karyawan           @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
+  disetujuiOleh KeanggotaanTenant? @relation("LemburDisetujuiOleh", fields: [tenantId, disetujuiOlehId], references: [tenantId, id])
 
   @@map("permintaan_lembur")
 }
@@ -4692,10 +4733,10 @@ model PenilaianKinerja {
   catatan   String?
   createdAt DateTime @default(now())
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  tenant      Tenant            @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, karyawanId) -> Karyawan(tenantId, id).
-  karyawan    Karyawan @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
-  dinilaiOleh Pengguna @relation("PenilaianDinilaiOleh", fields: [dinilaiOlehId], references: [id])
+  karyawan    Karyawan          @relation(fields: [tenantId, karyawanId], references: [tenantId, id])
+  dinilaiOleh KeanggotaanTenant @relation("PenilaianDinilaiOleh", fields: [tenantId, dinilaiOlehId], references: [tenantId, id])
 
   @@map("penilaian_kinerja")
 }
@@ -4743,12 +4784,12 @@ model RekapKasHarian {
   status             StatusRekapKasHarian @default(DRAF)
   diverifikasiOlehId String?
 
-  tenant           Tenant        @relation(fields: [tenantId], references: [id])
+  tenant           Tenant             @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
-  outlet           Outlet        @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  outlet           Outlet             @relation(fields: [tenantId, outletId], references: [tenantId, id])
   // ALT-DEF-010: composite-FK (tenantId, giliranKasirId) -> GiliranKasir(tenantId, id).
-  giliranKasir     GiliranKasir? @relation(fields: [tenantId, giliranKasirId], references: [tenantId, id])
-  diverifikasiOleh Pengguna?     @relation("RekapDiverifikasiOleh", fields: [diverifikasiOlehId], references: [id])
+  giliranKasir     GiliranKasir?      @relation(fields: [tenantId, giliranKasirId], references: [tenantId, id])
+  diverifikasiOleh KeanggotaanOutlet? @relation("RekapDiverifikasiOleh", fields: [tenantId, outletId, diverifikasiOlehId], references: [tenantId, outletId, id])
 
   // Diperlukan agar composite-FK (tenantId, giliranKasirId) -> GiliranKasir(tenantId, id)
   // valid sebagai relasi one-to-one (giliranKasirId sudah @unique tunggal di atas).
@@ -4767,12 +4808,12 @@ model BiayaOperasional {
   dicatatOlehId   String
   createdAt       DateTime               @default(now())
 
-  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  tenant        Tenant            @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
-  outlet        Outlet        @relation(fields: [tenantId, outletId], references: [tenantId, id])
+  outlet        Outlet            @relation(fields: [tenantId, outletId], references: [tenantId, id])
   // ALT-DEF-010: composite-FK (tenantId, kategoriBiayaId) -> KategoriBiaya(tenantId, id).
-  kategoriBiaya KategoriBiaya @relation(fields: [tenantId, kategoriBiayaId], references: [tenantId, id])
-  dicatatOleh   Pengguna      @relation("BiayaDicatatOleh", fields: [dicatatOlehId], references: [id])
+  kategoriBiaya KategoriBiaya     @relation(fields: [tenantId, kategoriBiayaId], references: [tenantId, id])
+  dicatatOleh   KeanggotaanOutlet @relation("BiayaDicatatOleh", fields: [tenantId, outletId, dicatatOlehId], references: [tenantId, outletId, id])
 
   @@map("biaya_operasional")
 }
@@ -5028,27 +5069,40 @@ enum TipeNotifikasi {
 // (siapa yang berhak melihat baris ini) adalah tanggung jawab service-layer
 // query (mis. filter berdasarkan outletId + peran pemanggil), bukan
 // dijamin skema.
+// ADR-033 - BATAS CAKUPAN EKSPLISIT: batch ini HANYA mengganti
+// `penggunaId` (FK langsung ke Pengguna) menjadi `keanggotaanTenantId`
+// (composite-FK ke KeanggotaanTenant(tenantId, id)) - penerapan TRIVIAL dari
+// pola yang sama dipakai di seluruh model lain pada batch ini, karena
+// Notification SUDAH membawa tenantId sendiri. Redesain targeting yang lebih
+// dalam (keanggotaanOutletId untuk notifikasi outlet-scoped, peranId untuk
+// broadcast-per-peran, model NotificationTarget terpisah untuk banyak
+// penerima) TETAP BELUM DIKERJAKAN di batch ini - itu masalah TARGETING
+// (siapa SEHARUSNYA menerima notifikasi ini), bukan masalah VALIDASI ACTOR
+// (apakah kolom aktor yang ada mengarah ke record yang sah). Dicadangkan
+// eksplisit untuk batch "PERBAIKI NOTIFICATION TARGETING" terpisah - lihat
+// ADR-016 untuk keputusan lama yang batch tsb akan revisit.
 model Notification {
-  id         String         @id
-  tenantId   String
-  outletId   String?
-  // Nullable - lihat catatan di atas model ini. Sengaja BUKAN composite-FK ke
-  // tenant (Pengguna adalah identitas global, ADR-011, sama seperti seluruh
-  // relasi Pengguna lain di skema ini).
-  penggunaId String?
-  tipe       TipeNotifikasi
-  judul      String
-  pesan      String
+  id                  String         @id
+  tenantId            String
+  outletId            String?
+  // Nullable - notifikasi bisa berupa broadcast (lihat catatan cakupan di
+  // atas model ini). Composite-FK ke KeanggotaanTenant(tenantId, id) -
+  // menggantikan FK langsung ke Pengguna (identitas global) yang dipakai
+  // sebelum ADR-033; sebelumnya field ini bernama `penggunaId`.
+  keanggotaanTenantId String?
+  tipe                TipeNotifikasi
+  judul               String
+  pesan               String
   // Payload terstruktur untuk deep-link sisi klien (mis. {"orderId": "..."}
   // agar tap notifikasi langsung membuka pesanan terkait).
-  data       Json?
-  dibacaPada DateTime?
-  createdAt  DateTime       @default(now())
+  data                Json?
+  dibacaPada          DateTime?
+  createdAt           DateTime       @default(now())
 
-  tenant   Tenant    @relation(fields: [tenantId], references: [id])
-  pengguna Pengguna? @relation(fields: [penggunaId], references: [id])
+  tenant            Tenant             @relation(fields: [tenantId], references: [id])
+  keanggotaanTenant KeanggotaanTenant? @relation("NotificationKeanggotaan", fields: [tenantId, keanggotaanTenantId], references: [tenantId, id])
 
-  // Index untuk query "notifikasi belum dibaca milik pengguna X" yang efisien.
-  @@index([penggunaId, dibacaPada])
+  // Index untuk query "notifikasi belum dibaca milik keanggotaan X" yang efisien.
+  @@index([keanggotaanTenantId, dibacaPada])
   @@map("notification")
 }
