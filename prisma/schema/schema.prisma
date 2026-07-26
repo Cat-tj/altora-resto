@@ -602,6 +602,10 @@ model PermintaanPersetujuan {
   catatan                    String?
   createdAt                  DateTime                    @default(now())
   updatedAt                  DateTime                    @updatedAt
+  // ADR-035: optimistic locking (aggregate root TAMBAHAN - dua supervisor
+  // bisa menyetujui/menolak permintaan yang sama secara bersamaan;
+  // "double-approval" race). Lihat catatan lengkap di model Pesanan.
+  version                    Int                         @default(1)
 
   tenant                   Tenant             @relation(fields: [tenantId], references: [id])
   keanggotaanTenantPemohon KeanggotaanTenant  @relation("PersetujuanPemohon", fields: [keanggotaanTenantIdPemohon], references: [id])
@@ -1654,6 +1658,12 @@ model StokBahan {
   // ALT-DEF-008: kapan baris cache ini terakhir direkonsiliasi dari ledger.
   direkonsiliasiPada   DateTime?
   updatedAt            DateTime  @updatedAt
+  // ADR-035: optimistic locking (aggregate root TAMBAHAN - baris cache saldo
+  // ini dibaca-lalu-tulis konkuren oleh mutasi stok bersamaan, lihat INV-016
+  // di INVARIAN-BELUM-DITEGAKKAN.md; version melengkapi, BUKAN menggantikan,
+  // rencana `SELECT ... FOR UPDATE` di sana). Lihat catatan lengkap di model
+  // Pesanan.
+  version              Int       @default(1)
 
   gudang     Gudang      @relation("StokBahanGudang", fields: [tenantId, gudangId], references: [tenantId, id])
   bahan      Bahan       @relation("StokBahanBahan", fields: [tenantId, bahanId], references: [tenantId, id])
@@ -1923,6 +1933,9 @@ model TransferStok {
   dikirimPada     DateTime?
   diterimaPada    DateTime?
   createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  // ADR-035: optimistic locking, lihat catatan di model Pesanan di atas.
+  version         Int                @default(1)
 
   tenant       Tenant @relation(fields: [tenantId], references: [id])
   outletAsal   Outlet @relation("TransferStokOutletAsal", fields: [tenantId, outletAsalId], references: [tenantId, id])
@@ -2117,6 +2130,10 @@ model StokOpname {
   penghitungId    String?
   pengunciId      String?
   penyetujuId     String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  // ADR-035: optimistic locking, lihat catatan di model Pesanan di atas.
+  version         Int              @default(1)
 
   tenant     Tenant             @relation(fields: [tenantId], references: [id])
   gudang     Gudang             @relation(fields: [tenantId, gudangId], references: [tenantId, id])
@@ -2205,6 +2222,9 @@ model PurchaseOrder {
   totalEstimasi BigInt              @default(0)
   dibuatOlehId  String
   createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  // ADR-035: optimistic locking, lihat catatan di model Pesanan di atas.
+  version       Int                 @default(1)
 
   tenant     Tenant               @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
@@ -2381,6 +2401,9 @@ model Reservasi {
   waktuReservasi DateTime
   status         StatusReservasi @default(DIAJUKAN)
   createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  // ADR-035: optimistic locking, lihat catatan di model Pesanan di atas.
+  version        Int             @default(1)
 
   outlet    Outlet    @relation(fields: [tenantId, outletId], references: [tenantId, id])
   meja      Meja?     @relation(fields: [outletId, mejaId], references: [outletId, id])
@@ -2486,6 +2509,13 @@ model Pesanan {
   totalAkhir         BigInt        @default(0)
   dibuatOlehId       String
   createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  // ADR-035: optimistic locking - lihat trigger generik `trg_bump_version` di
+  // migrasi optimistic-locking. Aplikasi TIDAK BOLEH mengasumsikan bisa
+  // men-SET nilai ini secara bebas - trigger selalu meng-override ke
+  // OLD.version + 1 pada setiap UPDATE. Command WAJIB membawa
+  // `expectedVersion` dan menulis `WHERE id = ? AND version = expectedVersion`.
+  version            Int           @default(1)
   dibatalkanPada     DateTime?
 
   tenant     Tenant            @relation(fields: [tenantId], references: [id])
@@ -2986,6 +3016,9 @@ model GiliranKasir {
   modalAkhirSistem   BigInt?
   status             StatusGiliranKasir @default(DIBUKA)
   dibukaPada         DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  // ADR-035: optimistic locking, lihat catatan di model Pesanan di atas.
+  version            Int                @default(1)
   ditutupPada        DateTime?
 
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
@@ -3070,6 +3103,9 @@ model Pembayaran {
   status             StatusPembayaran @default(DRAF)
   dikonfirmasiOlehId String?
   createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  // ADR-035: optimistic locking, lihat catatan di model Pesanan di atas.
+  version            Int              @default(1)
   dikonfirmasiPada   DateTime?
 
   tenant           Tenant             @relation(fields: [tenantId], references: [id])
@@ -3484,6 +3520,9 @@ model Promo {
   // berlaku 3x). false = perilaku lama (paling banyak satu kali per pesanan).
   repeatable            Boolean             @default(false)
   createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  // ADR-035: optimistic locking, lihat catatan di model Pesanan di atas.
+  version               Int                 @default(1)
 
   tenant    Tenant           @relation(fields: [tenantId], references: [id])
   kondisi   PromoKondisi[]
@@ -3939,6 +3978,9 @@ model Keanggotaan {
   poinKumulatif     Int               @default(0)
   status            StatusKeanggotaan @default(AKTIF)
   bergabungPada     DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  // ADR-035: optimistic locking, lihat catatan di model Pesanan di atas.
+  version           Int               @default(1)
 
   tenant          Tenant          @relation(fields: [tenantId], references: [id])
   // ALT-DEF-018/ADR-013: composite-FK (tenantId, pelangganId) -> Pelanggan(tenantId, id).
@@ -4469,6 +4511,9 @@ model JadwalKerja {
   tanggal   DateTime          @db.Date
   status    StatusJadwalKerja @default(DIJADWALKAN)
   createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  // ADR-035: optimistic locking, lihat catatan di model Pesanan di atas.
+  version   Int               @default(1)
 
   tenant               Tenant                 @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
@@ -4572,6 +4617,12 @@ model Absensi {
   lokasiLat            Decimal?      @db.Decimal(9, 6)
   lokasiLng            Decimal?      @db.Decimal(9, 6)
   jarakDariOutletMeter Decimal?      @db.Decimal(8, 2)
+  updatedAt            DateTime      @updatedAt
+  // ADR-035: optimistic locking (aggregate root TAMBAHAN, lihat ADR-035 -
+  // check-in/check-out bisa diedit konkuren oleh device presensi DAN koreksi
+  // manual supervisor pada baris yang sama). Lihat catatan lengkap di model
+  // Pesanan.
+  version              Int           @default(1)
 
   tenant           Tenant             @relation(fields: [tenantId], references: [id])
   // ALT-DEF-010: composite-FK (tenantId, outletId) -> Outlet(tenantId, id).
