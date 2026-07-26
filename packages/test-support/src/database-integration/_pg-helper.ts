@@ -222,6 +222,102 @@ export async function createAktorFixture(
   return { penggunaId, keanggotaanTenantId, keanggotaanOutletId };
 }
 
+/** Fixture Pesanan+ItemPesanan lengkap - dipakai batch retur/void-setelah-produksi/
+ * atomicity-pembayaran (ADR-036). Membuat tenant+outlet+aktor(KeanggotaanTenant+
+ * KeanggotaanOutlet)+KategoriMenu+ItemMenu+Pesanan+N baris ItemPesanan. */
+export interface PesananFixture {
+  tenantId: string;
+  outletId: string;
+  penggunaId: string;
+  keanggotaanTenantId: string;
+  keanggotaanOutletId: string;
+  kategoriMenuId: string;
+  itemMenuId: string;
+  pesananId: string;
+  itemPesananIds: string[];
+}
+
+export async function createPesananFixture(
+  client: pg.PoolClient,
+  opts: { status?: string; jumlahItem?: number; kuantitasPerItem?: number } = {},
+): Promise<PesananFixture> {
+  const status = opts.status ?? "DRAF";
+  const jumlahItem = opts.jumlahItem ?? 1;
+  const kuantitasPerItem = opts.kuantitasPerItem ?? 2;
+
+  const tenantId = fixtureId("tenant");
+  const outletId = fixtureId("outlet");
+  const penggunaId = fixtureId("pengguna");
+  const keanggotaanTenantId = fixtureId("kt");
+  const keanggotaanOutletId = fixtureId("ko");
+  const kategoriMenuId = fixtureId("kategori");
+  const itemMenuId = fixtureId("itemmenu");
+  const pesananId = fixtureId("pesanan");
+
+  await client.query(
+    `INSERT INTO tenant (id, nama, slug, status, "createdAt") VALUES ($1, $2, $3, 'AKTIF', now())`,
+    [tenantId, `Tenant ${tenantId}`, tenantId],
+  );
+  await client.query(
+    `INSERT INTO outlet (id, "tenantId", nama, kode, "zonaWaktu", status, "createdAt")
+     VALUES ($1, $2, $3, $4, 'Asia/Jakarta', 'AKTIF', now())`,
+    [outletId, tenantId, `Outlet ${outletId}`, outletId.slice(0, 10)],
+  );
+  await client.query(
+    `INSERT INTO pengguna (id, "namaLengkap", email, status, "jumlahPercobaanGagal", "createdAt", "updatedAt")
+     VALUES ($1, 'Aktor Uji', $2, 'AKTIF', 0, now(), now())`,
+    [penggunaId, `${penggunaId}@example.test`],
+  );
+  await client.query(
+    `INSERT INTO keanggotaan_tenant (id, "penggunaId", "tenantId", status, "isOwner", "bergabungPada", "createdAt", "updatedAt")
+     VALUES ($1, $2, $3, 'AKTIF', false, now(), now(), now())`,
+    [keanggotaanTenantId, penggunaId, tenantId],
+  );
+  await client.query(
+    `INSERT INTO keanggotaan_outlet (id, "keanggotaanTenantId", "tenantId", "outletId", status, "createdAt", "updatedAt")
+     VALUES ($1, $2, $3, $4, 'AKTIF', now(), now())`,
+    [keanggotaanOutletId, keanggotaanTenantId, tenantId, outletId],
+  );
+  await client.query(
+    `INSERT INTO kategori_menu (id, "tenantId", nama, urutan, status) VALUES ($1, $2, 'Kategori Uji', 0, 'AKTIF')`,
+    [kategoriMenuId, tenantId],
+  );
+  await client.query(
+    `INSERT INTO item_menu (id, "tenantId", "kategoriId", nama, "stokTakTerbatas", status, "createdAt")
+     VALUES ($1, $2, $3, 'Item Uji', true, 'AKTIF', now())`,
+    [itemMenuId, tenantId, kategoriMenuId],
+  );
+  await client.query(
+    `INSERT INTO pesanan (id, "tenantId", "outletId", kanal, "nomorPesanan", status, "dibuatOlehId", "createdAt", "updatedAt", version)
+     VALUES ($1, $2, $3, 'KASIR', $4, $5, $6, now(), now(), 1)`,
+    [pesananId, tenantId, outletId, pesananId.slice(0, 12), status, keanggotaanOutletId],
+  );
+
+  const itemPesananIds: string[] = [];
+  for (let i = 0; i < jumlahItem; i += 1) {
+    const itemPesananId = fixtureId("itempesanan");
+    await client.query(
+      `INSERT INTO item_pesanan (id, "pesananId", "itemMenuId", kuantitas, "hargaSatuan", status,
+         "namaItemSnapshot", "hargaDasarSnapshot", "totalBarisSnapshot")
+       VALUES ($1, $2, $3, $4, 10000, 'DITERIMA', 'Item Uji', 10000, $5)`,
+      [itemPesananId, pesananId, itemMenuId, kuantitasPerItem, kuantitasPerItem * 10000],
+    );
+    itemPesananIds.push(itemPesananId);
+  }
+
+  return {
+    tenantId,
+    outletId,
+    penggunaId,
+    keanggotaanTenantId,
+    keanggotaanOutletId,
+    kategoriMenuId,
+    itemMenuId,
+    pesananId,
+    itemPesananIds,
+  };
+}
+
 export async function createBaseFixtures(client: pg.PoolClient): Promise<Fixtures> {
   const tenantId = fixtureId("tenant");
   const outletId = fixtureId("outlet");

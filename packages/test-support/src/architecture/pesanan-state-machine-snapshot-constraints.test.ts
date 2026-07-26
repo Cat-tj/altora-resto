@@ -76,9 +76,11 @@ function getModelBody(schema: string, modelName: string): string {
 export function jalankanSemuaAssertion(): void {
   const schema = readSchema();
 
-  // --- ALT-DEF-005: StatusPesanan 14-status penuh ---
+  // --- ALT-DEF-005/ADR-036: StatusPesanan 13-status (14-status ALT-DEF-005
+  // dikurangi DIRETUR, dihapus ADR-036 - digantikan model PesananRetur +
+  // Pesanan.statusRetur yang ORTOGONAL, lihat DECISION-LOG.md ADR-036) ---
   const statusPesananBody = getEnumBody(schema, "StatusPesanan");
-  const STATUS_PESANAN_14 = [
+  const STATUS_PESANAN_13 = [
     "DRAF",
     "DIKIRIM",
     "MENUNGGU_PERSETUJUAN",
@@ -92,21 +94,22 @@ export function jalankanSemuaAssertion(): void {
     "DISAJIKAN",
     "SELESAI",
     "DIBATALKAN",
-    "DIRETUR",
   ];
-  for (const nilai of STATUS_PESANAN_14) {
+  for (const nilai of STATUS_PESANAN_13) {
     assertContains(
       statusPesananBody,
       nilai,
-      `StatusPesanan harus memuat nilai enum ${nilai} (14-status penuh, ALT-DEF-005).`,
+      `StatusPesanan harus memuat nilai enum ${nilai} (13-status, ALT-DEF-005 minus DIRETUR/ADR-036).`,
     );
   }
   // Status lama yang seharusnya sudah tidak ada lagi (digantikan state machine baru).
-  for (const nilaiLama of ["BARU", "DIPROSES_DAPUR", "SIAP_DISAJIKAN", "DIBAYAR"]) {
+  // DIRETUR TERMASUK di sini sejak ADR-036 - lihat catatan penghapusan di
+  // schema.prisma pada enum StatusPesanan dan DECISION-LOG.md ADR-036.
+  for (const nilaiLama of ["BARU", "DIPROSES_DAPUR", "SIAP_DISAJIKAN", "DIBAYAR", "DIRETUR"]) {
     assertNotContains(
       statusPesananBody,
       `  ${nilaiLama}\n`,
-      `StatusPesanan seharusnya sudah tidak memuat nilai lama ${nilaiLama} (digantikan 14-status ALT-DEF-005).`,
+      `StatusPesanan seharusnya sudah tidak memuat nilai lama ${nilaiLama} (DIRETUR dihapus ADR-036, sisanya digantikan 14-status ALT-DEF-005).`,
     );
   }
 
@@ -250,18 +253,28 @@ export function jalankanSemuaAssertion(): void {
   );
   assertContains(
     pesananBody,
-    "perubahan      PesananPerubahan[]",
+    "perubahan         PesananPerubahan[]",
     "Pesanan harus punya relasi list ke PesananPerubahan.",
   );
   assertContains(
     pesananBody,
-    "penolakan      PesananPenolakan?",
+    "penolakan         PesananPenolakan?",
     "Pesanan harus punya relasi opsional (nol-atau-satu) ke PesananPenolakan.",
   );
   assertContains(
     pesananBody,
-    "pembatalan     PesananPembatalan?",
+    "pembatalan        PesananPembatalan?",
     "Pesanan harus punya relasi opsional (nol-atau-satu) ke PesananPembatalan.",
+  );
+  assertContains(
+    pesananBody,
+    "retur             PesananRetur[]",
+    "Pesanan harus punya relasi list ke PesananRetur (ADR-036, menggantikan makna StatusPesanan.DIRETUR yang dihapus).",
+  );
+  assertContains(
+    pesananBody,
+    "statusRetur        StatusRingkasanRetur @default(TANPA_RETUR)",
+    "Pesanan harus punya kolom cache statusRetur bertipe StatusRingkasanRetur, ORTOGONAL terhadap status (ADR-036).",
   );
 
   // --- ALT-DEF-006 (batch BERIKUTNYA, sudah dikerjakan): kardinalitas
@@ -289,8 +302,66 @@ export function jalankanSemuaAssertion(): void {
   );
   assertContains(
     pesananBody,
-    "tiketDapur     TiketDapur[]",
+    "tiketDapur        TiketDapur[]",
     "Pesanan.tiketDapur harus berupa list TiketDapur[] (1:N), bukan TiketDapur? (1:1) - ALT-DEF-006/ADR-018 Keputusan 1.",
+  );
+
+  // --- ADR-036: PesananPembatalan diperluas (jenisPembatalan, disetujuiOlehId) ---
+  for (const kolom of ["jenisPembatalan", "disetujuiOlehId"]) {
+    assertContains(
+      pesananPembatalanBody,
+      kolom,
+      `PesananPembatalan harus punya kolom ${kolom} (ADR-036, void setelah produksi).`,
+    );
+  }
+  assertContains(
+    pesananPembatalanBody,
+    "jenisPembatalan  JenisPembatalan @default(SEBELUM_PRODUKSI)",
+    "PesananPembatalan.jenisPembatalan harus enum JenisPembatalan berdefault SEBELUM_PRODUKSI (ADR-036).",
+  );
+
+  // --- ADR-036: PesananRetur/PesananReturBaris (menggantikan StatusPesanan.DIRETUR) ---
+  const pesananReturBody = getModelBody(schema, "PesananRetur");
+  for (const kolom of [
+    "tenantId",
+    "outletId",
+    "pesananId",
+    "nomorRetur",
+    "status",
+    "alasan",
+    "diajukanOlehId",
+    "disetujuiOlehId",
+    "totalNilaiRetur",
+    "createdAt",
+    "updatedAt",
+    "version",
+  ]) {
+    assertContains(pesananReturBody, kolom, `PesananRetur harus punya kolom ${kolom} (ADR-036).`);
+  }
+  assertContains(
+    pesananReturBody,
+    "@@unique([tenantId, outletId, nomorRetur])",
+    "PesananRetur.nomorRetur harus unik per tenant+outlet (ADR-036).",
+  );
+
+  const pesananReturBarisBody = getModelBody(schema, "PesananReturBaris");
+  for (const kolom of [
+    "tenantId",
+    "pesananReturId",
+    "itemPesananId",
+    "kuantitasDikembalikan",
+    "nilaiPengembalian",
+    "alasanBaris",
+    "createdAt",
+  ]) {
+    assertContains(pesananReturBarisBody, kolom, `PesananReturBaris harus punya kolom ${kolom} (ADR-036).`);
+  }
+
+  // --- ADR-036 (sub-problem D): TiketDapur.alasanPembatalan ---
+  assertContains(
+    tiketDapurBody,
+    "alasanPembatalan  String?",
+    "TiketDapur harus punya kolom alasanPembatalan (wajib-secara-CHECK saat status DIBATALKAN, ADR-036).",
   );
 }
 

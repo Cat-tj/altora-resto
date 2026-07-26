@@ -62,15 +62,22 @@ async function testTriggerExistsOnAll13Tables(): Promise<void> {
     );
 
     for (const table of ALL_TABLES) {
+      // ADR-036: tabel `pesanan` sejak batch retur/atomicity-pembayaran JUGA
+      // punya trigger LAIN (`trg_cek_konsistensi_pada_pesanan`, fungsi
+      // `cek_konsistensi_pembayaran_pesanan`, deferred constraint trigger -
+      // lihat migrasi `20260726130000_pengaman_atomik_pembayaran_pesanan`) -
+      // filter di bawah PERSIS pada fungsi bump-version supaya assertion ini
+      // tetap benar walau tabel punya trigger tambahan yang tidak terkait
+      // ADR-035 sama sekali.
       const trg = await pool.query(
         `SELECT t.tgname, p.proname FROM pg_trigger t
          JOIN pg_proc p ON t.tgfoid = p.oid
-         WHERE t.tgrelid = $1::regclass AND NOT t.tgisinternal`,
+         WHERE t.tgrelid = $1::regclass AND NOT t.tgisinternal AND p.proname = 'optimistic_lock_bump_version'`,
         [table],
       );
       assertTrue(
         trg.rowCount === 1,
-        `Tabel ${table} harus punya persis satu trigger bump-version, dapat ${trg.rowCount}.`,
+        `Tabel ${table} harus punya persis satu trigger bump-version (fungsi optimistic_lock_bump_version), dapat ${trg.rowCount}.`,
       );
       assertTrue(
         trg.rows[0].proname === "optimistic_lock_bump_version",
