@@ -179,8 +179,8 @@ async function testStokOpnameAktorLintasTenantDitolak(): Promise<void> {
 
     const msg = await expectReject(client, "StokOpname.dibuatOlehId menunjuk KeanggotaanTenant milik tenant LAIN", () =>
       client.query(
-        `INSERT INTO stok_opname (id, "tenantId", "gudangId", status, "dijadwalkanPada", "dibuatOlehId")
-         VALUES ($1, $2, $3, 'DRAF', now(), $4)`,
+        `INSERT INTO stok_opname (id, "tenantId", "gudangId", status, "dijadwalkanPada", "dibuatOlehId", "updatedAt")
+         VALUES ($1, $2, $3, 'DRAF', now(), $4, now())`,
         [fixtureId("opname"), fx.tenantId, fx.gudangId, aktorLintasTenant.keanggotaanTenantId],
       ),
     );
@@ -198,8 +198,8 @@ async function testStokOpnameAktorValidDiterima(): Promise<void> {
     const aktor = await createAktorFixture(client, fx.tenantId, fx.outletId);
 
     await client.query(
-      `INSERT INTO stok_opname (id, "tenantId", "gudangId", status, "dijadwalkanPada", "dibuatOlehId")
-       VALUES ($1, $2, $3, 'DRAF', now(), $4)`,
+      `INSERT INTO stok_opname (id, "tenantId", "gudangId", status, "dijadwalkanPada", "dibuatOlehId", "updatedAt")
+       VALUES ($1, $2, $3, 'DRAF', now(), $4, now())`,
       [fixtureId("opname"), fx.tenantId, fx.gudangId, aktor.keanggotaanTenantId],
     );
     const check = await client.query(`SELECT count(*)::int AS n FROM stok_opname WHERE "dibuatOlehId" = $1`, [

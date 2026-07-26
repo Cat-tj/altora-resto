@@ -455,8 +455,8 @@ async function testKeanggotaanLedger(table: "poin_riwayat" | "ledger_stempel"): 
     const pelanggan2 = await createPelangganTambahan(client, fx.tenantId);
     const keanggotaan2 = fixtureId("keanggotaan2");
     await client.query(
-      `INSERT INTO keanggotaan (id, "tenantId", "pelangganId", "tierKeanggotaanId", "poinAktif", "poinKumulatif", status, "bergabungPada")
-       VALUES ($1, $2, $3, $4, 0, 0, 'AKTIF', now())`,
+      `INSERT INTO keanggotaan (id, "tenantId", "pelangganId", "tierKeanggotaanId", "poinAktif", "poinKumulatif", status, "bergabungPada", "updatedAt")
+       VALUES ($1, $2, $3, $4, 0, 0, 'AKTIF', now(), now())`,
       [keanggotaan2, fx.tenantId, pelanggan2, fx.tierKeanggotaanId],
     );
     const a3 = await insert({ jumlah: 7, alasan: "asal ketiga" });

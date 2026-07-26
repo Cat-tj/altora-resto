@@ -154,8 +154,8 @@ export async function createKeanggotaanFixtures(client: pg.PoolClient): Promise<
     [tierKeanggotaanId, tenantId],
   );
   await client.query(
-    `INSERT INTO keanggotaan (id, "tenantId", "pelangganId", "tierKeanggotaanId", "poinAktif", "poinKumulatif", status, "bergabungPada")
-     VALUES ($1, $2, $3, $4, 0, 0, 'AKTIF', now())`,
+    `INSERT INTO keanggotaan (id, "tenantId", "pelangganId", "tierKeanggotaanId", "poinAktif", "poinKumulatif", status, "bergabungPada", "updatedAt")
+     VALUES ($1, $2, $3, $4, 0, 0, 'AKTIF', now(), now())`,
     [keanggotaanId, tenantId, pelangganId, tierKeanggotaanId],
   );
 
