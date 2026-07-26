@@ -5291,11 +5291,23 @@ model IdempotencyKey {
   @@map("idempotency_key")
 }
 
+// ADR-039: DEAD_LETTER ditambahkan sebagai status TERMINAL yang BERBEDA dari
+// GAGAL - GAGAL berarti "percobaan terakhir gagal, MASIH akan di-retry lagi
+// oleh relay worker" (baris ini tetap masuk filter polling `status IN
+// ('TERTUNDA','GAGAL')` di index [status, availableAt]); DEAD_LETTER berarti
+// "sudah menyerah, TIDAK akan di-retry otomatis lagi" - relay worker (app-
+// level, kebijakan BUKAN bagian skema) memindahkan baris dari GAGAL ke
+// DEAD_LETTER ketika attemptCount melewati ambang batas maksimum yang
+// dikonfigurasi (mis. 10x, angka pastinya keputusan operasional relay
+// worker, bukan constraint database). Baris DEAD_LETTER butuh intervensi
+// manual/tooling terpisah (requeue eksplisit balik ke TERTUNDA, atau
+// dibiarkan sebagai catatan kegagalan permanen untuk investigasi).
 enum StatusOutboxEvent {
   TERTUNDA
   DIPROSES
   TERKIRIM
   GAGAL
+  DEAD_LETTER
 }
 
 // ALT-DEF-017/ALT-PLT-019: transactional outbox - event domain ditulis DALAM
@@ -5320,7 +5332,27 @@ enum StatusOutboxEvent {
 //   stock.low, stock.adjusted, shift.opened, shift.closed,
 //   attendance.created,
 //   order.voided_after_production,
-//   retur.diajukan, retur.disetujui, retur.ditolak, retur.diproses, retur.selesai
+//   retur.diajukan, retur.disetujui, retur.ditolak, retur.diproses, retur.selesai,
+//   order.split, order.reopened, order.merged,
+//   payment.refunded,
+//   membership.point_redeemed, membership.stamp_redeemed,
+//   promo.applied, promo.repeat_applied
+//
+// ADR-039/ALT-DEF-042 (menutup): 8 eventType di atas (order.split/
+// order.reopened/order.merged/payment.refunded/membership.point_redeemed/
+// membership.stamp_redeemed/promo.applied/promo.repeat_applied) BARU
+// ditambahkan pada batch ini, menutup gap katalog yang dicatat ALT-DEF-042 -
+// order.split/order.reopened/order.merged (ALT-PES-014/015/016/017/018,
+// belum ada state machine/model pendukung penuh untuk split/reopen/merge di
+// schema saat ini - eventType didaftarkan sebagai KONTRAK NAMA untuk batch
+// fitur mendatang, sama seperti pola daftar ini sejak ADR-016, BUKAN klaim
+// bahwa modelnya sudah lengkap), payment.refunded (ALT-KSR-007, lihat model
+// PembayaranRefund yang sudah ada), membership.point_redeemed/
+// membership.stamp_redeemed (ALT-MBR-010/016, lihat PoinRiwayat/
+// LedgerStempel append-only ADR-032), promo.applied/promo.repeat_applied
+// (BARU diusulkan batch ini sendiri, BUKAN dari ALT-DEF-042 - melengkapi
+// model PromoPemakaian.jumlahPenerapan dari ADR-038 yang butuh event saat
+// promo repeatable diterapkan/diterapkan-ulang dalam satu pesanan).
 //
 // ALT-DEF-005 (correction-loop lanjutan): `order.completed` (DISAJIKAN ->
 // SELESAI) ditambahkan ke daftar ini melengkapi state machine Pesanan
@@ -5334,38 +5366,164 @@ enum StatusOutboxEvent {
 // PesananRetur) dan `order.voided_after_production` (void setelah
 // produksi, PesananPembatalan.jenisPembatalan = SETELAH_PRODUKSI) - lihat
 // docs/arsitektur/STATE-MACHINES.md bagian 1a dan 11.
+// ADR-039 (pengerasan transactional outbox - versioning/dedup/ordering):
+// batch ini menambah 9 kolom + 1 unique constraint tambahan + 1 index
+// ordering + 1 trigger partial-mutability ke model yang sudah ada sejak
+// ADR-016. Lihat DECISION-LOG.md ADR-039 untuk rasional lengkap per kolom;
+// ringkasan padat per kolom baru ada di komentar masing-masing di bawah.
+//
+// outletId: SUDAH diverifikasi ULANG pada batch ini (bukan diasumsikan) -
+// kolom ini SENGAJA informational-nullable, BUKAN composite-FK ke Outlet,
+// pola yang SAMA seperti AuditLog.outletId/IdempotencyKey.outletId (lihat
+// komentar di atas model IdempotencyKey) - model ini hanya punya SATU relasi
+// tenant-owned (Tenant langsung), tidak ada relasi tenant-owned KEDUA yang
+// independen untuk didisambiguasi lewat composite-FK. Model ini DIBUAT pada
+// batch ADR-016 yang SAMA dengan batch composite-FK IdempotencyKey, jadi
+// tidak ada risiko "ditambah setelah batch composite-FK dan terlewat" -
+// diverifikasi langsung, bukan diasumsikan.
 model DomainOutboxEvent {
-  id            String            @id
-  tenantId      String
+  id               String            @id
+  tenantId         String
   // Nullable - sebagian event bisa jadi tenant-level (mis. shift.opened bila
   // shift tidak diikat ke satu outlet - didokumentasikan sebagai kemungkinan,
   // bukan diasumsikan tunggal).
-  outletId      String?
+  outletId         String?
   // Tipe aggregate root yang memicu event (mis. "Pesanan", "Pembayaran",
   // "TiketDapur") - String bebas, bukan enum, karena daftar aggregate akan
   // terus bertambah seiring domain baru menulis event.
-  aggregateType String
-  aggregateId   String
+  aggregateType    String
+  aggregateId      String
+  // ADR-039: versi aggregate root (mis. Pesanan.version dari batch
+  // optimistic-locking ADR-035) PADA SAAT event ini ditulis - BUKAN versi
+  // TERKINI aggregate (yang mungkin sudah berubah lagi sebelum event ini
+  // diproses relay worker). Memungkinkan consumer mendeteksi event yang
+  // diproses TIDAK berurutan relatif terhadap perubahan state aggregate
+  // sebenarnya (mis. event versi 3 diproses sebelum event versi 2 selesai).
+  aggregateVersion Int
   // Nama event, mengikuti daftar lengkap di komentar model di atas (mis.
   // "order.submitted") - String bebas agar domain lain bisa menambah event
   // baru tanpa migrasi skema di package platform ini.
-  eventType     String
-  payload       Json
-  status        StatusOutboxEvent @default(TERTUNDA)
-  attemptCount  Int               @default(0)
+  eventType        String
+  // ADR-039 - eventVersion vs schemaVersion, DUA KONSEP BERBEDA yang SENGAJA
+  // dipisah (bukan duplikat):
+  //   - eventVersion: versi SKEMA PAYLOAD untuk eventType SPESIFIK ini (mis.
+  //     "order.accepted" v1 vs v2 bila BENTUK payload event itu berubah di
+  //     masa depan) - consumer lama membaca eventVersion untuk tahu skema
+  //     payload mana yang harus ia harapkan/tolak/terjemahkan.
+  //   - schemaVersion: versi ENVELOPE OUTBOX secara keseluruhan - yaitu
+  //     kolom-kolom TOP-LEVEL apa saja yang ada di baris ini (mis. batch INI
+  //     yang menambah correlationId/causationId/aggregateVersion/dst adalah
+  //     kandidat kenaikan schemaVersion berikutnya, karena BENTUK ENVELOPE-
+  //     nya berubah, bukan bentuk payload eventType tertentu).
+  //   Keduanya independen: eventType yang sama bisa tetap eventVersion=1
+  //   sementara schemaVersion sudah naik (envelope berubah, payload event
+  //   itu sendiri tidak), atau payload "order.accepted" naik ke eventVersion
+  //   2 sementara schemaVersion envelope tetap sama.
+  eventVersion     Int               @default(1)
+  // Versi ENVELOPE (lihat catatan eventVersion di atas) - dimulai "1.0" pada
+  // batch ADR-039 ini karena batch ini SENDIRI adalah perubahan bentuk
+  // envelope pertama sejak ADR-016 (9 kolom top-level baru).
+  schemaVersion    String            @default("1.0")
+  // ADR-039 - correlationId vs causationId, DUA KONSEP BERBEDA:
+  //   - correlationId: ID YANG SAMA untuk SEMUA event/command yang berasal
+  //     dari SATU operasi bisnis akar (mis. satu command "terima pesanan"
+  //     yang memicu event order.accepted DAN stock.reserved berbagi
+  //     correlationId yang SAMA - keduanya "milik" operasi akar yang sama).
+  //   - causationId: ID event/command yang LANGSUNG menyebabkan event ini
+  //     tercipta - rantai KAUSAL, bukan grup. Contoh: order.accepted
+  //     menyebabkan kitchen.ticket_created menyebabkan notification.sent -
+  //     kitchen.ticket_created.causationId = id event order.accepted,
+  //     notification.sent.causationId = id event kitchen.ticket_created,
+  //     TAPI ketiganya berbagi correlationId yang SAMA (akar operasinya
+  //     tetap satu). Nullable karena event AKAR (yang memulai rantai, tidak
+  //     disebabkan event lain, hanya oleh command pengguna langsung) tidak
+  //     punya causationId.
+  correlationId    String
+  causationId      String?
+  // Consumer-supplied atau business-logic-supplied key untuk pemrosesan
+  // idempotent di sisi CONSUMER (lihat @@unique di bawah dan kontrak wajib
+  // di docs/database/15-platform-infra.md - "consumer idempotent" WAJIB
+  // memakai kolom ini untuk skip event yang sudah diproses).
+  deduplicationKey String
+  payload          Json
+  status           StatusOutboxEvent @default(TERTUNDA)
+  attemptCount     Int               @default(0)
   // Dipakai untuk retry backoff terjadwal - relay worker memfilter
   // `availableAt <= now()` agar percobaan ulang tidak langsung beruntun tanpa
   // jeda saat publish gagal sementara.
-  availableAt   DateTime
-  processedAt   DateTime?
-  lastError     String?
-  createdAt     DateTime          @default(now())
+  availableAt      DateTime
+  // ADR-039: kapan peristiwa BISNIS itu sendiri SEBENARNYA terjadi (mis.
+  // saat command "terima pesanan" dieksekusi), BISA BERBEDA dari createdAt
+  // (kapan baris outbox ini ditulis) JIKA ada delay pemrosesan sebelum baris
+  // outbox ditulis. CATATAN PENTING: pada pola outbox yang BENAR (event
+  // ditulis DALAM transaksi bisnis yang sama, lihat kontrak inti di bawah),
+  // occurredAt dan createdAt SEHARUSNYA selalu sama atau berbeda dalam
+  // hitungan milidetik (waktu antara "hitung timestamp peristiwa di kode
+  // aplikasi" dan "commit transaksi database") - keduanya TIDAK dimaksudkan
+  // untuk berbeda jauh; occurredAt tetap kolom TERPISAH (bukan dihapus/
+  // digantikan createdAt) supaya kasus non-ideal (mis. event yang
+  // di-backfill/direplay dari log lama dengan timestamp asli yang jauh
+  // lebih awal dari saat baris outbox ditulis) tetap punya tempat
+  // merepresentasikan waktu bisnis yang jujur, terpisah dari waktu tulis.
+  occurredAt       DateTime
+  // ADR-039 - publishedAt vs processedAt, KEPUTUSAN: BUKAN kolom duplikat,
+  // dua titik pipeline yang BERBEDA:
+  //   - publishedAt: kapan relay worker BERHASIL mem-publish event ini ke
+  //     konsumen eksternal (WebSocket/broker/job agregasi) - HANYA diisi
+  //     SEKALI, pada saat SUKSES pertama, bersamaan dengan status berubah
+  //     ke TERKIRIM. Tidak pernah berubah lagi setelah itu.
+  //   - processedAt (makna DIPERSEMPIT pada batch ini dibanding ADR-016
+  //     lama, yang ambigu antara "selesai diproses" dan "berhasil dikirim"):
+  //     sekarang berarti kapan relay worker TERAKHIR KALI menyelesaikan SATU
+  //     upaya pemrosesan baris ini, APAPUN HASILNYA (sukses MAUPUN gagal) -
+  //     diisi ulang SETIAP upaya (bersamaan dengan attemptCount naik/
+  //     lastError diisi bila gagal, atau bersamaan dengan publishedAt bila
+  //     sukses). Berguna untuk observability "kapan terakhir baris ini
+  //     disentuh worker" terlepas dari hasilnya, sesuatu yang publishedAt
+  //     (murni penanda sukses) tidak bisa jawab untuk baris yang masih GAGAL
+  //     berulang. publishedAt TIDAK menggantikan processedAt - keduanya
+  //     dipertahankan dengan makna yang didekonflikkan eksplisit ini.
+  publishedAt      DateTime?
+  processedAt      DateTime?
+  lastError        String?
+  createdAt        DateTime          @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
+  // Write-side dedup #1: cegah event type YANG SAMA tercatat DUA KALI untuk
+  // aggregate yang sama PADA VERSI yang sama (mis. dua transaksi konkuren
+  // yang sama-sama mencoba menulis "order.accepted" untuk Pesanan versi 5 -
+  // salah satu HARUS gagal di sini). Menangkap kegagalan MODE SPESIFIK:
+  // bug/race di kode PENULIS (producer) yang mencoba menulis event
+  // duplikat untuk transisi aggregate yang SAMA PERSIS.
+  @@unique([aggregateType, aggregateId, aggregateVersion, eventType])
+  // Write-side dedup #2 (TERPISAH, BUKAN redundan dengan di atas): kunci
+  // dedup yang dipasok CONSUMER/business-logic, cakupannya BISA BERBEDA
+  // dari (aggregateType, aggregateId, aggregateVersion, eventType) - mis.
+  // event yang sama secara LOGIS bisa datang dari jalur penulisan berbeda
+  // (retry command dari klien dengan Idempotency-Key yang sama menghasilkan
+  // deduplicationKey yang sama walau, secara hipotetis, aggregateVersion
+  // berbeda karena race), atau kunci dedup yang sengaja dikonstruksi lintas
+  // beberapa event type terkait. Menangkap kegagalan MODE BERBEDA: dedup
+  // yang PERLU bertahan bahkan ketika asumsi "versi aggregate yang sama
+  // persis" di atas tidak berlaku/tidak relevan untuk kasus itu. Kedua
+  // constraint dibutuhkan BERSAMA karena masing-masing melindungi jalur
+  // penyebab duplikasi yang berbeda - salah satu saja tidak cukup.
+  @@unique([deduplicationKey])
   // Index untuk polling/dispatch efisien oleh relay worker: cari baris
   // TERTUNDA/GAGAL yang availableAt-nya sudah lewat, terurut untuk diproses.
   @@index([status, availableAt])
+  // ADR-039 - dukungan ORDERING (bukan penegakan - lihat catatan panjang di
+  // DECISION-LOG.md ADR-039): index EKSPLISIT (aggregateType, aggregateId,
+  // aggregateVersion) TIDAK ditambahkan terpisah karena unique index yang
+  // dibuat otomatis oleh @@unique([aggregateType, aggregateId,
+  // aggregateVersion, eventType]) DI ATAS sudah menjadi B-tree yang leftmost
+  // prefix-nya PERSIS (aggregateType, aggregateId, aggregateVersion) -
+  // Postgres bisa memakainya efisien untuk query "ambil event aggregate ini
+  // terurut versi" TANPA index kedua yang duplikatif (diverifikasi lewat
+  // pg_indexes - lihat test integrasi). Menambah index terpisah yang
+  // kolom-prefix-nya identik hanya akan menggandakan biaya write tanpa
+  // manfaat query nyata.
   @@map("domain_outbox_event")
 }
 
