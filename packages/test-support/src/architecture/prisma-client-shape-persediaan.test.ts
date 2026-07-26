@@ -65,6 +65,8 @@ const contohMutasiPembelian = {
   // Rupiah bulat per ADR-005 - hanya mutasi MASUK yang membawa biaya perolehan.
   hargaPerolehan: 18500,
   dibuatOlehId: PENGGUNA,
+  // ADR-032: `alasan` wajib pada seluruh baris ledger (bukan cuma pembalik).
+  alasan: "Penerimaan pembelian PO-001 - contoh fixture tipe",
 } satisfies Prisma.MutasiStokUncheckedCreateInput;
 
 // (b) Pemakaian resep: HANYA sumber, jumlah NEGATIF.
@@ -83,6 +85,7 @@ const contohMutasiPemakaian = {
   lokasiSumberId: contohLokasiFreezer.id,
   batchStokId: "01J...BATCHSTOK",
   dibuatOlehId: PENGGUNA,
+  alasan: "Pemakaian resep untuk item pesanan - contoh fixture tipe",
 } satisfies Prisma.MutasiStokUncheckedCreateInput;
 
 // (c) Transfer: KEDUANYA terisi.
@@ -99,6 +102,7 @@ const contohMutasiTransferKeluar = {
   lokasiSumberId: contohLokasiFreezer.id,
   lokasiTujuanId: contohLokasiTanpaJenis.id,
   dibuatOlehId: PENGGUNA,
+  alasan: "Transfer stok keluar antar gudang - contoh fixture tipe",
 } satisfies Prisma.MutasiStokUncheckedCreateInput;
 
 // Bukti bahwa SELURUH 12 nilai enum baru benar-benar diterima Prisma - kalau
