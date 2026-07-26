@@ -3687,3 +3687,208 @@ sebagai deferred yang SAH, bukan gap eksekusi batch ini.
 kedua CHECK constraint dan trigger deferred (DB-enforced, teruji), baris
 kategori C baru untuk "predikat order-ready" dan "satu transaksi atomik
 penuh" (app-level, didokumentasikan sebagai kontrak).
+
+## ADR-037: Aturan tunggal siklus hidup stok (reservasi-konsumsi-waste) dan linkage `mutasiStokId`
+
+**Konteks.** Master spec dan beberapa batch koreksi sebelumnya (ADR-023/024/
+025) memakai frasa ambigu "reservasi/pengurangan stok bahan sesuai resep
+bila berlaku" di `STATE-MACHINES.md` (baris transisi
+`DIKONFIRMASI -> DIKIRIM_KE_DAPUR`) tanpa pernah menegaskan SATU transisi
+state persis mana yang memicu peristiwa stok mana. Batch ini menutup
+ambiguitas itu dengan SATU aturan tegas dan menegakkan bagian yang genuinely
+bisa ditegakkan di level database.
+
+**Keputusan 1 - Aturan tunggal (otoritatif, MENGGANTIKAN seluruh bunyi
+ambigu "reservasi/pengurangan stok" di dokumen lain):**
+
+```
+Pesanan DITERIMA
+  -> ReservasiStok dibuat AKTIF (satu per ItemPesanan yang berbahan)
+
+Pesanan DIKIRIM_KE_DAPUR (TiketDapur dibuat/masuk antrian dapur)
+  -> ReservasiStok terkait: AKTIF -> DIKONSUMSI
+  -> MutasiStok jenis PEMAKAIAN_RESEP ditulis
+  -> ReservasiStok.mutasiStokId ditautkan ke baris MutasiStok itu
+
+Pesanan DIBATALKAN SEBELUM produksi (status masih DITERIMA/
+MENUNGGU_PEMBAYARAN/DIKONFIRMASI/DIKIRIM_KE_DAPUR-belum-mulai-masak)
+  -> ReservasiStok terkait: AKTIF -> DILEPAS
+  -> TIDAK ADA MutasiStok
+
+Pesanan batal SETELAH produksi (jenisPembatalan = SETELAH_PRODUKSI, ADR-036)
+  -> CatatanWaste dibuat + MutasiStok jenis WASTE (linkage mutasiStokId
+     CatatanWaste SUDAH ADA sejak ALT-DEF-008, TIDAK berubah batch ini)
+```
+
+**Catatan rekonsiliasi teks "TiketDapur DITERIMA" vs `STATE-MACHINES.md`.**
+Draft awal batch ini memakai frasa "DIKIRIM_KE_DAPUR / TiketDapur DITERIMA"
+sebagai padanan satu sama lain. Setelah dicek ulang terhadap
+`STATE-MACHINES.md` bagian "Dapur (Tiket Dapur)", KEDUANYA BUKAN peristiwa
+yang identik: `TiketDapur.DITERIMA` (dari `BARU`) hanya berarti staf
+stasiun MENERIMA/ACKNOWLEDGE tiket di layar KDS (`mulaiDiprosesPada` masih
+`null`); bahan secara fisik BARU mulai dipakai saat `TiketDapur` masuk
+`SEDANG_DISIAPKAN` (baris pertama benar-benar mulai dimasak,
+`mulaiDiprosesPada = now()`). **Keputusan final**: titik picu konsumsi
+adalah `Pesanan.DIKIRIM_KE_DAPUR` (saat `TiketDapur` PERTAMA KALI dibuat
+untuk pesanan tsb) - BUKAN `TiketDapur.DITERIMA` maupun
+`TiketDapur.SEDANG_DISIAPKAN`. Alasan: (a) `ReservasiStok` digantung per
+`ItemPesanan`/pesanan, bukan per tiket dapur granular, sehingga titik picu
+paling alami adalah level Pesanan; (b) menunda konsumsi sampai
+`SEDANG_DISIAPKAN` per-baris berarti satu pesanan dengan banyak tiket lintas
+stasiun akan mengonsumsi reservasinya secara BERTAHAP dan tidak atomik,
+menambah kompleksitas tanpa manfaat nyata pada batch ini (tidak ada kode
+handler yang menghitungnya hari ini); (c) `DIKIRIM_KE_DAPUR` sudah menjadi
+titik yang didokumentasikan API-CONTRACT.md untuk "reservasi mulai
+terpakai". **Defect baru `ALT-DEF-048`** dicatat untuk memastikan pilihan
+ini diverifikasi ulang saat kode handler dapur/produksi benar-benar ditulis
+(batch mendatang), karena ADR-022/024 sebelumnya tidak eksplisit membahas
+granularitas per-tiket vs per-pesanan untuk momen konsumsi.
+
+**Keputusan 2 - `ReservasiStok.status` (4 nilai) TIDAK BERUBAH, hanya
+ditegaskan ulang maknanya:** `AKTIF` (reserved, belum diklaim), `DIKONSUMSI`
+(dilepas KARENA produksi dimulai - SATU-SATUNYA nilai yang punya baris
+`MutasiStok` pendamping), `DILEPAS` (dilepas KARENA batal sebelum produksi -
+TIDAK PERNAH punya `MutasiStok` pendamping), `KEDALUWARSA` (job penyapu,
+reservasi lewat batas waktu tanpa klaim). Keempatnya sudah dirancang benar
+sejak ADR-024 Keputusan 2 - batch ini TIDAK mengubah enum, hanya menegaskan
+pemetaannya ke aturan Keputusan 1 di atas secara eksplisit.
+
+**Keputusan 3 - Linkage `ReservasiStok.mutasiStokId` (kolom baru, nullable,
+`@unique`, FK composite `(tenantId, mutasiStokId) -> MutasiStok(tenantId,
+id)`).** Sebelum batch ini, hubungan "reservasi mana menjadi mutasi stok
+yang mana" HANYA bisa di-infer tidak langsung lewat
+`MutasiStok.referensiJenis = PESANAN` + `referensiId = ItemPesanan.id`, yang
+tidak membedakan SATU reservasi dari reservasi lain pada baris pesanan yang
+sama (mis. bila kelak reservasi bisa dipecah per-batch). Kolom eksplisit ini
+membuat traceability auditable dan bisa di-JOIN langsung, bukan
+diverifikasi manual lintas kolom `referensiJenis/referensiId`. Pola FK
+composite mengikuti konvensi yang sama persis dengan
+`PenyesuaianStok.mutasiStokId`/`CatatanWaste.mutasiStokId` yang sudah ada
+sejak ALT-DEF-008.
+
+**Keputusan 4 - Idempotency `@@unique([itemPesananId])` pada
+`ReservasiStok`.** Menegakkan "SATU ItemPesanan paling banyak PERNAH punya
+SATU baris reservasi sepanjang hidupnya" - command "buat reservasi saat
+DITERIMA" yang dijalankan ulang (retry, double-submit, replay event) akan
+memicu unique violation, bukan diam-diam membuat reservasi kedua yang
+membuat `kuantitasDireservasi` di `StokBahan` dihitung dua kali. Efek
+samping SADAR dari desain ini: satu `ItemPesanan` yang reservasinya sudah
+`DILEPAS`/`KEDALUWARSA` TIDAK BISA direservasi ulang atas baris yang sama -
+"pesan ulang" harus membuat `ItemPesanan` baru (baris pesanan/pesanan baru),
+bukan mendaur ulang baris lama. Ini konsisten dengan sifat `ItemPesanan`
+sebagai baris append-mostly dalam siklus hidup satu pesanan.
+
+**Keputusan 5 - Idempotency konsumsi: trigger
+`trg_reservasi_stok_kunci_konsumsi`.** `mutasiStokId String? @unique` SAJA
+hanya mencegah DUA reservasi menunjuk SATU mutasi yang sama - ia TIDAK
+mencegah SATU reservasi yang SAMA dipindah-tunjuk dari mutasi A ke mutasi B
+lewat UPDATE kedua (skenario: command "konsumsi reservasi" dijalankan
+ulang secara keliru dan menulis mutasi kedua). Trigger `BEFORE UPDATE`
+menolak perubahan `mutasiStokId` begitu kolom itu SUDAH terisi (state
+`DIKONSUMSI` bersifat TERMINAL untuk kolom ini) - diuji perilaku di
+`siklus-hidup-stok-invariants.test.ts`.
+
+**Keputusan 6 - Row-locking vs optimistic locking untuk reservasi stok
+kontensi tinggi.** `StokBahan` sudah punya `version`+trigger auto-increment
+(ADR-035) sebagai lapisan optimistic-concurrency UMUM. Untuk kasus SPESIFIK
+"N kasir bersamaan mencoba merebut unit TERAKHIR item populer", optimistic
+locking BUKAN pilihan yang tepat: dengan retry optimistic, seluruh N
+transaksi membaca `version` yang sama, HANYA SATU yang menang tiap putaran,
+dan N-1 sisanya harus retry - pada kontensi tinggi ini menjadi thundering
+herd (setiap retry gagal lagi karena pemenang putaran sebelumnya sudah
+mengubah version, dan yang kalah harus re-read+retry berulang-ulang,
+membebani database justru saat beban SEDANG TINGGI). **Keputusan**: untuk
+jalur SPESIFIK "cek ketersediaan lalu buat ReservasiStok", service layer
+WAJIB memakai `SELECT ... FOR UPDATE` PESIMISTIK pada baris `StokBahan`
+terkait SEBELUM memutuskan boleh/tidaknya reservasi baru dibuat - request
+yang datang belakangan menunggu di lock queue (bukan retry-dari-nol), dan
+begitu lock didapat baca datanya sudah pasti terbaru (tidak perlu
+membandingkan `version` sama sekali untuk jalur ini). `version` (ADR-035)
+TETAP dipertahankan untuk jalur update StokBahan LAIN yang BUKAN
+kontensi-tinggi (mis. job rekonsiliasi, penyesuaian manual jarang) - kedua
+mekanisme melengkapi, bukan saling menggantikan, tergantung karakteristik
+jalur baca-tulisnya. **INI TIDAK BISA diimplementasikan di batch skema ini**
+- `SELECT ... FOR UPDATE` adalah pola query di dalam transaksi
+service-layer, tidak ada bentuk skema/DDL untuknya. Didokumentasikan sebagai
+kontrak WAJIB untuk handler command "buat reservasi" mendatang, dicatat di
+`INVARIAN-BELUM-DITEGAKKAN.md` kategori C (INV-015, tidak berubah statusnya
+- TETAP app-level, batch ini hanya memperjelas MENGAPA optimistic locking
+saja tidak cukup untuk jalur ini).
+
+**Keputusan 7 - Kebijakan stok negatif: trigger, bukan CHECK statis.**
+`PengaturanPersediaanOutlet.izinkanStokNegatif` (Boolean, default `false`)
+SUDAH ADA sejak ADR-025 Keputusan 4 - batch ini TIDAK menambah kolom
+kebijakan baru, hanya menambah PENEGAKAN NYATA di level database yang
+sebelumnya belum ada sama sekali (murni app-level). CHECK constraint statis
+(`kuantitas >= 0`) TIDAK BISA membaca kolom kebijakan di tabel LAIN
+(`pengaturan_persediaan_outlet`, per-outlet) - Postgres CHECK hanya boleh
+merujuk kolom dalam baris yang sama. Solusi: trigger `BEFORE INSERT OR
+UPDATE ON stok_bahan` (`trg_stok_bahan_cek_negatif`) yang, HANYA ketika
+`NEW.kuantitas < 0`, mencari `outletId` lewat `Gudang` lalu membaca
+`izinkanStokNegatif` dari `PengaturanPersediaanOutlet` SAAT TULIS (bukan
+snapshot lama) - default TOLAK bila belum ada baris pengaturan sama sekali
+(konsisten dengan default kolom Prisma). **Kejujuran soal konkurensi**:
+trigger ini SECARA NYATA mencegah komit APA PUN yang membuat saldo negatif
+tanpa izin, TERLEPAS dari race - justru karena `UPDATE ... SET kuantitas =
+kuantitas - $1 WHERE id = $2` (pola atomik, bukan baca-lalu-tulis di
+aplikasi) SECARA OTOMATIS diserialkan Postgres lewat row-lock implisit pada
+baris yang di-`UPDATE`: transaksi kedua yang mencoba meng-update baris yang
+sama HARUS menunggu transaksi pertama commit/rollback dulu, sehingga nilai
+yang dibaca trigger SELALU yang terbaru. Trigger TIDAK BISA menyelamatkan
+pola BACA-LALU-TULIS yang salah di level aplikasi (`SELECT kuantitas` lalu
+`UPDATE ... SET kuantitas = <nilai literal terhitung di kode>`) - itu tetap
+murni tanggung jawab disiplin service-layer (lihat Keputusan 6). Trigger ini
+adalah lapisan KEDUA (defense-in-depth) yang menjamin invariant STRUKTURAL
+"tidak pernah ada baris StokBahan negatif tanpa izin eksplisit", terlepas
+dari SEBERAPA BENAR kode aplikasi yang menulisnya - garansi yang murni
+app-level TIDAK PERNAH bisa berikan (bug di satu jalur command tidak akan
+pernah menembus lapisan ini). **DB-vs-app split final**: kebijakan
+"tidak boleh negatif" -> DB-ENFORCED NYATA (trigger, diuji). Invariant SUM
+lintas-baris "SUM(ReservasiStok AKTIF) <= saldo fisik" (INV-015) DAN pola
+check-then-act pemilihan `SELECT ... FOR UPDATE` -> TETAP app-level, tidak
+ada perubahan status di batch ini.
+
+**Keputusan 8 - Recipe-version-snapshot dan unit-conversion: verifikasi,
+BUKAN perubahan skema.** Digrep ulang: `ItemPesanan.resepVersiId` (nullable,
+FK ke `VersiResep`) MASIH ADA dan TIDAK rusak oleh batch mana pun sejak
+ADR-022 Keputusan 7. Kontrak (didokumentasikan, bukan kode - belum ada
+handler): perhitungan `MutasiStok(PEMAKAIAN_RESEP).jumlah` masa depan WAJIB
+membaca komponen resep dari `VersiResep` yang ditunjuk `resepVersiId`
+snapshot pada `ItemPesanan` TERSEBUT, BUKAN versi resep aktif SAAT INI (yang
+mungkin sudah berubah sejak pesanan dibuat) - ini SUDAH menjadi alasan
+`resepVersiId` ada sejak awal (ADR-022 K7), batch ini hanya menegaskannya
+eksplisit sebagai bagian kontrak siklus hidup stok. `KonversiSatuan`
+(`faktor` per pasangan satuan per tenant) MASIH ADA dan queryable - kontrak:
+sebelum menulis `MutasiStok.jumlah`, nilai HARUS dikonversi dari satuan yang
+dipakai `KomponenResep`/`VersiResep` ke `Bahan.satuanDasarId` lewat
+`KonversiSatuan`, karena `MutasiStok.jumlah` SELALU dalam satuan dasar bahan
+(konvensi yang sudah tersirat dari `StokBahan.kuantitas` yang juga satuan
+dasar).
+
+**Migrasi.** `20260726140000_siklus_hidup_stok_reservasi_konsumsi_waste`
+(kolom `ReservasiStok.mutasiStokId` + 3 unique index + FK composite, trigger
+`trg_reservasi_stok_kunci_konsumsi` di `reservasi_stok`, trigger
+`trg_stok_bahan_cek_negatif` di `stok_bahan`) - diterapkan ke
+`altora_resto_dev` via `psql` + `prisma migrate resolve --applied`. Diff
+`prisma migrate diff --from-schema-datasource --to-schema-datamodel`
+ditinjau sebelum diterapkan (hanya `ALTER TABLE`/`CREATE INDEX`/
+`ADD CONSTRAINT` untuk bagian kolom+FK; kedua trigger ditulis manual di
+bagian sama migrasi karena `migrate diff` tidak menghasilkan trigger
+prosedural). Fresh-database redeploy (`CREATE DATABASE
+altora_resto_dev_freshtest` + `prisma migrate deploy` dari kosong,
+dibandingkan `prisma migrate diff --from-url ... --to-url ...` terhadap
+`altora_resto_dev` menghasilkan "empty migration" = struktur IDENTIK,
+database sementara di-`DROP` setelah verifikasi) dan hasil test lengkap ada
+di `RELEASE-EVIDENCE.md`.
+
+**Status.** Seluruh 22 test arsitektur + 11 test database-integration
+(termasuk `siklus-hidup-stok-invariants.test.ts` baru) lulus, termasuk dari
+fresh-database redeploy. `INVARIAN-BELUM-DITEGAKKAN.md` diperbarui: baris
+kategori A baru untuk kedua trigger baru (DB-enforced, teruji); baris
+kategori C (INV-015/INV-016) diperbarui catatannya (INV-016 sebagian
+menyempit - "stok negatif tanpa kebijakan" kini DB-enforced untuk pola tulis
+atomik, TETAP app-level untuk pola baca-lalu-tulis yang salah; INV-015 SUM
+lintas-baris tetap penuh app-level). Defect baru `ALT-DEF-048` dicatat di
+`DEFECT-LEDGER.md` untuk titik picu konsumsi (`DIKIRIM_KE_DAPUR` vs
+`TiketDapur.SEDANG_DISIAPKAN`) yang perlu diverifikasi ulang saat kode
+handler dapur/produksi ditulis.

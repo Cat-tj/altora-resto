@@ -3484,3 +3484,101 @@ Tidak ada fixture raw-SQL lain yang gagal - tabel `pesanan`/`tiket_dapur`/
 DEFAULT 'SEBELUM_PRODUKSI'`, `disetujuiOlehId`/`alasanPembatalan`
 nullable), jadi fixture lama yang tidak menyebutkan kolom-kolom ini tetap
 valid tanpa perubahan.
+
+## Batch ADR-037 (siklus hidup stok reservasi-konsumsi-waste)
+
+### 1. Migrasi diterapkan ke `altora_resto_dev` (Postgres 16 nyata)
+
+Diff ditinjau sebelum diterapkan (`prisma migrate diff
+--from-schema-datasource --to-schema-datamodel --script`):
+
+```
+-- AlterTable
+ALTER TABLE "reservasi_stok" ADD COLUMN     "mutasiStokId" TEXT;
+
+-- CreateIndex
+CREATE UNIQUE INDEX "reservasi_stok_mutasiStokId_key" ON "reservasi_stok"("mutasiStokId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "reservasi_stok_itemPesananId_key" ON "reservasi_stok"("itemPesananId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "reservasi_stok_tenantId_mutasiStokId_key" ON "reservasi_stok"("tenantId", "mutasiStokId");
+
+-- AddForeignKey
+ALTER TABLE "reservasi_stok" ADD CONSTRAINT "reservasi_stok_tenantId_mutasiStokId_fkey" FOREIGN KEY ("tenantId", "mutasiStokId") REFERENCES "mutasi_stok"("tenantId", "id") ON DELETE RESTRICT ON UPDATE CASCADE;
+```
+
+Ditambah manual (tidak dihasilkan `migrate diff` - trigger prosedural):
+fungsi+trigger `reservasi_stok_kunci_konsumsi()`/`trg_reservasi_stok_kunci_konsumsi`
+dan `cek_stok_bahan_negatif()`/`trg_stok_bahan_cek_negatif`.
+
+Diterapkan via `psql -U icat -h localhost -d altora_resto_dev -f
+prisma/schema/migrations/20260726140000_siklus_hidup_stok_reservasi_konsumsi_waste/migration.sql`
+(output: `ALTER TABLE`, `CREATE INDEX` x3, `ALTER TABLE`, `CREATE FUNCTION`,
+`CREATE TRIGGER`, `CREATE FUNCTION`, `CREATE TRIGGER` - semua sukses tanpa
+error), lalu `prisma migrate resolve --applied
+20260726140000_siklus_hidup_stok_reservasi_konsumsi_waste`. `prisma migrate
+status` mengonfirmasi "Database schema is up to date!" (11 migrasi
+ditemukan, seluruhnya applied).
+
+### 2. Hasil test lengkap (sebelum vs sesudah batch ini)
+
+```
+SEBELUM batch ini: 22 architecture + 9 database-integration = 31 file, 31/31 passed
+SESUDAH batch ini: 22 architecture + 10 database-integration = 32 file, 32/32 passed
+```
+
+File baru: `siklus-hidup-stok-invariants.test.ts` (7 fungsi test: existence
+3 unique index + FK composite + 2 trigger; idempotency reservasi per
+ItemPesanan; larangan konsumsi ganda 2 skenario; siklus penuh
+reservasi->konsumsi dengan linkage ter-JOIN; siklus batal-sebelum-produksi
+tanpa mutasi; stok negatif ditolak default+eksplisit-false; stok negatif
+diizinkan eksplisit-true). Seluruh 22 file architecture + 10 file
+database-integration dijalankan ulang satu per satu via
+`./packages/test-support/node_modules/.bin/tsx <file>` - SEMUA lulus tanpa
+pengecualian, TIDAK ADA regresi pada fixture lama (diperiksa proaktif,
+lihat poin 3 di bawah).
+
+### 3. Fixture lama diperiksa proaktif (lesson dari batch sebelumnya)
+
+Digrep seluruh `packages/test-support/src/database-integration/*.test.ts`
+untuk pemakaian `stok_bahan`/`reservasi_stok` (dua tabel yang bentuknya
+berubah batch ini). Ditemukan: `persediaan-stok-invariants.test.ts` (insert
+`stok_bahan` dengan `kuantitas` POSITIF, tidak tersentuh trigger negatif
+baru) dan `optimistic-locking-version-invariants.test.ts` (menyebut nama
+tabel `stok_bahan` dalam daftar 13 tabel yang diperiksa punya trigger
+`optimistic_lock_bump_version`, TIDAK menulis baris `stok_bahan` apa pun
+secara langsung). KEDUANYA dijalankan ulang dan TETAP lulus tanpa
+modifikasi - tidak ada fixture yang perlu diperbaiki batch ini (trigger
+baru hanya menolak commit yang secara aktual membuat `kuantitas < 0`,
+fixture lama tidak pernah melakukan itu).
+
+### 4. Fresh-database redeploy
+
+```
+CREATE DATABASE altora_resto_dev_freshtest;
+DATABASE_URL=...altora_resto_dev_freshtest prisma migrate deploy
+  -> 11 migrasi diterapkan dari KOSONG, "All migrations have been successfully applied."
+prisma migrate diff --from-url ...altora_resto_dev_freshtest --to-url ...altora_resto_dev --script
+  -> "-- This is an empty migration." (struktur IDENTIK, tanpa drift)
+Seluruh 32 file test (22 architecture + 10 database-integration) dijalankan ulang
+dengan DATABASE_URL menunjuk altora_resto_dev_freshtest -> 32/32 passed
+DROP DATABASE altora_resto_dev_freshtest; (dibersihkan setelah verifikasi)
+```
+
+### 5. Ringkasan DB-vs-app split (6 properti wajib batch ini)
+
+| Properti | Status |
+|---|---|
+| Idempotent (reservasi tidak dobel per ItemPesanan) | **DB-ENFORCED** — `@@unique([itemPesananId])`, teruji |
+| Idempotent (konsumsi tidak dobel per reservasi) | **DB-ENFORCED** — trigger `trg_reservasi_stok_kunci_konsumsi` + unique `mutasiStokId`, teruji |
+| Transaksional (satu langkah state-transition = satu transaksi) | **APP-LEVEL** — tidak ada kode handler untuk dibungkus transaksi pada batch ini (sama seperti ALT-DEF-047) |
+| Row-locking untuk kontensi tinggi | **APP-LEVEL, DIDOKUMENTASIKAN WAJIB** — `SELECT ... FOR UPDATE` pesimistik (bukan optimistic `version`), lihat ADR-037 Keputusan 6; tidak ada bentuk DDL untuk ini |
+| Recipe-version-snapshot | **VERIFIKASI SKEMA SAJA** — `ItemPesanan.resepVersiId` dikonfirmasi masih ada dan tidak rusak; kontrak "wajib dibaca dari snapshot ini" murni dokumentasi, belum ada kode kalkulasi |
+| Unit-conversion (satuan dasar) | **VERIFIKASI SKEMA SAJA** — `KonversiSatuan` dikonfirmasi queryable; kontrak "wajib dikonversi sebelum tulis MutasiStok.jumlah" murni dokumentasi |
+| Stok negatif ditolak per kebijakan outlet | **DB-ENFORCED (SEBAGIAN)** — trigger `trg_stok_bahan_cek_negatif` menolak SEMUA commit yang menghasilkan `kuantitas < 0` tanpa izin, teruji; TIDAK menutup race check-then-act (INV-015, tetap app-level) |
+
+Defect baru `ALT-DEF-048` dicatat untuk titik picu konsumsi
+(`DIKIRIM_KE_DAPUR` vs granularitas per-`TiketDapur`) yang perlu
+diverifikasi ulang saat kode handler dapur ditulis.

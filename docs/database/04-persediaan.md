@@ -44,6 +44,7 @@ erDiagram
     BATCH_STOK ||--o{ MUTASI_STOK : dialokasikan_lewat
     ITEM_PESANAN ||--o{ RESERVASI_STOK : mengunci
     BAHAN ||--o{ RESERVASI_STOK : direservasi
+    MUTASI_STOK |o--|| RESERVASI_STOK : dikonsumsi_menjadi
     MUTASI_STOK |o--|| PENYESUAIAN_STOK : dihasilkan_oleh
     MUTASI_STOK |o--|| CATATAN_WASTE : dihasilkan_oleh
     ALASAN_WASTE ||--o{ CATATAN_WASTE : mengklasifikasi
@@ -123,7 +124,7 @@ erDiagram
         string id PK
         string tenantId FK
         string outletId FK
-        string itemPesananId FK "digantung pada BARIS, bukan Pesanan"
+        string itemPesananId FK "digantung pada BARIS, bukan Pesanan; @unique (ADR-037) - paling banyak SATU reservasi sepanjang hidup baris ini (idempotency)"
         string bahanId FK
         decimal jumlah
         string satuanId FK
@@ -131,6 +132,7 @@ erDiagram
         datetime kedaluwarsaPada "nullable"
         datetime createdAt
         datetime dilepasPada "nullable"
+        string mutasiStokId FK "nullable @unique (ADR-037) - terisi HANYA saat DIKONSUMSI, immutable sekali terisi (trigger trg_reservasi_stok_kunci_konsumsi)"
     }
     PENYESUAIAN_STOK {
         string id PK
@@ -347,10 +349,44 @@ Apa pun kebijakannya, **reservasi** (`RESERVASI_STOK`) dibuat saat pesanan
 antara pesanan diterima dan bahan benar-benar dipakai, tanpa menyentuh saldo
 fisik.
 
+### ADR-037: aturan tunggal siklus hidup stok (reservasi-konsumsi-waste)
+
+MENGGANTIKAN seluruh bunyi ambigu "reservasi/pengurangan stok" yang
+sebelumnya tersebar di dokumen ini/`STATE-MACHINES.md`/`API-CONTRACT.md`:
+
+```
+Pesanan DITERIMA           -> RESERVASI_STOK dibuat AKTIF (1 per ItemPesanan berbahan)
+Pesanan DIKIRIM_KE_DAPUR    -> RESERVASI_STOK AKTIF -> DIKONSUMSI
+                               + MUTASI_STOK(PEMAKAIAN_RESEP) ditulis
+                               + ditautkan lewat RESERVASI_STOK.mutasiStokId
+Pesanan DIBATALKAN sebelum  -> RESERVASI_STOK AKTIF -> DILEPAS, TIDAK ADA mutasi
+produksi
+Void SETELAH produksi       -> CatatanWaste + MUTASI_STOK(WASTE) (ADR-036,
+(ADR-036)                      tidak berubah)
+```
+
+Linkage `RESERVASI_STOK.mutasiStokId` (nullable, `@unique`, FK composite ke
+`MUTASI_STOK`) membuat "reservasi mana menjadi mutasi yang mana" auditable
+lewat JOIN langsung, bukan diinfer dari `referensiJenis/referensiId`.
+Idempotency DB-enforced dua lapis: `@@unique([itemPesananId])` (satu
+`ItemPesanan` paling banyak satu reservasi sepanjang hidupnya) dan trigger
+`trg_reservasi_stok_kunci_konsumsi` (reservasi yang sudah `DIKONSUMSI` tidak
+bisa ditautkan ulang ke mutasi lain). Row-locking untuk kontensi tinggi
+("N kasir merebut unit terakhir") WAJIB `SELECT ... FOR UPDATE` pesimistik
+pada `StokBahan` di service layer - optimistic locking (`version`, ADR-035)
+menimbulkan thundering herd pada kontensi tinggi, lihat ADR-037 Keputusan 6
+untuk pembahasan penuh. Lihat ADR-037 di `DECISION-LOG.md` untuk keputusan
+lengkap (termasuk kontrak recipe-version-snapshot dan unit-conversion).
+
 **Stok negatif:** `izinkanStokNegatif` default `false` -> operasi yang akan
 menurunkan stok **TERSEDIA** di bawah nol ditolak `409 STOK_TIDAK_CUKUP`.
 Bila `true`, operasi tetap diposting, saldo boleh negatif, dan mutasinya wajib
-memicu notifikasi ke peran GUDANG/MANAJER (tidak pernah senyap).
+memicu notifikasi ke peran GUDANG/MANAJER (tidak pernah senyap). Sejak
+ADR-037, kebijakan ini JUGA ditegakkan trigger `trg_stok_bahan_cek_negatif`
+pada `STOK_BAHAN` sebagai lapisan kedua (defense-in-depth): comit apa pun
+yang membuat `kuantitas < 0` tanpa `izinkanStokNegatif = true` DITOLAK
+database, terlepas dari benar-tidaknya guard aplikasi - lihat baris 7 tabel
+di bawah untuk status yang diperbarui.
 
 ## Integritas reversal (ADR-032, redesain dari ADR-023 Keputusan 5)
 
@@ -382,12 +418,14 @@ dipakai bersama seluruh ledger - lihat ADR-032 Keputusan 2/3).
 | 3 | Satu baris `STOK_BAHAN` agregat per (gudang, bahan) | partial unique index, migrasi resmi | **DB-ENFORCED, TERUJI** |
 | 4 | Satu baris opname agregat per (opname, bahan) | partial unique index, migrasi resmi | **DB-ENFORCED, TERUJI** |
 | 5 | `kuantitas == SUM(MUTASI_STOK.jumlah)` | job rekonsiliasi (kode, belum ditulis) | **TIDAK PERNAH DB-ENFORCED** |
-| 6 | `SUM(RESERVASI_STOK AKTIF) <= saldo fisik` | guard transaksi + `FOR UPDATE` | **TIDAK PERNAH DB-ENFORCED** |
-| 7 | Stok tidak negatif (bila kebijakan melarang) | guard transaksi + `FOR UPDATE` | **TIDAK PERNAH DB-ENFORCED** |
+| 6 | `SUM(RESERVASI_STOK AKTIF) <= saldo fisik` | guard transaksi + `FOR UPDATE` | **TIDAK PERNAH DB-ENFORCED** (ADR-037: butuh `SELECT ... FOR UPDATE` pesimistik, bukan `version`/ADR-035 optimistic - lihat ADR-037 Keputusan 6) |
+| 7 | Stok tidak negatif (bila kebijakan melarang) | trigger `trg_stok_bahan_cek_negatif` (ADR-037), migrasi resmi | **DB-ENFORCED, TERUJI** untuk pola tulis atomik (`UPDATE ... SET kuantitas = kuantitas - $1`, diserialkan row-lock Postgres implisit); pola baca-lalu-tulis aplikasi yang salah TETAP tidak terselamatkan trigger (lihat ADR-037 Keputusan 7) |
 | 8 | Setiap `BATCH_PRODUKSI` bahan setengah jadi -> satu `BATCH_STOK` | guard transaksi produksi | **TIDAK PERNAH DB-ENFORCED** |
 | 9 | `lokasiSumber`/`lokasiTujuan` sesuai jenis mutasi | validasi service-layer | TIDAK DITEGAKKAN |
 | 10 | `gudangAsal != gudangTujuan`; `diterima <= dikirim <= diminta` | validasi service-layer | UTANG CHECK constraint |
 | 11 | `penghitungId != penyetujuId` pada opname | validasi service-layer | UTANG CHECK constraint |
+| 12 | Reservasi tidak boleh double-create per `ItemPesanan` **[BARU, ADR-037]** | `@@unique([itemPesananId])` di `RESERVASI_STOK`, migrasi resmi | **DB-ENFORCED, TERUJI** |
+| 13 | Reservasi tidak boleh double-consume (retautkan mutasi lain setelah `DIKONSUMSI`) **[BARU, ADR-037]** | trigger `trg_reservasi_stok_kunci_konsumsi` + unique `mutasiStokId`, migrasi resmi | **DB-ENFORCED, TERUJI** |
 
 Baris 5-9 **tidak akan pernah menjadi DB-enforced** - ia invariant
 agregat/kondisional yang berada di luar jangkauan constraint deklaratif.

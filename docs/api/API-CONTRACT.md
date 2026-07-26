@@ -466,6 +466,19 @@ sebagai efek samping pemotongan stok sesuai
 dapur). Menyediakan endpoint terpisah untuknya akan membuka jalur konsumsi
 reservasi tanpa mutasi pendamping - pelanggaran ADR-023 Keputusan 1.
 
+**ADR-037 (aturan tunggal siklus hidup stok, MENGGANTIKAN seluruh bunyi
+ambigu "reservasi/pengurangan stok" di dokumen lain):** `Pesanan DITERIMA`
+membuat `ReservasiStok` AKTIF; `Pesanan DIKIRIM_KE_DAPUR` melepasnya jadi
+`DIKONSUMSI` DAN menulis `MutasiStok(PEMAKAIAN_RESEP)` yang ditautkan lewat
+kolom baru `ReservasiStok.mutasiStokId` (nullable, `@unique`, auditable -
+sebelumnya hubungan ini hanya bisa di-infer lewat `referensiJenis/
+referensiId`); `Pesanan DIBATALKAN` SEBELUM produksi melepasnya jadi
+`DILEPAS` TANPA mutasi apa pun; pembatalan SETELAH produksi tetap lewat
+`CatatanWaste`/`MutasiStok(WASTE)` (ADR-036, tidak berubah). Idempotency
+DB-enforced: `@@unique([itemPesananId])` mencegah reservasi ganda untuk
+`ItemPesanan` yang sama; trigger `trg_reservasi_stok_kunci_konsumsi`
+mencegah reservasi yang sama dikonsumsi/ditautkan ulang ke mutasi lain.
+
 ### 6.4 Transfer stok (`ALT-PSD-012`/`ALT-PSD-013`, menutup `ALT-DEF-032`)
 
 | Metode | Path | Deskripsi |
