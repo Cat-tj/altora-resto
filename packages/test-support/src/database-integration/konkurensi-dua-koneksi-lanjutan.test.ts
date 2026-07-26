@@ -1,8 +1,8 @@
-// Test database-integration untuk ADR-041 (batch konsolidasi audit cakupan
-// konkurensi) - melengkapi skenario "dua koneksi nyata" yang DIMINTA instruksi
-// correction-loop asli tapi BELUM ADA test khususnya di 13 file
-// database-integration sebelumnya (lihat audit lengkap di
-// docs/engineering/AUDIT-CONCURRENCY-COVERAGE.md).
+// Test database-integration untuk ADR-041 (audit) + ADR-042 (fix) - batch
+// konsolidasi audit cakupan konkurensi, melengkapi skenario "dua koneksi
+// nyata" yang DIMINTA instruksi correction-loop asli tapi BELUM ADA test
+// khususnya di 13 file database-integration sebelumnya (lihat audit lengkap
+// di docs/engineering/AUDIT-CONCURRENCY-COVERAGE.md).
 //
 // Menyambung ke Postgres NYATA lewat DUA/TIGA koneksi `pg` fisik terpisah
 // (bukan simulasi/satu transaksi), mengikuti pola CRUX di
@@ -24,26 +24,30 @@
 //        membalikMutasiId (ADR-032) menolak yang kalah walau keduanya
 //        di-INSERT dari transaksi yang OVERLAP secara nyata.
 //
-//   GAP NYATA DITEMUKAN (dicatat sebagai defect baru, lihat DEFECT-LEDGER.md
-//   ALT-DEF-051/052/053) - dibuktikan SECARA JUJUR bahwa race BENAR-BENAR
-//   terjadi hari ini, bukan diasumsikan:
+//   GAP DITEMUKAN batch ADR-041, SEKARANG DIPERBAIKI batch ADR-042 (lihat
+//   migrasi `20260726180000_tegakkan_kuota_promo_ketersediaan_stok_alokasi_pembayaran`,
+//   DEFECT-LEDGER.md ALT-DEF-051/052/053 DITUTUP) - skenario 4/5/6 di bawah
+//   TADINYA membuktikan KEDUA sisi race berhasil commit (bug); SEKARANG
+//   dibuktikan bahwa trigger BARU menolak sisi yang KALAH. Pola dua-koneksi
+//   di bawah SENGAJA BUKAN `Promise.all` sebelum commit (seperti versi lama)
+//   - trigger baru mengunci baris parent (`Promo`/`StokBahan`/`Pesanan`)
+//   lewat `SELECT ... FOR UPDATE` DI DALAM transaksi yang sama, sehingga
+//   koneksi kedua benar-benar BLOK menunggu koneksi pertama COMMIT/ROLLBACK
+//   sebelum trigger-nya sendiri bisa jalan - persis pola overlap-lalu-commit
+//   di skenario #3 di atas (bukan self-inflicted deadlock level-test kalau
+//   keduanya menunggu tanpa ada yang commit lebih dulu).
 //     4. Dua PromoPemakaian berbeda pesanan pada promo dengan usageQuota=1
-//        (kuota total 1 lintas SEMUA pelanggan) -> KEDUANYA berhasil commit,
-//        kuota over-consumed jadi 2 - TIDAK ADA trigger/constraint yang
-//        menegakkan Promo.usageQuota lintas baris PromoPemakaian sama sekali
-//        (ALT-DEF-051).
+//        (kuota total 1 lintas SEMUA pelanggan) -> koneksi PERTAMA berhasil,
+//        koneksi KEDUA DITOLAK trigger `trg_promo_pemakaian_cek_kuota_total`
+//        (ALT-DEF-051, DITUTUP).
 //     5. Dua ReservasiStok untuk item BERBEDA yang sama-sama menghabiskan
-//        SISA stok terakhir (StokBahan.kuantitas=1) -> KEDUANYA berhasil
-//        commit - ReservasiStok TIDAK PERNAH divalidasi terhadap saldo
-//        tersedia (kuantitas - kuantitasDireservasi) saat INSERT; balance
-//        negatif baru bisa terdeteksi BELAKANGAN saat konsumsi menyentuh
-//        StokBahan.kuantitas langsung (ALT-DEF-052).
+//        SISA stok terakhir (StokBahan.kuantitas=1) -> koneksi PERTAMA
+//        berhasil, koneksi KEDUA DITOLAK trigger
+//        `trg_reservasi_stok_cek_ketersediaan` (ALT-DEF-052, DITUTUP).
 //     6. Dua Pembayaran BERBEDA yang alokasinya ke SATU Pesanan yang sama
-//        melebihi Pesanan.totalAkhir (over-alokasi) -> KEDUANYA berhasil
-//        DIBAYAR - trigger cek_konsistensi_pembayaran_pesanan (ADR-036) hanya
-//        menjaga KONSISTENSI STATUS (Pembayaran DIBAYAR selaras dengan status
-//        Pesanan), BUKAN menjaga JUMLAH (sum(AlokasiPembayaran) <=
-//        Pesanan.totalAkhir) - tidak ada pengaman itu sama sekali (ALT-DEF-053).
+//        melebihi Pesanan.totalAkhir (over-alokasi) -> koneksi PERTAMA
+//        berhasil, koneksi KEDUA DITOLAK trigger
+//        `trg_alokasi_pembayaran_cek_batas_pesanan` (ALT-DEF-053, DITUTUP).
 //
 // Jalankan: npx tsx packages/test-support/src/database-integration/konkurensi-dua-koneksi-lanjutan.test.ts
 
@@ -373,14 +377,14 @@ async function testDuaReversalLedgerConcurrentUniqueIndex(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// (4) GAP NYATA (ALT-DEF-051): dua PromoPemakaian pada promo dengan
+// (4) FIXED (ALT-DEF-051/ADR-042): dua PromoPemakaian pada promo dengan
 // usageQuota=1 (kuota TOTAL lintas semua pelanggan), masing-masing pesanan
-// BERBEDA - trigger trg_promo_pemakaian_cek_batas_penerapan HANYA menegakkan
-// batas PER-PESANAN (usageLimitPerOrder/repeatable), TIDAK PERNAH melihat
-// Promo.usageQuota sama sekali. Test ini MEMBUKTIKAN keduanya berhasil commit,
-// kuota over-consumed 2/1.
+// BERBEDA - trigger BARU trg_promo_pemakaian_cek_kuota_total mengunci baris
+// Promo (SELECT ... FOR UPDATE) SEBELUM menghitung SUM(jumlahPenerapan)
+// lintas PromoPemakaian - koneksi kedua HARUS menunggu koneksi pertama
+// commit, lalu ditolak karena kuota sudah habis.
 // ---------------------------------------------------------------------------
-async function testDuaPromoKuotaTerakhirRaceGapNyata(): Promise<void> {
+async function testDuaPromoKuotaTerakhirDitolakSetelahFix(): Promise<void> {
   await withCleanupPool(async (setupPool) => {
     const pesanan1 = await createPesananFixture(setupPool as unknown as pg.PoolClient);
     // Promo.usageQuota adalah kuota TOTAL lintas SEMUA pesanan tenant yang
@@ -424,40 +428,55 @@ async function testDuaPromoKuotaTerakhirRaceGapNyata(): Promise<void> {
       await connA.query("BEGIN");
       await connB.query("BEGIN");
 
-      // Simulasi app-level "check-then-act" yang SEHARUSNYA menegakkan
-      // usageQuota: baca COUNT(*) WHERE promoId=X dulu (keduanya membaca 0,
-      // di bawah kuota 1), LALU insert. Karena tidak ada trigger DB yang
-      // menegakkan usageQuota, kedua koneksi lolos pengecekan aplikasi DAN
-      // lolos database.
-      const cekA = await connA.query(`SELECT count(*)::int AS n FROM promo_pemakaian WHERE "promoId" = $1`, [promoId]);
-      const cekB = await connB.query(`SELECT count(*)::int AS n FROM promo_pemakaian WHERE "promoId" = $1`, [promoId]);
-      assertTrue(cekA.rows[0].n === 0 && cekB.rows[0].n === 0, "Kedua koneksi harus membaca count=0 (di bawah kuota 1) sebelum race.");
-
-      const insA = connA.query(
+      // Koneksi A meng-INSERT lebih dulu dan BERHASIL (trigger mengunci
+      // baris Promo FOR UPDATE, menghitung SUM=0 lain + 1 baru = 1, tidak
+      // melebihi usageQuota=1, lolos) - tapi belum COMMIT, jadi lock baris
+      // Promo masih dipegang A.
+      await connA.query(
         `INSERT INTO promo_pemakaian (id, "tenantId", "promoId", "pesananId", status, "jumlahPenerapan", "totalDiskon", "createdAt")
          VALUES ($1, $2, $3, $4, 'DITERAPKAN', 1, 0, now())`,
         [pemakaianAId, pesanan1.tenantId, promoId, pesanan1.pesananId],
       );
-      const insB = connB.query(
+
+      // Koneksi B mencoba INSERT KONKUREN (promise belum di-await) - trigger-nya
+      // mencoba SELECT ... FOR UPDATE pada baris Promo yang SAMA dan BLOK
+      // (bukan deadlock - B hanya menunggu keputusan A), PERSIS pola overlap
+      // nyata di skenario #3 di atas.
+      const insBPromise = connB.query(
         `INSERT INTO promo_pemakaian (id, "tenantId", "promoId", "pesananId", status, "jumlahPenerapan", "totalDiskon", "createdAt")
          VALUES ($1, $2, $3, $4, 'DITERAPKAN', 1, 0, now())`,
         [pemakaianBId, pesanan3TenantSama.tenantId, promoId, pesanan3TenantSama.pesananId],
       );
-      await Promise.all([insA, insB]);
+      // Jeda singkat supaya INSERT B benar-benar terkirim dan masuk status
+      // "menunggu lock" SEBELUM A commit - membuktikan overlap nyata.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
       await connA.query("COMMIT");
-      await connB.query("COMMIT");
+
+      let pesanGagalB = "";
+      try {
+        await insBPromise;
+        throw new Error("SEHARUSNYA_TIDAK_TERCAPAI: INSERT B seharusnya ditolak trigger kuota setelah A commit.");
+      } catch (err) {
+        pesanGagalB = err instanceof Error ? err.message : String(err);
+      }
+      assertTrue(
+        /usageQuota|ALT-DEF-051/i.test(pesanGagalB),
+        `Kegagalan INSERT B (setelah A commit duluan) harus dari trigger trg_promo_pemakaian_cek_kuota_total, dapat: ${pesanGagalB}`,
+      );
+      await connB.query("ROLLBACK").catch(() => undefined);
 
       const totalPemakaian = await setupPool.query(
         `SELECT count(*)::int AS n FROM promo_pemakaian WHERE "promoId" = $1`,
         [promoId],
       );
       assertTrue(
-        totalPemakaian.rows[0].n === 2,
-        `GAP NYATA (ALT-DEF-051): dengan usageQuota=1, KEDUA baris PromoPemakaian pesanan BERBEDA seharusnya TIDAK BOLEH keduanya berhasil - tapi test ini MEMBUKTIKAN keduanya commit tanpa error (dapat ${totalPemakaian.rows[0].n} baris, kuota over-consumed jika bukan 2). Tidak ada trigger yang menegakkan Promo.usageQuota lintas baris PromoPemakaian.`,
+        totalPemakaian.rows[0].n === 1,
+        `FIX (ALT-DEF-051): dengan usageQuota=1, HARUS ada TEPAT SATU baris PromoPemakaian yang berhasil (koneksi A), dapat ${totalPemakaian.rows[0].n}.`,
       );
       // eslint-disable-next-line no-console
       console.log(
-        "  -> (4) GAP NYATA (ALT-DEF-051): dua PromoPemakaian pesanan berbeda pada promo usageQuota=1 KEDUANYA berhasil commit (kuota over-consumed 2/1) - TIDAK ADA proteksi DB sama sekali.",
+        "  -> (4) FIXED (ALT-DEF-051): dua PromoPemakaian pesanan berbeda pada promo usageQuota=1 - koneksi KEDUA DITOLAK trg_promo_pemakaian_cek_kuota_total (kuota tetap 1/1).",
       );
     } finally {
       await connA.query("ROLLBACK").catch(() => undefined);
@@ -481,14 +500,14 @@ async function testDuaPromoKuotaTerakhirRaceGapNyata(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// (5) GAP NYATA (ALT-DEF-052): dua ReservasiStok untuk ItemPesanan BERBEDA
-// yang sama-sama mengklaim SISA stok terakhir (StokBahan.kuantitas=1,
-// kuantitasDireservasi=0) - tidak ada CHECK/trigger yang memvalidasi
-// ReservasiStok.jumlah terhadap saldo tersedia (kuantitas -
-// kuantitasDireservasi) SAAT INSERT. Test ini MEMBUKTIKAN kedua reservasi
-// berhasil, over-reserving 2 unit dari stok fisik 1 unit.
+// (5) FIXED (ALT-DEF-052/ADR-042): dua ReservasiStok untuk ItemPesanan
+// BERBEDA yang sama-sama mengklaim SISA stok terakhir (StokBahan.kuantitas=1,
+// kuantitasDireservasi=0) - trigger BARU trg_reservasi_stok_cek_ketersediaan
+// mengunci baris StokBahan agregat (SELECT ... FOR UPDATE) SEBELUM
+// menghitung SUM(jumlah) reservasi AKTIF lain - koneksi kedua HARUS
+// menunggu koneksi pertama commit, lalu ditolak karena saldo sudah habis.
 // ---------------------------------------------------------------------------
-async function testDuaReservasiStokTerakhirRaceGapNyata(): Promise<void> {
+async function testDuaReservasiStokTerakhirDitolakSetelahFix(): Promise<void> {
   await withCleanupPool(async (setupPool) => {
     const fx = await createReservasiFixture(setupPool as unknown as pg.PoolClient, { jumlahItem: 2 });
     const [itemA, itemB] = fx.itemPesananIds;
@@ -510,51 +529,54 @@ async function testDuaReservasiStokTerakhirRaceGapNyata(): Promise<void> {
       await connA.query("BEGIN");
       await connB.query("BEGIN");
 
-      // Kedua koneksi "membaca" saldo tersedia (kuantitas - kuantitasDireservasi
-      // = 1) SEBELUM salah satu mereservasi - keduanya melihat 1 unit tersedia,
-      // keduanya berniat mengambil 1 unit (padahal cuma ada 1 unit total).
-      const saldoA = await connA.query(
-        `SELECT kuantitas - "kuantitasDireservasi" AS tersedia FROM stok_bahan WHERE id = $1`,
-        [stokBahanId],
-      );
-      const saldoB = await connB.query(
-        `SELECT kuantitas - "kuantitasDireservasi" AS tersedia FROM stok_bahan WHERE id = $1`,
-        [stokBahanId],
-      );
-      assertTrue(
-        Number(saldoA.rows[0].tersedia) === 1 && Number(saldoB.rows[0].tersedia) === 1,
-        "Kedua koneksi harus membaca saldo tersedia=1 (unit terakhir) sebelum race.",
-      );
-
-      const insA = connA.query(
+      // Koneksi A meng-INSERT lebih dulu dan BERHASIL (trigger mengunci
+      // baris StokBahan FOR UPDATE, menghitung SUM=0 aktif lain + 1 baru = 1,
+      // tidak melebihi saldo tersedia=1, lolos) - belum COMMIT, lock baris
+      // StokBahan masih dipegang A. ItemPesanan BERBEDA -> unique index
+      // reservasi_stok_itemPesananId_key TIDAK relevan di sini (itu hanya
+      // mencegah dua reservasi untuk ITEM yang SAMA).
+      await connA.query(
         `INSERT INTO reservasi_stok (id, "tenantId", "outletId", "itemPesananId", "bahanId", jumlah, "satuanId", status, "createdAt")
          VALUES ($1, $2, $3, $4, $5, 1, $6, 'AKTIF', now())`,
         [reservasiAId, fx.tenantId, fx.outletId, itemA, fx.bahanId, fx.satuanId],
       );
-      const insB = connB.query(
+
+      // Koneksi B mencoba INSERT KONKUREN - trigger-nya mencoba SELECT ...
+      // FOR UPDATE pada baris StokBahan yang SAMA dan BLOK sampai A memutus
+      // (commit/rollback), PERSIS pola overlap nyata skenario #3.
+      const insBPromise = connB.query(
         `INSERT INTO reservasi_stok (id, "tenantId", "outletId", "itemPesananId", "bahanId", jumlah, "satuanId", status, "createdAt")
          VALUES ($1, $2, $3, $4, $5, 1, $6, 'AKTIF', now())`,
         [reservasiBId, fx.tenantId, fx.outletId, itemB, fx.bahanId, fx.satuanId],
       );
-      // ItemPesanan BERBEDA -> unique index reservasi_stok_itemPesananId_key
-      // TIDAK relevan di sini (itu hanya mencegah dua reservasi untuk ITEM
-      // yang SAMA, bukan dua reservasi berbeda item yang sama-sama menguras
-      // bahan yang sama).
-      await Promise.all([insA, insB]);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
       await connA.query("COMMIT");
-      await connB.query("COMMIT");
+
+      let pesanGagalB = "";
+      try {
+        await insBPromise;
+        throw new Error("SEHARUSNYA_TIDAK_TERCAPAI: INSERT B seharusnya ditolak trigger ketersediaan setelah A commit.");
+      } catch (err) {
+        pesanGagalB = err instanceof Error ? err.message : String(err);
+      }
+      assertTrue(
+        /saldo tersedia|ALT-DEF-052/i.test(pesanGagalB),
+        `Kegagalan INSERT B (setelah A commit duluan) harus dari trigger trg_reservasi_stok_cek_ketersediaan, dapat: ${pesanGagalB}`,
+      );
+      await connB.query("ROLLBACK").catch(() => undefined);
 
       const totalDireservasi = await setupPool.query(
         `SELECT COALESCE(SUM(jumlah), 0)::int AS total FROM reservasi_stok WHERE id IN ($1, $2) AND status = 'AKTIF'`,
         [reservasiAId, reservasiBId],
       );
       assertTrue(
-        Number(totalDireservasi.rows[0].total) === 2,
-        `GAP NYATA (ALT-DEF-052): dua reservasi (1 unit masing-masing) terhadap SISA stok fisik 1 unit seharusnya TIDAK BOLEH keduanya berhasil - test ini MEMBUKTIKAN keduanya commit (total direservasi=${totalDireservasi.rows[0].total}, melebihi stok fisik=1). Tidak ada CHECK/trigger yang memvalidasi ReservasiStok.jumlah terhadap saldo tersedia StokBahan saat INSERT.`,
+        Number(totalDireservasi.rows[0].total) === 1,
+        `FIX (ALT-DEF-052): terhadap stok fisik 1 unit, HARUS ada TEPAT SATU reservasi yang berhasil (koneksi A), dapat total=${totalDireservasi.rows[0].total}.`,
       );
       // eslint-disable-next-line no-console
       console.log(
-        "  -> (5) GAP NYATA (ALT-DEF-052): dua ReservasiStok item berbeda mengklaim unit stok terakhir yang SAMA, KEDUANYA berhasil commit (over-reserved 2 dari stok fisik 1) - TIDAK ADA proteksi DB saat INSERT reservasi.",
+        "  -> (5) FIXED (ALT-DEF-052): dua ReservasiStok item berbeda mengklaim unit stok terakhir yang SAMA - koneksi KEDUA DITOLAK trg_reservasi_stok_cek_ketersediaan (direservasi tetap 1/1).",
       );
     } finally {
       await connA.query("ROLLBACK").catch(() => undefined);
@@ -580,14 +602,20 @@ async function testDuaReservasiStokTerakhirRaceGapNyata(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// (6) GAP NYATA (ALT-DEF-053): dua Pembayaran BERBEDA, masing-masing
-// mengalokasikan ke Pesanan yang SAMA sedemikian sehingga SUM(alokasi) >
-// Pesanan.totalAkhir - trigger cek_konsistensi_pembayaran_pesanan (ADR-036)
-// HANYA menjaga bahwa status Pembayaran=DIBAYAR selaras dengan status
-// Pesanan, TIDAK PERNAH memeriksa JUMLAH. Test ini MEMBUKTIKAN kedua
-// Pembayaran berhasil DIBAYAR walau totalnya melebihi totalAkhir Pesanan.
+// (6) FIXED (ALT-DEF-053/ADR-042): dua Pembayaran BERBEDA, masing-masing
+// mencoba mengalokasikan ke Pesanan yang SAMA sedemikian sehingga
+// SUM(alokasi) > Pesanan.totalAkhir - trigger BARU
+// trg_alokasi_pembayaran_cek_batas_pesanan mengunci baris Pesanan (SELECT
+// ... FOR UPDATE) SEBELUM menghitung SUM(AlokasiPembayaran.jumlah) lintas
+// Pembayaran lain - koneksi kedua HARUS menunggu koneksi pertama commit,
+// lalu ditolak karena tagihan sudah lunas. CATATAN: race ini terjadi PERSIS
+// pada momen INSERT alokasi_pembayaran itu sendiri (bukan pada UPDATE status
+// Pembayaran belakangan seperti versi test lama) - lihat rasional "status
+// mana yang dihitung" di ADR-042 Keputusan 3 (SEMUA status ikut dihitung
+// kecuali GAGAL/DIBATALKAN/DIKEMBALIKAN, termasuk DRAF, karena race asli
+// justru terjadi saat kedua Pembayaran masih DRAF).
 // ---------------------------------------------------------------------------
-async function testDuaPembayaranOverAlokasiGapNyata(): Promise<void> {
+async function testDuaPembayaranOverAlokasiDitolakSetelahFix(): Promise<void> {
   await withCleanupPool(async (setupPool) => {
     const fx = await createPesananFixture(setupPool as unknown as pg.PoolClient, { status: "DIKONFIRMASI" });
     // totalAkhir default fixture = 0 (tidak pernah di-set createPesananFixture) -
@@ -599,23 +627,16 @@ async function testDuaPembayaranOverAlokasiGapNyata(): Promise<void> {
     const alokasiAId = fixtureId("alokasi_a");
     const alokasiBId = fixtureId("alokasi_b");
 
-    for (const [pembayaranId, alokasiId] of [
-      [pembayaranAId, alokasiAId],
-      [pembayaranBId, alokasiBId],
-    ]) {
+    for (const pembayaranId of [pembayaranAId, pembayaranBId]) {
       await setupPool.query(
         `INSERT INTO pembayaran (id, "tenantId", "outletId", jumlah, "totalDiterima", kembalian, status, "createdAt", "updatedAt", version)
          VALUES ($1, $2, $3, 20000, 20000, 0, 'DRAF', now(), now(), 1)`,
         [pembayaranId, fx.tenantId, fx.outletId],
       );
-      await setupPool.query(
-        `INSERT INTO alokasi_pembayaran (id, "tenantId", "pembayaranId", "pesananId", jumlah, "createdAt")
-         VALUES ($1, $2, $3, $4, 20000, now())`,
-        [alokasiId, fx.tenantId, pembayaranId, fx.pesananId],
-      );
     }
-    // Total alokasi ke Pesanan yang sama = 20000 + 20000 = 40000, DUA KALI
-    // LIPAT Pesanan.totalAkhir=20000.
+    // Bila KEDUA alokasi 20000 berhasil, total ke Pesanan yang sama = 40000,
+    // DUA KALI LIPAT Pesanan.totalAkhir=20000 - inilah over-alokasi yang
+    // harus dicegah SAAT INSERT alokasi_pembayaran KEDUA.
 
     const connA = new pg.Client({ connectionString: DATABASE_URL });
     const connB = new pg.Client({ connectionString: DATABASE_URL });
@@ -625,29 +646,41 @@ async function testDuaPembayaranOverAlokasiGapNyata(): Promise<void> {
       await connA.query("BEGIN");
       await connB.query("BEGIN");
 
-      // Kedua konfirmasi (masing-masing Pembayaran BERBEDA) + update Pesanan
-      // status konsisten (kontrak ADR-036, DEFERRED trigger butuh urutan ini
-      // supaya tidak menolak keduanya karena alasan yang SALAH).
-      await connA.query(`UPDATE pembayaran SET status = 'DIBAYAR' WHERE id = $1`, [pembayaranAId]);
-      await connB.query(`UPDATE pembayaran SET status = 'DIBAYAR' WHERE id = $1`, [pembayaranBId]);
-      // Pesanan sudah SELESAI/konsisten dicapai oleh SALAH SATU (yang lain
-      // no-op di kolom yang sama) - keduanya set status yang sama, tidak ada
-      // konflik version karena masing-masing UPDATE pesanan terpisah waktu.
-      await connA.query(`UPDATE pesanan SET status = 'SELESAI' WHERE id = $1 AND version = 1`, [fx.pesananId]);
-
-      const commitA = await connA.query("COMMIT").then(() => "ok", (e) => String(e));
-      assertTrue(commitA === "ok", `Commit A (Pembayaran A DIBAYAR) harus berhasil, dapat: ${commitA}`);
-
-      // Koneksi B: Pesanan sudah version=2 (dari commit A) - update versinya
-      // sendiri supaya trigger konsistensi tetap puas (Pesanan sudah SELESAI,
-      // tidak perlu diubah lagi) - cukup lepas trigger dengan no-op status
-      // yang SAMA lewat WHERE version yang benar.
-      await connB.query(`SELECT status, version FROM pesanan WHERE id = $1 FOR UPDATE`, [fx.pesananId]);
-      const commitB = await connB.query("COMMIT").then(() => "ok", (e) => String(e));
-      assertTrue(
-        commitB === "ok",
-        `GAP NYATA (ALT-DEF-053): Commit B (Pembayaran B DIBAYAR, mengalokasikan LAGI ke Pesanan yang sudah lunas dari Pembayaran A) SEHARUSNYA idealnya dicegah karena over-alokasi, tapi test ini MEMBUKTIKAN commit tetap berhasil (dapat: ${commitB}) - trigger cek_konsistensi_pembayaran_pesanan tidak pernah memeriksa SUM(alokasi) vs totalAkhir.`,
+      // Koneksi A meng-INSERT alokasi lebih dulu dan BERHASIL (trigger
+      // mengunci baris Pesanan FOR UPDATE, menghitung SUM=0 lain + 20000
+      // baru = 20000, tidak melebihi totalAkhir=20000, lolos) - belum
+      // COMMIT, lock baris Pesanan masih dipegang A.
+      await connA.query(
+        `INSERT INTO alokasi_pembayaran (id, "tenantId", "pembayaranId", "pesananId", jumlah, "createdAt")
+         VALUES ($1, $2, $3, $4, 20000, now())`,
+        [alokasiAId, fx.tenantId, pembayaranAId, fx.pesananId],
       );
+
+      // Koneksi B mencoba INSERT alokasi KONKUREN untuk Pembayaran BERBEDA
+      // ke Pesanan yang SAMA - trigger-nya mencoba SELECT ... FOR UPDATE
+      // pada baris Pesanan yang SAMA dan BLOK sampai A memutus, PERSIS pola
+      // overlap nyata skenario #3.
+      const insBPromise = connB.query(
+        `INSERT INTO alokasi_pembayaran (id, "tenantId", "pembayaranId", "pesananId", jumlah, "createdAt")
+         VALUES ($1, $2, $3, $4, 20000, now())`,
+        [alokasiBId, fx.tenantId, pembayaranBId, fx.pesananId],
+      );
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      await connA.query("COMMIT");
+
+      let pesanGagalB = "";
+      try {
+        await insBPromise;
+        throw new Error("SEHARUSNYA_TIDAK_TERCAPAI: INSERT B seharusnya ditolak trigger batas pesanan setelah A commit.");
+      } catch (err) {
+        pesanGagalB = err instanceof Error ? err.message : String(err);
+      }
+      assertTrue(
+        /totalAkhir|ALT-DEF-053/i.test(pesanGagalB),
+        `Kegagalan INSERT B (setelah A commit duluan) harus dari trigger trg_alokasi_pembayaran_cek_batas_pesanan, dapat: ${pesanGagalB}`,
+      );
+      await connB.query("ROLLBACK").catch(() => undefined);
 
       const cek = await setupPool.query(
         `SELECT
@@ -656,12 +689,12 @@ async function testDuaPembayaranOverAlokasiGapNyata(): Promise<void> {
         [fx.pesananId],
       );
       assertTrue(
-        BigInt(cek.rows[0].total_alokasi) > BigInt(cek.rows[0].total_akhir),
-        `Total alokasi (${cek.rows[0].total_alokasi}) harus MELEBIHI Pesanan.totalAkhir (${cek.rows[0].total_akhir}) - inilah bukti over-alokasi yang TIDAK TERCEGAH.`,
+        BigInt(cek.rows[0].total_alokasi) === BigInt(cek.rows[0].total_akhir),
+        `FIX (ALT-DEF-053): total alokasi (${cek.rows[0].total_alokasi}) HARUS PERSIS SAMA dengan Pesanan.totalAkhir (${cek.rows[0].total_akhir}) - hanya alokasi A yang berhasil.`,
       );
       // eslint-disable-next-line no-console
       console.log(
-        `  -> (6) GAP NYATA (ALT-DEF-053): dua Pembayaran berbeda ke SATU Pesanan, total alokasi (${cek.rows[0].total_alokasi}) MELEBIHI totalAkhir (${cek.rows[0].total_akhir}) - KEDUANYA tetap berhasil DIBAYAR, tidak ada proteksi jumlah.`,
+        `  -> (6) FIXED (ALT-DEF-053): dua Pembayaran berbeda ke SATU Pesanan - koneksi KEDUA DITOLAK trg_alokasi_pembayaran_cek_batas_pesanan (total alokasi tetap ${cek.rows[0].total_alokasi}, sama dengan totalAkhir).`,
       );
     } finally {
       await connA.query("ROLLBACK").catch(() => undefined);
@@ -687,12 +720,12 @@ async function main(): Promise<void> {
   await testDuaKonfirmasiPembayaranBersamaanVersionConflict();
   await testDuaPostingOpnameBersamaanVersionConflict();
   await testDuaReversalLedgerConcurrentUniqueIndex();
-  await testDuaPromoKuotaTerakhirRaceGapNyata();
-  await testDuaReservasiStokTerakhirRaceGapNyata();
-  await testDuaPembayaranOverAlokasiGapNyata();
+  await testDuaPromoKuotaTerakhirDitolakSetelahFix();
+  await testDuaReservasiStokTerakhirDitolakSetelahFix();
+  await testDuaPembayaranOverAlokasiDitolakSetelahFix();
   // eslint-disable-next-line no-console
   console.log(
-    "OK: database-integration ADR-041 (konsolidasi audit konkurensi - 3 proteksi terverifikasi ulang lewat dua-koneksi nyata + 3 gap nyata terdokumentasi ALT-DEF-051/052/053) lulus.",
+    "OK: database-integration ADR-041/ADR-042 (konsolidasi audit konkurensi - 3 proteksi terverifikasi ulang lewat dua-koneksi nyata + 3 race ALT-DEF-051/052/053 kini DITOLAK trigger DB) lulus.",
   );
 }
 

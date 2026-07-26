@@ -29,6 +29,11 @@ async function testUrutanSalahDitolakSaatCommit(): Promise<void> {
   try {
     await client.query("BEGIN");
     const fx = await createPesananFixture(client, { status: "DRAF" });
+    // ADR-042 (trg_alokasi_pembayaran_cek_batas_pesanan): totalAkhir default
+    // fixture = 0 - harus di-set ke nilai >= alokasi (20000) di bawah,
+    // supaya INSERT alokasi_pembayaran tidak ditolak sebelum sempat menguji
+    // invariant konsistensi status yang jadi fokus test ini.
+    await client.query(`UPDATE pesanan SET "totalAkhir" = 20000 WHERE id = $1`, [fx.pesananId]);
     const pembayaranId = fixtureId("pembayaran");
     const alokasiId = fixtureId("alokasi");
     await client.query(
@@ -82,6 +87,8 @@ async function testUrutanBenarBerhasilCommit(): Promise<void> {
   try {
     await client.query("BEGIN");
     fx = await createPesananFixture(client, { status: "DIKONFIRMASI" });
+    // ADR-042: lihat catatan totalAkhir di testUrutanSalahDitolakSaatCommit.
+    await client.query(`UPDATE pesanan SET "totalAkhir" = 20000 WHERE id = $1`, [fx.pesananId]);
     pembayaranId = fixtureId("pembayaran");
     const alokasiId = fixtureId("alokasi");
     await client.query(
@@ -143,6 +150,8 @@ async function testRegresiPesananSetelahDibayarDitolak(): Promise<void> {
   try {
     await setupClient.query("BEGIN");
     fx = await createPesananFixture(setupClient, { status: "DIKONFIRMASI" });
+    // ADR-042: lihat catatan totalAkhir di testUrutanSalahDitolakSaatCommit.
+    await setupClient.query(`UPDATE pesanan SET "totalAkhir" = 20000 WHERE id = $1`, [fx.pesananId]);
     pembayaranId = fixtureId("pembayaran");
     const alokasiId = fixtureId("alokasi");
     await setupClient.query(

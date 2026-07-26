@@ -34,10 +34,11 @@ import pg from "pg";
 
 // Diekstrak lewat:
 //   grep -rhoE "CREATE (CONSTRAINT )?TRIGGER [a-zA-Z0-9_]+" prisma/schema/migrations/ | awk '{print $NF}' | sort -u
-// pada seluruh 14 migrasi resmi (2026-07-25/26 correction loop, ADR-006
-// s.d. ADR-041).
+// pada seluruh 15 migrasi resmi (2026-07-25/26/27 correction loop, ADR-006
+// s.d. ADR-042).
 const EXPECTED_TRIGGERS: ReadonlyArray<{ tgname: string; table: string }> = [
   { tgname: "trg_absensi_bump_version", table: "absensi" },
+  { tgname: "trg_alokasi_pembayaran_cek_batas_pesanan", table: "alokasi_pembayaran" },
   { tgname: "trg_cek_konsistensi_pada_alokasi", table: "alokasi_pembayaran" },
   { tgname: "trg_cek_konsistensi_pada_pembayaran", table: "pembayaran" },
   { tgname: "trg_cek_konsistensi_pada_pesanan", table: "pesanan" },
@@ -58,9 +59,11 @@ const EXPECTED_TRIGGERS: ReadonlyArray<{ tgname: string; table: string }> = [
   { tgname: "trg_poin_riwayat_validasi_pembalik", table: "poin_riwayat" },
   { tgname: "trg_promo_bump_version", table: "promo" },
   { tgname: "trg_promo_pemakaian_cek_batas_penerapan", table: "promo_pemakaian" },
+  { tgname: "trg_promo_pemakaian_cek_kuota_total", table: "promo_pemakaian" },
   { tgname: "trg_purchase_order_bump_version", table: "purchase_order" },
   { tgname: "trg_recompute_status_retur_pesanan", table: "pesanan_retur" },
   { tgname: "trg_reservasi_bump_version", table: "reservasi" },
+  { tgname: "trg_reservasi_stok_cek_ketersediaan", table: "reservasi_stok" },
   { tgname: "trg_reservasi_stok_kunci_konsumsi", table: "reservasi_stok" },
   { tgname: "trg_stok_bahan_bump_version", table: "stok_bahan" },
   { tgname: "trg_stok_bahan_cek_negatif", table: "stok_bahan" },
@@ -188,7 +191,7 @@ async function main(): Promise<void> {
   await testTidakAdaTriggerBisnisTakTerdaftar();
   // eslint-disable-next-line no-console
   console.log(
-    `OK: database-integration ADR-041 (inventaris konsolidasi ${EXPECTED_TRIGGERS.length} trigger + ${EXPECTED_CHECK_CONSTRAINTS.length} CHECK constraint + ${EXPECTED_SPECIAL_INDEXES.length} index bisnis-kritis - tripwire regresi tunggal) lulus.`,
+    `OK: database-integration ADR-041/ADR-042 (inventaris konsolidasi ${EXPECTED_TRIGGERS.length} trigger + ${EXPECTED_CHECK_CONSTRAINTS.length} CHECK constraint + ${EXPECTED_SPECIAL_INDEXES.length} index bisnis-kritis - tripwire regresi tunggal) lulus.`,
   );
 }
 
