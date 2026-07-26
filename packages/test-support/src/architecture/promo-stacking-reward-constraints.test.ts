@@ -141,13 +141,22 @@ export function jalankanSemuaAssertion(): void {
     );
   }
   // Assertion negatif kedua - tidak boleh ada @@unique model-level apa pun
-  // yang MEMBATASI pesananId sendirian atau bersama promoId (itu akan
-  // membatasi kembali "satu promo per pesanan" lewat jalur lain).
+  // yang MEMBATASI pesananId SENDIRIAN (tanpa promoId) - itu akan membatasi
+  // kembali "satu promo per pesanan" lewat jalur lain, defect ALT-DEF-009
+  // asli. CATATAN ALT-DEF-038 (redesain, MENGGANTIKAN larangan lama yang
+  // sebelumnya juga melarang blok berpasangan `pesananId`+`promoId`):
+  // `@@unique([pesananId, promoId])` SEKARANG WAJIB ada (lihat assertion
+  // positif di bawah) - itu BUKAN "satu promo per pesanan" (promo BERBEDA
+  // tetap bebas/stacking), melainkan "satu baris PromoPemakaian per pasangan
+  // promo+pesanan yang SAMA", constraint baru yang menutup ALT-DEF-038.
   const uniqueBlocksPemakaian = getAtributBlok(schema, "PromoPemakaian", "@@unique");
   for (const blok of uniqueBlocksPemakaian) {
-    if (/\bpesananId\b/.test(blok) && !/\btenantId,\s*id\b/.test(blok)) {
+    const menyertakanPesananId = /\bpesananId\b/.test(blok);
+    const menyertakanPromoId = /\bpromoId\b/.test(blok);
+    const adalahCompositeFkAnak = /\btenantId,\s*id\b/.test(blok);
+    if (menyertakanPesananId && !menyertakanPromoId && !adalahCompositeFkAnak) {
       throw new Error(
-        `ASSERTION GAGAL: PromoPemakaian TIDAK boleh punya @@unique yang menyertakan pesananId (selain @@unique([tenantId, id]) untuk composite-FK anak) - itu diam-diam mengembalikan defect ALT-DEF-009. Blok: ${blok}`,
+        `ASSERTION GAGAL: PromoPemakaian TIDAK boleh punya @@unique yang menyertakan pesananId SENDIRIAN (selain @@unique([tenantId, id]) untuk composite-FK anak) - itu diam-diam mengembalikan defect ALT-DEF-009 (satu promo per pesanan). Blok: ${blok}`,
       );
     }
   }
@@ -155,6 +164,25 @@ export function jalankanSemuaAssertion(): void {
     getModelBody(schema, "PromoPemakaian"),
     "@@unique([tenantId, id])",
     "PromoPemakaian harus punya @@unique([tenantId, id]) - dibutuhkan composite-FK PromoPemakaianBaris/PromoSnapshot (ADR-013/ADR-026).",
+  );
+  // ALT-DEF-038 (menutup): SELALU tepat satu baris PromoPemakaian per
+  // pasangan (pesananId, promoId) - lihat schema.prisma untuk rasional
+  // desain penuh (menggantikan trigger BEFORE INSERT lintas-tabel yang
+  // dulu dianggap perlu dan tidak pernah ditulis).
+  assertContains(
+    getModelBody(schema, "PromoPemakaian"),
+    "@@unique([pesananId, promoId])",
+    "PromoPemakaian harus punya @@unique([pesananId, promoId]) - inilah inti perbaikan ALT-DEF-038 (satu baris header per pasangan promo+pesanan, penghitung jumlahPenerapan menangani repeatable, BUKAN banyak baris).",
+  );
+  assertContains(
+    getModelBody(schema, "PromoPemakaian"),
+    "jumlahPenerapan Int      @default(1)",
+    "PromoPemakaian harus punya kolom jumlahPenerapan Int @default(1) - penghitung berapa kali promo repeatable efektif terpicu dalam satu pesanan (ALT-DEF-038).",
+  );
+  assertContains(
+    getModelBody(schema, "PromoPemakaian"),
+    "totalDiskon     BigInt @default(0)",
+    "PromoPemakaian harus punya kolom totalDiskon BigInt @default(0) - agregat rupiah SUM(PromoPemakaianBaris.nilaiDiskon) di bawah header ini (ALT-DEF-038, konvensi uang BigInt ADR-034).",
   );
   assertContains(
     getModelBody(schema, "PromoPemakaian"),
@@ -354,6 +382,14 @@ export function jalankanSemuaAssertion(): void {
   for (const kolom of ["id", "tenantId", "promoPemakaianId", "itemPesananId", "nilaiDiskon", "createdAt"]) {
     assertContains(barisBody, kolom, `PromoPemakaianBaris harus punya kolom ${kolom} (ALT-DEF-009).`);
   }
+  // ALT-DEF-038: nomorPenerapan mengelompokkan baris per KALI promo
+  // repeatable terpicu (mis. BOGO x3 -> nomorPenerapan 1/2/3), default 1
+  // (penerapan tunggal selalu instance ke-1).
+  assertContains(
+    barisBody,
+    "nomorPenerapan   Int      @default(1)",
+    "PromoPemakaianBaris harus punya kolom nomorPenerapan Int @default(1) (ALT-DEF-038).",
+  );
   assertContains(
     barisBody,
     "promoPemakaian PromoPemakaian @relation(fields: [tenantId, promoPemakaianId], references: [tenantId, id])",
