@@ -320,8 +320,8 @@ export function jalankanSemuaAssertion(): void {
   }
   assertContains(
     mutasiBody,
-    "hargaPerolehan Int?",
-    "MutasiStok.hargaPerolehan harus Int (rupiah bulat per ADR-005) DAN nullable - hanya mutasi MASUK yang membawa biaya perolehan.",
+    "hargaPerolehan BigInt?",
+    "MutasiStok.hargaPerolehan harus BigInt (rupiah bulat, ADR-034 mengamandemen ADR-005) DAN nullable - hanya mutasi MASUK yang membawa biaya perolehan.",
   );
   // `dibuatOlehId` sebelumnya kolom scalar TANPA relasi FK sama sekali, lalu
   // FK ID tunggal ke Pengguna (ADR-013). ADR-033: sekarang composite-FK
@@ -466,8 +466,8 @@ export function jalankanSemuaAssertion(): void {
   );
   assertContains(
     batchBody,
-    "hargaPerolehan Int",
-    "BatchStok.hargaPerolehan harus Int (rupiah bulat, ADR-005) dan WAJIB - tanpa biaya perolehan per batch, penilaian persediaan dan nilai kerugian waste tidak dapat dihitung.",
+    "hargaPerolehan BigInt",
+    "BatchStok.hargaPerolehan harus BigInt (rupiah bulat, ADR-034 mengamandemen ADR-005) dan WAJIB - tanpa biaya perolehan per batch, penilaian persediaan dan nilai kerugian waste tidak dapat dihitung.",
   );
   assertContains(batchBody, "kuantitasAwal Decimal", "BatchStok.kuantitasAwal harus Decimal (kuantitas bahan, bukan uang).");
   // Assertion NEGATIF: TIDAK boleh ada kolom sisa - itu cache turunan KEDUA.
@@ -611,8 +611,8 @@ export function jalankanSemuaAssertion(): void {
   );
   assertContains(
     wasteBody,
-    "nilaiKerugian Int?",
-    "CatatanWaste.nilaiKerugian harus Int (rupiah bulat, ADR-005) DAN nullable - ia dihitung dari hargaPerolehan batch, yang tidak selalu diketahui.",
+    "nilaiKerugian BigInt?",
+    "CatatanWaste.nilaiKerugian harus BigInt (rupiah bulat, ADR-034 mengamandemen ADR-005) DAN nullable - ia dihitung dari hargaPerolehan batch, yang tidak selalu diketahui.",
   );
   assertContains(
     getAtributBlok(schema, "AlasanWaste").join("\n"),

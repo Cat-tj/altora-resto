@@ -311,8 +311,8 @@ export function jalankanSemuaAssertion(): void {
   );
   assertContains(
     versiBody,
-    "snapshotBiaya Int?",
-    "VersiResep.snapshotBiaya harus Int (rupiah bulat, ADR-005) DAN nullable - versi DRAF belum pernah diaktifkan sehingga belum punya HPP terhitung (ALT-RSP-012).",
+    "snapshotBiaya BigInt?",
+    "VersiResep.snapshotBiaya harus BigInt (rupiah bulat, ADR-034 mengamandemen ADR-005) DAN nullable - versi DRAF belum pernah diaktifkan sehingga belum punya HPP terhitung (ALT-RSP-012).",
   );
   assertContains(
     versiBody,

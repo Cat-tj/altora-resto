@@ -232,8 +232,8 @@ export function jalankanSemuaAssertion(): void {
   }
   assertContains(
     alokasiBody,
-    "jumlah Int",
-    "AlokasiPembayaran.jumlah harus bertipe Int (rupiah, ADR-005) - tanpa nominal per pasangan, 'berapa yang sudah dibayar untuk pesanan X' tidak terjawab pada group bill.",
+    "jumlah BigInt",
+    "AlokasiPembayaran.jumlah harus bertipe BigInt (rupiah, ADR-034 mengamandemen ADR-005) - tanpa nominal per pasangan, 'berapa yang sudah dibayar untuk pesanan X' tidak terjawab pada group bill.",
   );
   assertContains(
     alokasiBody,

@@ -399,8 +399,8 @@ export function jalankanSemuaAssertion(): void {
   assertContains(pelangganBody, "status StatusPelanggan @default(AKTIF)", "Pelanggan.status harus @default(AKTIF).");
   assertContains(
     pelangganBody,
-    "saldoTokoCache Int",
-    "Pelanggan.saldoTokoCache harus Int - CACHE terdokumentasi dari SUM(LedgerSaldoToko.jumlah).",
+    "saldoTokoCache BigInt",
+    "Pelanggan.saldoTokoCache harus BigInt (ADR-034, mengamandemen ADR-005) - CACHE terdokumentasi dari SUM(LedgerSaldoToko.jumlah), nilai kumulatif berisiko melebihi jangkauan int4.",
   );
   wajibNilaiEnumPersis(schema, "StatusPelanggan", ["AKTIF", "DIGABUNGKAN"], "ALT-DEF-023/ALT-MBR-003");
 
