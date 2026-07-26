@@ -27,9 +27,11 @@ erDiagram
     PERAN ||--o{ KEANGGOTAAN_PERAN : ditetapkan_ke
     PERAN ||--o| BATAS_IZIN : punya_batas
     KEANGGOTAAN_TENANT ||--o{ IZIN_SEMENTARA : diberi_izin_sementara
+    KEANGGOTAAN_TENANT ||--o{ IZIN_SEMENTARA : "memberikan (ADR-033, diberikanOlehId)"
     IZIN ||--o{ IZIN_SEMENTARA : didelegasikan
     TENANT ||--o{ PERMINTAAN_PERSETUJUAN : mengajukan
     KEANGGOTAAN_TENANT ||--o{ PERMINTAAN_PERSETUJUAN : memohon
+    KEANGGOTAAN_TENANT ||--o{ PERMINTAAN_PERSETUJUAN : "menyetujui (ADR-033, disetujuiOlehId)"
     OUTLET ||--o{ PERANGKAT : terdaftar
     PENGGUNA ||--o{ SESI : membuat
     KEANGGOTAAN_TENANT ||--o{ SESI : konteks_aktif
@@ -144,9 +146,10 @@ erDiagram
     }
     IZIN_SEMENTARA {
         string id PK
-        string keanggotaanTenantId FK
+        string tenantId FK "denormalisasi, ADR-033 - dipakai kedua composite-FK di bawah"
+        string keanggotaanTenantId FK "penerima izin, composite (tenantId, keanggotaanTenantId)"
         string izinId FK
-        string diberikanOlehId FK "-> Pengguna"
+        string diberikanOlehId FK "-> KEANGGOTAAN_TENANT, composite (tenantId, diberikanOlehId), ADR-033 (sebelumnya -> Pengguna)"
         string alasan
         datetime berlakuSejak
         datetime berlakuSampai
@@ -162,7 +165,7 @@ erDiagram
         string referensiJenis
         string referensiId
         string status "DIAJUKAN|DISETUJUI|DITOLAK|DIBATALKAN"
-        string disetujuiOlehId "nullable, -> Pengguna"
+        string disetujuiOlehId "nullable, -> KEANGGOTAAN_TENANT, composite (tenantId, disetujuiOlehId), ADR-033 (sebelumnya -> Pengguna)"
         string catatan
         datetime createdAt
         datetime updatedAt
@@ -280,6 +283,16 @@ Catatan:
   sementara), `PERMINTAAN_PERSETUJUAN` (alur approval supervisor generik).
   Lihat `docs/keamanan/PERMISSION-MATRIX.md` untuk mapping lengkap dan
   `prisma/seed/izin.seed.ts` untuk seed kode izin starter.
+- **ADR-033:** `IZIN_SEMENTARA.diberikanOlehId` dan
+  `PERMINTAAN_PERSETUJUAN.disetujuiOlehId` dipindah dari FK langsung ke
+  `PENGGUNA` (identitas global) menjadi composite-FK ke `KEANGGOTAAN_TENANT`
+  (`(tenantId, xxxOlehId) -> KeanggotaanTenant(tenantId, id)`) - menjamin di
+  level database bahwa aktor benar-benar tercatat sebagai anggota tenant
+  yang sama dengan baris yang diaksesnya. `IZIN_SEMENTARA` mendapat kolom
+  `tenantId` baru (denormalisasi) untuk mendukung kedua composite-FK
+  (penerima dan pemberi izin). Lihat `docs/engineering/DECISION-LOG.md`
+  ADR-033 untuk audit lengkap seluruh 47 field aktor tenant-scoped di
+  seluruh skema (bukan hanya dua yang ada di domain platform ini).
 - `SESI` tidak pernah di-hard-delete; pencabutan sesi memakai `dicabutPada`.
 - `AUDIT_LOG` bersifat append-only, sumber kebenaran untuk jejak audit semua domain lain.
 - **ALT-DEF-010 (composite tenant/outlet-scoped FK, lihat ADR-013 di `docs/engineering/DECISION-LOG.md`):** `PERANGKAT.outletId` kini composite-FK `(tenantId, outletId) -> Outlet(tenantId, id)`, bukan FK ID tunggal - menjamin `Perangkat` tidak bisa merujuk `Outlet` milik tenant lain. `PENGATURAN_OUTLET` dijudge aman tanpa composite (hanya satu relasi ke `Outlet`, tidak ada FK kedua yang bisa menyimpang).

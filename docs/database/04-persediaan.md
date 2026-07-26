@@ -428,5 +428,27 @@ batch ini), dicatat eksplisit di ADR-032 agar tidak hilang.
   didapat dari composite `(tenantId, gudangId)` saja, dan transfer justru
   operasi yang menyeberangi outlet. `MUTASI_STOK.dibuatOlehId` sebelumnya
   kolom TANPA relasi FK sama sekali (gap yang sama seperti `gudangId` dulu) -
-  kini FK ID tunggal ke `Pengguna` (ADR-013 poin 5: relasi ke `Pengguna` tidak
-  pernah di-composite-kan ke tenant).
+  awalnya diperbaiki jadi FK ID tunggal ke `Pengguna` (ADR-013 poin 5: relasi
+  ke `Pengguna` tidak pernah di-composite-kan ke tenant).
+- **ADR-033 (membalikkan sebagian ADR-013 poin 5 KHUSUS untuk field AKTOR,
+  bukan field identitas):** audit lanjutan menemukan bahwa generalisasi
+  "relasi `Pengguna` tidak pernah di-composite-kan" SALAH diterapkan ke field
+  AKTOR (`dibuatOlehId`/`disetujuiOlehId`/dst.) - field-field ini merekam
+  "siapa bertindak atas nama tenant/outlet ini", bukan identitas global murni.
+  Seluruh field aktor di domain persediaan sekarang composite-FK:
+  **OUTLET-LEVEL** (`(tenantId, outletId, xxxOlehId) ->
+  KeanggotaanOutlet(tenantId, outletId, id)`) untuk `MutasiStok.dibuatOlehId`,
+  `PenyesuaianStok.dicatatOlehId`/`disetujuiOlehId`,
+  `CatatanWaste.dicatatOlehId`/`disetujuiOlehId`,
+  `PurchaseOrder.dibuatOlehId`, `ProsesProduksi.dibuatOlehId` (lihat
+  `03-resep-bahan.md`) - dipilih outlet-level karena baris-baris ini SUDAH
+  `outletId`-scoped dan operasinya fisik di satu outlet tertentu;
+  **TENANT-LEVEL** (`(tenantId, xxxOlehId) -> KeanggotaanTenant(tenantId, id)`)
+  untuk `StokOpname.dibuatOlehId`/`penghitungId`/`pengunciId`/`penyetujuId`,
+  `TransferStok.dibuatOlehId`/`disetujuiOlehId`/`dikirimOlehId`/
+  `diterimaOlehId`, `PenerimaanBarang.diterimaOlehId` (lihat
+  `05-supplier-pembelian.md`) - dipilih tenant-level karena `TransferStok`
+  secara semantik LINTAS-outlet (outlet asal != outlet tujuan) dan opname/
+  penerimaan barang tidak selalu terikat satu outlet fisik yang sama dengan
+  aktor. Lihat `docs/engineering/DECISION-LOG.md` ADR-033 untuk audit
+  lengkap seluruh 47 field aktor di semua domain, bukan hanya persediaan.

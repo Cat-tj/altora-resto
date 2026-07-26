@@ -207,3 +207,4 @@ Keputusan 4). Integration test yang wajib ada (batch berikutnya):
   `Pembayaran(tenantId, id)` DAN `MetodeBayar(tenantId, id)`.
 - **Belum diperbaiki:** `TRANSAKSI_KASIR` masih tanpa `tenantId` sama sekali -
   itu `ALT-DEF-031`, di luar cakupan batch ini.
+- **ADR-033:** `GiliranKasir.penggunaId` dipindah ke composite-FK OUTLET-LEVEL `(tenantId, outletId, penggunaId) -> KeanggotaanOutlet(tenantId, outletId, id)`; `Pembayaran.dikonfirmasiOlehId` (nullable) demikian pula OUTLET-LEVEL; `KoreksiPembayaran.dikoreksiOlehId`, `QrisKonfirmasiManual.diverifikasiOlehId`, `PembayaranRefund.disetujuiOlehId` dipindah ke composite-FK TENANT-LEVEL `(tenantId, xxxOlehId) -> KeanggotaanTenant(tenantId, id)` - seluruhnya sebelumnya FK langsung ke `Pengguna`. Lihat `docs/engineering/DECISION-LOG.md` ADR-033.

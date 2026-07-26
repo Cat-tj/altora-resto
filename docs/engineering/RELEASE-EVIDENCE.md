@@ -2744,6 +2744,134 @@ dengan `MutasiStok` - asimetri yang dicatat defect ini tidak ada lagi. Lihat
 ADR-032 untuk rasional desain lengkap dan `DEFECT-LEDGER.md` untuk closure
 penuh.
 
+## Batch ADR-033: Audit dan perbaikan actor field tenant-scoped (`ALT-DEF-045`, `INV-044`/`045`/`046`)
+
+### 1. `prisma validate`
+
+```
+$ npx prisma validate --schema prisma/schema/schema.prisma
+Prisma schema loaded from prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+```
+
+### 2. `prisma migrate status` (sebelum redeploy, terhadap `altora_resto_dev` yang sudah punya migrasi ini terpasang dari sesi sebelumnya)
+
+```
+$ npx prisma migrate status --schema prisma/schema/schema.prisma
+Datasource "db": PostgreSQL database "altora_resto_dev", schema "public" at "localhost:5432"
+4 migrations found in prisma/migrations
+Database schema is up to date!
+```
+
+### 3. Test database-integration baru (`actor-keanggotaan-tenant-outlet-invariants.test.ts`)
+
+Dijalankan langsung lewat `tsx` terhadap Postgres nyata:
+
+```
+$ node node_modules/.pnpm/tsx@4.23.1/node_modules/tsx/dist/cli.mjs \
+    packages/test-support/src/database-integration/actor-keanggotaan-tenant-outlet-invariants.test.ts
+OK: database-integration ADR-033 (composite-FK actor tenant/outlet-scoped) - lintas-tenant/outlet ditolak, aktor sah diterima.
+```
+
+Membuktikan (bukan hanya mengklaim): (1) `MutasiStok.dibuatOlehId`
+(OUTLET-LEVEL) menolak aktor tenant lain DAN aktor tenant-benar-outlet-salah;
+(2) `StokOpname.dibuatOlehId` (TENANT-LEVEL) menolak aktor tenant lain; (3)
+`Karyawan.keanggotaanTenantId` menolak keanggotaan tenant lain; (4)
+`Notification.keanggotaanTenantId` menolak keanggotaan tenant lain; (5)
+seluruh kasus aktor SAH (tenant/outlet cocok) diterima tanpa error. Existence
+check `pg_constraint` mengonfirmasi ke-5 composite-FK representatif benar-benar
+ada dengan target tabel yang tepat (`keanggotaan_outlet` vs `keanggotaan_tenant`).
+
+### 4. Seluruh test database-integration (5 file) - sebelum redeploy
+
+```
+=== database-integration ===
+actor-keanggotaan-tenant-outlet-invariants.test.ts .......... OK
+ledger-reversal-membalik-invariants.test.ts ................. OK
+persediaan-stok-invariants.test.ts ........................... OK
+qris-konfigurasi-invariant.test.ts ........................... OK
+resep-versi-invariants.test.ts ................................ OK
+db-integration PASS=5 FAIL=0
+```
+
+### 5. Seluruh test arsitektur (22 file, termasuk 8 file yang diubah renaming field aktor)
+
+```
+=== architecture ===
+architecture PASS=22 FAIL=0
+```
+
+Kedelapan file yang dimodifikasi batch ini (`dapur-kds-multi-stasiun`,
+`idempotency-outbox-notification-constraints`,
+`pembayaran-alokasi-metode-constraints`,
+`persediaan-ledger-reservasi-constraints`,
+`prisma-client-shape-platform-infra`, `promo-stacking-reward-constraints`,
+`qris-konfigurasi-constraints`, `resep-versi-produksi-constraints`) lulus
+setelah pembaruan assertion mengikuti rename field aktor (`penggunaId` ->
+`keanggotaanTenantId`/`dibuatOlehId` dkk berubah tipe relasi ke
+`KeanggotaanTenant`/`KeanggotaanOutlet`). Tidak ada regresi - 22/22 lulus,
+sama seperti jumlah file sebelum batch ini.
+
+### 6. Redeploy dari database KOSONG (drop+create) - membuktikan ke-4 migrasi reproducible dari nol
+
+```
+$ psql -U icat -d postgres -c "DROP DATABASE IF EXISTS altora_resto_dev;"
+DROP DATABASE
+$ psql -U icat -d postgres -c "CREATE DATABASE altora_resto_dev;"
+CREATE DATABASE
+$ npx prisma migrate deploy --schema prisma/schema/schema.prisma
+4 migrations found in prisma/migrations
+Applying migration `20260725154045_baseline_correction_loop`
+Applying migration `20260725154310_harden_manual_invariants`
+Applying migration `20260726090000_redesign_ledger_reversal_membalik_pattern`
+Applying migration `20260726100000_actor_tenant_outlet_scoped`
+All migrations have been successfully applied.
+
+$ psql -U icat -d altora_resto_dev -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';"
+ count
+-------
+   134
+(1 row)
+
+$ npx prisma migrate status --schema prisma/schema/schema.prisma
+Database schema is up to date!
+```
+
+134 tabel - identik dengan jumlah sebelum drop (dan identik dengan yang
+dicatat batch ADR-032), membuktikan migrasi `20260726100000_actor_tenant_outlet_scoped`
+tidak mengubah jumlah tabel (hanya FK/kolom di tabel yang sudah ada).
+
+### 7. Seluruh test (27 file: 5 database-integration + 22 architecture) diulang TERHADAP database yang baru di-redeploy
+
+```
+=== database-integration ===
+db-integration PASS=5 FAIL=0
+=== architecture ===
+architecture PASS=22 FAIL=0
+```
+
+**LULUS 27/27 kedua kalinya** dari kondisi database kosong total - membuktikan
+migrasi dan seluruh invariant yang bergantung padanya reproducible, bukan
+kebetulan berhasil karena state database yang sempat "dipanaskan" manual.
+
+### 8. Checklist penutupan sub-syarat `ALT-DEF-045` / `INV-044`
+
+| Item checklist | Status | Bukti |
+|---|---|---|
+| Migrasi resmi lulus (termasuk dari nol) | LULUS | Bagian 2, 6 di atas |
+| Composite-FK benar-benar terpasang (existence pg_constraint) | LULUS | Bagian 3 di atas |
+| Integration test PostgreSQL lulus (aktor lintas-tenant/outlet ditolak) | LULUS | Bagian 3, 4, 7 di atas |
+| Test arsitektur diperbarui dan lulus, TANPA regresi | LULUS (22/22) | Bagian 5 di atas |
+| Traceability diperbarui | LULUS | `INVARIAN-BELUM-DITEGAKKAN.md` INV-044 (kategori A, DITUTUP) + INV-045/INV-046 (kategori C, gap runtime dicatat eksplisit) |
+| Bukti command aktual tersedia | LULUS | Dokumen ini |
+
+**Kesimpulan: sub-syarat "anggota tenant/outlet" dari `ALT-DEF-045` DITUTUP
+lewat `INV-044`.** Sub-syarat (a) status AKTIF saat command, (b) akses outlet
+untuk field tenant-level, (c) permission saat command - KETIGANYA TETAP
+TERBUKA (`INV-045`/`INV-046`), menunggu batch implementasi handler/
+service-layer terpisah. Lihat ADR-033 untuk rasional desain lengkap dan
+`DEFECT-LEDGER.md` (`ALT-DEF-045`) untuk closure-checklist penuh.
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```

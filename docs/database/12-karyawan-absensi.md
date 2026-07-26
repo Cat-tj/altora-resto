@@ -8,7 +8,7 @@ keputusan desain di bawah.
 erDiagram
     TENANT ||--o{ KARYAWAN : mempekerjakan
     TENANT ||--o{ DEPARTEMEN : punya
-    KARYAWAN }o--|| PENGGUNA : terhubung_ke_akun
+    KARYAWAN }o--|| KEANGGOTAAN_TENANT : "terhubung_ke_akun (ADR-033, sebelumnya -> PENGGUNA langsung)"
     KARYAWAN ||--o{ KARYAWAN_OUTLET : bekerja_di
     OUTLET ||--o{ KARYAWAN_OUTLET : mempekerjakan
     KARYAWAN ||--o{ HUBUNGAN_KERJA : riwayat_employment
@@ -42,7 +42,7 @@ erDiagram
     KARYAWAN {
         string id PK
         string tenantId FK
-        string penggunaId FK UK "nullable, tidak semua karyawan punya akun login"
+        string keanggotaanTenantId FK UK "nullable, composite (tenantId, keanggotaanTenantId) -> KEANGGOTAAN_TENANT, ADR-033 (sebelumnya penggunaId -> Pengguna langsung) - tidak semua karyawan punya akun login"
         string nomorInduk UK
         string status "AKTIF|CUTI|NONAKTIF"
         datetime tanggalBergabung
@@ -108,7 +108,7 @@ erDiagram
         string jadwalKerjaAsalId FK
         string karyawanPemohonId FK
         string karyawanPenggantiId FK "nullable"
-        string disetujuiOlehId FK "nullable, -> Pengguna"
+        string disetujuiOlehId FK "nullable, -> KEANGGOTAAN_TENANT, composite (tenantId, disetujuiOlehId), ADR-033 (sebelumnya -> Pengguna)"
         string status "DIAJUKAN|DISETUJUI_REKAN|DISETUJUI_MANAJER|DITOLAK|DIBATALKAN"
         datetime createdAt
     }
@@ -132,8 +132,8 @@ erDiagram
         string id PK
         string tenantId FK
         string absensiId FK
-        string diajukanOlehId FK "-> Pengguna"
-        string disetujuiOlehId FK "nullable, -> Pengguna"
+        string diajukanOlehId FK "-> KEANGGOTAAN_TENANT, composite (tenantId, diajukanOlehId), ADR-033 (sebelumnya -> Pengguna)"
+        string disetujuiOlehId FK "nullable, -> KEANGGOTAAN_TENANT, composite (tenantId, disetujuiOlehId), ADR-033 (sebelumnya -> Pengguna)"
         datetime jamMasukSebelum "snapshot saat pengajuan"
         datetime jamMasukSesudah "nullable, nilai diusulkan"
         datetime jamPulangSebelum "nullable, snapshot"
@@ -159,7 +159,7 @@ erDiagram
         date tanggalMulai
         date tanggalSelesai
         string status "DIAJUKAN|DISETUJUI|DITOLAK"
-        string disetujuiOlehId FK "nullable"
+        string disetujuiOlehId FK "nullable, -> KEANGGOTAAN_TENANT, composite (tenantId, disetujuiOlehId), ADR-033 (sebelumnya -> Pengguna)"
     }
     PERMINTAAN_LEMBUR {
         string id PK
@@ -170,7 +170,7 @@ erDiagram
         datetime jamSelesai
         string alasan
         string status "DIAJUKAN|DISETUJUI|DITOLAK"
-        string disetujuiOlehId FK "nullable"
+        string disetujuiOlehId FK "nullable, -> KEANGGOTAAN_TENANT, composite (tenantId, disetujuiOlehId), ADR-033 (sebelumnya -> Pengguna)"
         datetime createdAt
     }
     TARGET_KINERJA {
@@ -186,7 +186,7 @@ erDiagram
         string id PK
         string tenantId FK
         string karyawanId FK
-        string dinilaiOlehId FK "-> Pengguna"
+        string dinilaiOlehId FK "-> KEANGGOTAAN_TENANT, composite (tenantId, dinilaiOlehId), ADR-033 (sebelumnya -> Pengguna)"
         string periode
         decimal skor "nullable"
         string catatan "nullable"
@@ -256,6 +256,19 @@ Catatan:
   `tenantId` DAN FK ke model tenant-owned lain memakai composite-FK
   `(tenantId, xId) -> Model(tenantId, id)` - lihat ADR-028 di
   `docs/engineering/DECISION-LOG.md` untuk daftar lengkap per model.
-- `KARYAWAN.penggunaId` terhubung ke `PENGGUNA` (bagian Platform) hanya jika
-  karyawan tersebut memiliki akses login sistem; peran/permission tetap
-  diatur lewat `packages/otorisasi`.
+- `KARYAWAN.keanggotaanTenantId` (rename dari `penggunaId`, ADR-033) terhubung
+  ke `KEANGGOTAAN_TENANT` (bagian Platform) hanya jika karyawan tersebut
+  memiliki akses login sistem; peran/permission tetap diatur lewat
+  `packages/otorisasi`.
+- **ADR-033 - seluruh field aktor domain HR/absensi** (`PermintaanTukarShift.
+  disetujuiOlehId`, `KoreksiAbsensi.diajukanOlehId`/`disetujuiOlehId`,
+  `CutiIzin.disetujuiOlehId`, `PermintaanLembur.disetujuiOlehId`,
+  `PenilaianKinerja.dinilaiOlehId`, dan `Karyawan.keanggotaanTenantId` di
+  atas) dipindah dari FK langsung ke `PENGGUNA` (identitas global) menjadi
+  composite-FK ke `KEANGGOTAAN_TENANT` (`(tenantId, xxxOlehId) ->
+  KeanggotaanTenant(tenantId, id)`) - menutup gap tenant-isolation yang sama
+  bentuknya dengan `ALT-DEF-010` tapi sebelumnya luput karena field AKTOR
+  keliru disamakan dengan field IDENTITAS murni (lihat ADR-013 poin 5).
+  Diverifikasi lewat `actor-keanggotaan-tenant-outlet-invariants.test.ts`
+  untuk representasi lintas-domain (lihat ADR-033 lengkap di
+  `docs/engineering/DECISION-LOG.md`).

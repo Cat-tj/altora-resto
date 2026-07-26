@@ -147,3 +147,4 @@ tagihannya sendiri lunas. Tabel transisi lengkap ada di
 - Koreksi konfirmasi yang keliru (`ALT-QRS-009`) dicatat sebagai
   `KOREKSI_PEMBAYARAN` (lihat `09-pembayaran-kasir.md`), tidak menghapus baris
   `QRIS_KONFIRMASI_MANUAL` asal.
+- **ADR-033:** `KonfigurasiQris.dibuatOlehId`/`diverifikasiOlehId` (nullable) dan `RiwayatKonfigurasiQris.dilakukanOlehId` dipindah dari FK langsung ke `Pengguna` menjadi composite-FK OUTLET-LEVEL `(tenantId, outletId, xxxOlehId) -> KeanggotaanOutlet(tenantId, outletId, id)`. Lihat `docs/engineering/DECISION-LOG.md` ADR-033.

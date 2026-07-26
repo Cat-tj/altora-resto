@@ -2925,3 +2925,191 @@ dicatat ALT-DEF-043 (kolom ada, trigger tidak ada) sudah tidak ada lagi.
 Dibuktikan test database-integration nyata (bukan cuma klaim desain) untuk
 KEEMPAT tabel, lihat `DEFECT-LEDGER.md` untuk detail closure-checklist
 lengkap.
+
+## ADR-033: Audit dan perbaikan validasi actor tenant-scoped - `*OlehId`/`penggunaId` dipindah dari FK langsung ke `Pengguna` menjadi composite-FK ke `KeanggotaanTenant`/`KeanggotaanOutlet`
+
+**Konteks.** ADR-013 poin 5 (dan setiap ADR sesudahnya yang menambah field
+aktor baru) menegaskan sebagai prinsip tetap: relasi ke `Pengguna` "TIDAK
+PERNAH di-composite-kan ke tenant" karena `Pengguna` adalah identitas GLOBAL
+(satu akun bisa menjadi anggota banyak tenant lewat `KeanggotaanTenant`).
+Prinsip itu benar untuk relasi IDENTITAS (sesi, token reset, riwayat
+perangkat) - tapi audit batch ini menemukan bahwa prinsip yang sama SALAH
+DITERAPKAN ke field AKTOR (`dibuatOlehId`, `disetujuiOlehId`,
+`diverifikasiOlehId`, dst.): field-field ini merekam "siapa YANG BERTINDAK
+atas nama tenant/outlet tertentu", bukan "siapa pemilik akun ini secara
+global". FK langsung ke `Pengguna` untuk field aktor berarti composite-FK
+`(tenantId, dibuatOlehId)` **tidak pernah bisa dibentuk** - tidak ada jaminan
+level-database bahwa `Pengguna` yang direferensikan benar-benar anggota
+tenant (apalagi outlet) yang sama dengan baris yang ia buat/setujui. Seorang
+`Pengguna` yang TIDAK PERNAH menjadi anggota tenant manapun bisa dicatat
+sebagai `dibuatOlehId` sebuah `MutasiStok` milik tenant lain, lolos tanpa
+error apa pun. Ini gap keamanan tenant-isolation yang identik bentuknya
+dengan gap-gap `ALT-DEF-010` (composite-FK non-aktor) yang sudah diperbaiki
+batch-batch sebelumnya - hanya belum pernah diterapkan ke field AKTOR karena
+prinsip ADR-013 poin 5 secara keliru digeneralisasi dari "relasi identitas"
+ke "seluruh relasi Pengguna tanpa kecuali". Batch ini membalikkan sebagian
+ADR-013 poin 5 (bukan mencabut - lihat Keputusan 4 di bawah).
+
+**Langkah 1 - Audit lengkap seluruh field `*OlehId`/`penggunaId`.** Tabel di
+bawah mencakup SELURUH relasi ke `Pengguna` yang ditemukan di
+`schema.prisma` sebelum batch ini, diklasifikasikan menjadi tiga kelompok:
+(A) aktor tenant-level, (B) aktor outlet-level, (C) BUKAN aktor / dikecualikan
+dengan sengaja.
+
+**(A) Aktor TENANT-LEVEL** (composite-FK `(tenantId, xxxOlehId)` ->
+`KeanggotaanTenant(tenantId, id)`) - dipilih tenant-level (bukan outlet-level)
+karena modelnya sendiri TIDAK punya `outletId` sendiri, atau operasinya
+secara semantik lintas-outlet dalam satu tenant (mis. transfer stok antar
+outlet, approval level-tenant):
+
+| Model.field | Nullable? |
+|---|---|
+| `IzinSementara.diberikanOlehId` | tidak |
+| `PermintaanPersetujuan.disetujuiOlehId` | ya |
+| `TransferStok.dibuatOlehId` | tidak |
+| `TransferStok.disetujuiOlehId` | ya |
+| `TransferStok.dikirimOlehId` | ya |
+| `TransferStok.diterimaOlehId` | ya |
+| `StokOpname.dibuatOlehId` | tidak |
+| `StokOpname.penghitungId` | ya |
+| `StokOpname.pengunciId` | ya |
+| `StokOpname.penyetujuId` | ya |
+| `PenerimaanBarang.diterimaOlehId` | tidak |
+| `PesananPerubahan.diubahOlehId` | tidak |
+| `PesananPenolakan.ditolakOlehId` | tidak |
+| `PesananPembatalan.dibatalkanOlehId` | tidak |
+| `RiwayatStatusTiketDapur.diubahOlehId` | ya (event sistem/timer) |
+| `GelombangDapur.dipicuOlehId` | ya (event sistem/timer) |
+| `KoreksiPembayaran.dikoreksiOlehId` | tidak |
+| `QrisKonfirmasiManual.diverifikasiOlehId` | tidak |
+| `PembayaranRefund.disetujuiOlehId` | tidak |
+| `PromoSimulasi.disimulasikanOlehId` | tidak |
+| `PoinRiwayat.dicatatOlehId` | ya (baris sistem) |
+| `LedgerStempel.dicatatOlehId` | ya (baris sistem) |
+| `LedgerSaldoToko.dicatatOlehId` | ya (baris sistem) |
+| `RiwayatGabungPelanggan.digabungOlehId` | tidak |
+| `Karyawan.keanggotaanTenantId` (rename dari `penggunaId`) | ya |
+| `PermintaanTukarShift.disetujuiOlehId` | ya |
+| `KoreksiAbsensi.diajukanOlehId` | tidak |
+| `KoreksiAbsensi.disetujuiOlehId` | ya |
+| `CutiIzin.disetujuiOlehId` | ya |
+| `PermintaanLembur.disetujuiOlehId` | ya |
+| `PenilaianKinerja.dinilaiOlehId` | tidak |
+| `Notification.keanggotaanTenantId` (rename dari `penggunaId`) | ya (broadcast) |
+
+**(B) Aktor OUTLET-LEVEL** (composite-FK `(tenantId, outletId, xxxOlehId)` ->
+`KeanggotaanOutlet(tenantId, outletId, id)`, memerlukan `@@unique([tenantId,
+outletId, id])` baru di `KeanggotaanOutlet`) - dipilih outlet-level karena
+baris yang direferensikan SENDIRI sudah `outletId`-scoped dan operasinya
+secara fisik terikat SATU outlet (kasir, dapur, produksi, konfigurasi alat
+di lokasi tertentu):
+
+| Model.field | Nullable? |
+|---|---|
+| `ProsesProduksi.dibuatOlehId` | tidak |
+| `MutasiStok.dibuatOlehId` | tidak |
+| `PenyesuaianStok.dicatatOlehId` | tidak |
+| `PenyesuaianStok.disetujuiOlehId` | ya |
+| `CatatanWaste.dicatatOlehId` | tidak |
+| `CatatanWaste.disetujuiOlehId` | ya |
+| `PurchaseOrder.dibuatOlehId` | tidak |
+| `Pesanan.dibuatOlehId` | tidak |
+| `Pembayaran.dikonfirmasiOlehId` | ya |
+| `KonfigurasiQris.dibuatOlehId` | tidak |
+| `KonfigurasiQris.diverifikasiOlehId` | ya |
+| `RiwayatKonfigurasiQris.dilakukanOlehId` | tidak |
+| `GiliranKasir.penggunaId` | tidak |
+| `RekapKasHarian.diverifikasiOlehId` | ya |
+| `BiayaOperasional.dicatatOlehId` | tidak |
+
+Total **32 field tenant-level + 15 field outlet-level = 47 field** dipindah
+dari FK langsung `Pengguna` menjadi composite-FK.
+
+**(C) BUKAN aktor / dikecualikan dengan sengaja** (TETAP FK langsung ke
+`Pengguna`, atau tidak disentuh sama sekali):
+
+- `Pengguna.sesi`/`tokenResetKataSandi`/`riwayatPerangkat`/
+  `KeanggotaanTenant.pengguna` - relasi IDENTITAS murni (siapa PEMILIK akun
+  ini), bukan "siapa BERTINDAK sebagai apa" - prinsip ADR-013 poin 5 tetap
+  berlaku UTUH di sini, TIDAK dibalikkan.
+- `AuditLog.penggunaId` - lihat Keputusan 2.
+- `PesananRiwayatStatus.diubahOlehId` - lihat Keputusan 3 (gap diketahui,
+  BUKAN dievaluasi-dan-ditolak).
+
+**Keputusan 2 - `AuditLog` dapat KEDUANYA: `penggunaId` (FK langsung,
+DIPERTAHANKAN) DAN `keanggotaanTenantId` (composite-FK BARU, nullable),
+bukan salah satu.** `AuditLog` adalah snapshot historis-immutable - baris
+yang sudah ditulis TIDAK BOLEH "kehilangan" siapa pelakunya hanya karena
+keanggotaan tenant orang itu belakangan berubah (dinonaktifkan/dikeluarkan/
+dihapus keanggotaannya). Bila `penggunaId` diganti total menjadi composite-FK
+ke `KeanggotaanTenant`, maka `ON DELETE`/perubahan status keanggotaan bisa
+membuat baris audit lama merujuk ke keanggotaan yang sudah tidak ada -
+bertentangan langsung dengan tujuan AuditLog itu sendiri (bukti forensik
+yang harus tetap terbaca). Solusi: PERTAHANKAN `penggunaId` (jawaban atas
+"siapa secara fisik" - tidak pernah hilang), TAMBAH `keanggotaanTenantId`
+nullable (jawaban atas "tercatat sebagai anggota tenant apa SAAT baris ini
+ditulis" - validasi actor TAMBAHAN, bukan pengganti). Nullable karena baris
+audit yang dihasilkan proses SISTEM (job terjadwal, bukan aksi pengguna
+spesifik) tidak selalu punya keanggotaan untuk dirujuk.
+
+**Keputusan 3 - `PesananRiwayatStatus.diubahOlehId` TIDAK diubah pada batch
+ini - dicatat eksplisit sebagai gap diketahui, bukan dilewati diam-diam.**
+Model ini TIDAK punya kolom `tenantId` sendiri (baris riwayat murni di bawah
+`Pesanan`, pola yang sama seperti tabel baris/junction lain di seluruh skema
+ini - lihat ADR-013). Composite-FK `(tenantId, diubahOlehId) ->
+KeanggotaanTenant(tenantId, id)` MEMERLUKAN kolom `tenantId` ada di tabel
+tsb terlebih dahulu; menambahkannya adalah perubahan skema TAMBAHAN yang
+tidak diminta ("stay in scope: schema/FK-shape fix only" untuk field yang
+SUDAH ada strukturnya). Dicatat di `INVARIAN-BELUM-DITEGAKKAN.md` (lihat di
+bawah) sebagai gap yang menunggu batch terpisah yang mendenormalisasi
+`tenantId` ke tabel ini.
+
+**Keputusan 4 - `Notification.penggunaId` -> `keanggotaanTenantId`: HANYA
+perbaikan TRIVIAL (validasi actor), BUKAN redesain targeting.** Sesuai batas
+scope eksplisit instruksi batch ini: `Notification` sudah punya `tenantId`
+sendiri, jadi mengganti `penggunaId` (FK langsung) menjadi
+`keanggotaanTenantId` (composite-FK) adalah penerapan pola yang SAMA seperti
+seluruh field lain di batch ini - tidak butuh keputusan desain baru.
+Redesain targeting yang lebih dalam (`keanggotaanOutletId` untuk notifikasi
+outlet-scoped, `peranId` untuk broadcast-per-peran, model
+`NotificationTarget` terpisah untuk banyak penerima sekaligus) SENGAJA
+TIDAK dikerjakan di sini - itu masalah TARGETING (siapa SEHARUSNYA menerima
+notifikasi ini), kategori masalah yang BERBEDA dari VALIDASI ACTOR (apakah
+kolom aktor yang ADA mengarah ke record yang sah). Dicadangkan untuk batch
+"perbaiki notification targeting" terpisah di masa depan (lihat ADR-016
+untuk keputusan desain lama yang batch tsb akan revisit).
+
+**Keputusan 5 - `KeanggotaanOutlet` butuh `@@unique([tenantId, outletId,
+id])` baru (di samping `@@unique([keanggotaanTenantId, outletId])` yang
+sudah ada) supaya composite-FK 3-kolom `(tenantId, outletId, xxxOlehId)`
+valid sebagai target FK Postgres.** Pola yang identik dengan
+`@@unique([penggunaId, tenantId])` di `KeanggotaanTenant` yang sudah ada
+sejak ADR-011 untuk mendukung composite-FK `(tenantId, penggunaId)` di
+tempat lain - bukan pola baru, hanya diterapkan ke kombinasi kolom yang
+berbeda.
+
+**Keputusan 6 - Migrasi dibuat dengan cara yang SAMA seperti ADR-032
+Keputusan 7** (`prisma migrate dev` diblokir non-interaktif di lingkungan
+ini): `prisma migrate diff --from-schema-datasource --to-schema-datamodel
+--script` menghasilkan isi migrasi murni DROP+ADD constraint/kolom (tidak
+ada data yang hilang - tabel `karyawan`/`notification` dikonfirmasi kolom
+lama `penggunaId` sepenuhnya NULL sebelum migrasi ditulis karena database
+dev masih kosong dari data domain), diterapkan lewat `psql`, dicatat resmi
+lewat `prisma migrate resolve --applied`. Diverifikasi identik dengan alur
+normal: `prisma migrate status` melaporkan "up to date", dan redeploy dari
+`DROP DATABASE`+`CREATE DATABASE` kosong menerapkan seluruh 4 migrasi
+berurutan tanpa error menghasilkan 134 tabel yang sama (lihat
+`RELEASE-EVIDENCE.md`).
+
+**Status setelah batch ini.** Composite-FK yang baru dipasang membuktikan di
+level database bahwa aktor sebuah record adalah baris `KeanggotaanTenant`/
+`KeanggotaanOutlet` yang ADA dan tenant/outlet-nya COCOK dengan record yang
+direferensikan - satu dari empat sub-syarat yang idealnya dijamin untuk
+"aktor yang sah" (anggota tenant/outlet - FK-enforceable, SUDAH). Tiga
+sub-syarat lain (aktif SAAT command dijalankan, akses outlet untuk field
+tenant-level yang record-nya sebenarnya outlet-scoped, izin/permission yang
+sesuai SAAT command dijalankan) secara STRUKTURAL tidak bisa dijamin FK
+statis - dicatat sebagai `ALT-DEF-045` di `DEFECT-LEDGER.md` dan sebagai
+baris kategori C baru `INV-045`/`INV-046` di
+`INVARIAN-BELUM-DITEGAKKAN.md`, menunggu batch implementasi handler/
+service-layer terpisah (di luar scope batch schema-only ini).

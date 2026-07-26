@@ -55,14 +55,14 @@ erDiagram
         string id PK
         string tenantId FK
         string outletId "nullable"
-        string penggunaId FK "nullable - lihat catatan targeting di bawah"
+        string keanggotaanTenantId FK "nullable, -> KEANGGOTAAN_TENANT, composite (tenantId, keanggotaanTenantId) - ADR-033 (sebelumnya penggunaId -> Pengguna langsung); lihat catatan targeting di bawah"
         string tipe "PESANAN_QR_MASUK|PESANAN_BERUBAH|PESANAN_SIAP|..."
         string judul
         string pesan
         json data "nullable - payload deep-link, mis. {orderId: ...}"
         datetime dibacaPada "nullable"
         datetime createdAt
-        note "@@index([penggunaId, dibacaPada]) - query unread"
+        note "@@index([keanggotaanTenantId, dibacaPada]) - query unread"
     }
 ```
 
@@ -149,13 +149,27 @@ eksternal apa pun (lihat ADR-016 Keputusan 4). Klien membaca baris ini lewat
 polling atau realtime (`GET /api/v1/notifikasi`), dan menandainya dibaca
 (`POST /api/v1/notifikasi/{id}/read` mengisi `dibacaPada`).
 
-**Targeting saat `penggunaId` NULL:** notifikasi broadcast (mis.
+**Targeting saat `keanggotaanTenantId` NULL:** notifikasi broadcast (mis.
 `STOK_KRITIS` untuk siapa pun berperan GUDANG di suatu outlet) tidak
-mereferensikan satu `Pengguna` tertentu. Pass ini SENGAJA tidak menambah
-model `NotificationTarget` (many-to-many ke penerima) - lihat ADR-016
-Keputusan 5 untuk trade-off lengkapnya. Ketika `penggunaId IS NULL`,
-menentukan siapa yang berhak melihat baris ini adalah tanggung jawab
-service-layer (filter `outletId` + peran pemanggil saat query), bukan
-dijamin skema.
+mereferensikan satu `KeanggotaanTenant` tertentu. Pass ini SENGAJA tidak
+menambah model `NotificationTarget` (many-to-many ke penerima) - lihat
+ADR-016 Keputusan 5 untuk trade-off lengkapnya. Ketika
+`keanggotaanTenantId IS NULL`, menentukan siapa yang berhak melihat baris
+ini adalah tanggung jawab service-layer (filter `outletId` + peran pemanggil
+saat query), bukan dijamin skema.
+
+**ADR-033 - `penggunaId` -> `keanggotaanTenantId` (perbaikan TRIVIAL,
+BUKAN redesain targeting).** Field ini berpindah dari FK langsung ke
+`Pengguna` (identitas global) menjadi composite-FK ke `KeanggotaanTenant`
+(`(tenantId, keanggotaanTenantId) -> KeanggotaanTenant(tenantId, id)`) -
+penerapan pola yang sama seperti seluruh field aktor lain di batch ADR-033,
+karena `Notification` sudah membawa `tenantId` sendiri. Ini HANYA
+memperbaiki VALIDASI ACTOR (kolom yang ada sekarang menjamin merujuk
+keanggotaan yang sah untuk tenant ini) - redesain TARGETING yang lebih
+dalam (`keanggotaanOutletId` untuk notifikasi outlet-scoped, `peranId`
+untuk broadcast-per-peran, model `NotificationTarget` terpisah) TETAP
+di luar cakupan batch ini, dicadangkan untuk batch "perbaiki notification
+targeting" terpisah (lihat ADR-016 dan ADR-033 di
+`docs/engineering/DECISION-LOG.md`).
 
 Kembali ke [README.md](./README.md) untuk indeks ERD domain lain.

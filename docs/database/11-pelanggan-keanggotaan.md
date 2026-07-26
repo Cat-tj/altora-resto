@@ -181,3 +181,4 @@ Catatan:
   `(tenantId, pelangganId) -> Pelanggan(tenantId, id)` saat merujuk pelanggan.
   `KEANGGOTAAN` dan `TIER_KEANGGOTAAN` mendapat perlakuan yang sama
   (`@@unique([tenantId, id])`) sebagai bagian penutupan `ALT-DEF-018`.
+- **ADR-033:** `PoinRiwayat.dicatatOlehId`/`LedgerStempel.dicatatOlehId`/`LedgerSaldoToko.dicatatOlehId` (semuanya nullable untuk baris sistem) dan `RiwayatGabungPelanggan.digabungOlehId` dipindah dari FK langsung ke `Pengguna` menjadi composite-FK TENANT-LEVEL `(tenantId, xxxOlehId) -> KeanggotaanTenant(tenantId, id)`. Lihat `docs/engineering/DECISION-LOG.md` ADR-033.

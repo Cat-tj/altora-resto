@@ -184,3 +184,4 @@ Catatan:
   tunggal karena `VarianMenu` dan `ModifierOpsi` tidak membawa `tenantId` sama
   sekali (keduanya di luar audit ADR-013). Dicatat sebagai defect terpisah di
   `DEFECT-LEDGER.md`, bukan dilewati diam-diam.
+- **ADR-033:** `ProsesProduksi.dibuatOlehId` dipindah dari FK langsung ke `Pengguna` menjadi composite-FK OUTLET-LEVEL `(tenantId, outletId, dibuatOlehId) -> KeanggotaanOutlet(tenantId, outletId, id)` - lihat `docs/engineering/DECISION-LOG.md` ADR-033 untuk audit lengkap seluruh field aktor.

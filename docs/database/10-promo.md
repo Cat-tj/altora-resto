@@ -175,3 +175,4 @@ Catatan:
   `PROMO_JADWAL`, `PROMO_OUTLET`, `PROMO_PEMAKAIAN_BARIS`, `PROMO_SNAPSHOT`,
   `PROMO_SIMULASI`) memakai composite-FK `(tenantId, xId) -> X(tenantId, id)`
   mengikuti pola ADR-013.
+- **ADR-033:** `PromoSimulasi.disimulasikanOlehId` dipindah dari FK langsung ke `Pengguna` menjadi composite-FK TENANT-LEVEL `(tenantId, disimulasikanOlehId) -> KeanggotaanTenant(tenantId, id)`. Lihat `docs/engineering/DECISION-LOG.md` ADR-033.
