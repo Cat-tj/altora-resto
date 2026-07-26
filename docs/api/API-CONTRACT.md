@@ -578,8 +578,13 @@ side-effect/audit-event setiap transisi. `izin.kode` per baris mengacu ke
 | POST | `/api/v1/pesanan/{id}/kirim-dapur` | `DIKONFIRMASI -> DIKIRIM_KE_DAPUR` - membuat **satu atau lebih** `TiketDapur` - satu per stasiun tujuan per gelombang, ditentukan dengan membaca `AturanRoutingDapur` (kardinalitas 1:N sejak `ALT-DEF-006`/ADR-018, lihat bagian 10). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`) - retry tanpa idempotensi akan membuat tiket dapur ganda di setiap stasiun. | `pesanan.status.ubah` |
 | POST | `/api/v1/pesanan/{id}/tandai-disajikan` | `SIAP -> DISAJIKAN`. | `pesanan.status.ubah` |
 | POST | `/api/v1/pesanan/{id}/selesaikan` | `DISAJIKAN -> SELESAI`, guard: total `Pembayaran` yang `DIKONFIRMASI` `>= totalAkhir`. | `pesanan.status.ubah` |
-| POST | `/api/v1/pesanan/{id}/batalkan` | Batalkan pesanan - menulis 1 baris `PesananPembatalan` (`alasan` wajib). TIDAK BISA dipanggil dari status `SIAP`/`DISAJIKAN`/`SELESAI`/`DIBATALKAN`/`DIRETUR` (409 jika dicoba). Butuh approval supervisor jika status saat ini `DIKONFIRMASI`/`DIKIRIM_KE_DAPUR`/`SEDANG_DISIAPKAN` (lihat `PERMISSION-MATRIX.md`). | `pesanan.batalkan` |
-| POST | `/api/v1/pesanan/{id}/retur` | `SELESAI -> DIRETUR`. **Model detail retur (`PesananRetur`, alokasi refund) adalah scope `ALT-PES-018`/`ALT-DEF-014`, BELUM DIKERJAKAN pada batch ini** - endpoint didokumentasikan di sini hanya untuk melengkapi kontrak transisi status. | `pesanan.retur.kelola` |
+| POST | `/api/v1/pesanan/{id}/batalkan` | Batalkan pesanan SEBELUM produksi - menulis 1 baris `PesananPembatalan` (`alasan` wajib, `jenisPembatalan = SEBELUM_PRODUKSI` default). TIDAK BISA dipanggil dari status `SIAP`/`DISAJIKAN`/`SELESAI`/`DIBATALKAN` (409 jika dicoba) - untuk `SIAP`/`DISAJIKAN`/`SEDANG_DISIAPKAN` (setelah bahan mulai terpakai), gunakan `POST .../void-setelah-produksi` di bawah. Butuh approval supervisor jika status saat ini `DIKONFIRMASI`/`DIKIRIM_KE_DAPUR` (lihat `PERMISSION-MATRIX.md`). | `pesanan.batalkan` |
+| POST | `/api/v1/pesanan/{id}/void-setelah-produksi` | **ADR-036 sub-problem C.** `SEDANG_DISIAPKAN`/`SIAP`/`DISAJIKAN -> DIBATALKAN` khusus untuk kasus bahan SUDAH terpakai (tidak bisa "di-un-consume"). Body wajib `{ "alasan": string, "permintaanPersetujuanId": string }` (approval supervisor WAJIB - `PermintaanPersetujuan` dengan `jenisAksi = "PEMBATALAN_SETELAH_PRODUKSI"`). Menulis 1 baris `PesananPembatalan` (`jenisPembatalan = SETELAH_PRODUKSI`, `disetujuiOlehId` WAJIB - ditegakkan CHECK constraint database `pesanan_pembatalan_approval_wajib_setelah_produksi`, BUKAN sekadar validasi aplikasi) + 1 atau lebih `CatatanWaste`/`MutasiStok(jenis=WASTE)` per bahan yang sudah terpakai pada item pesanan ini - **BUKAN mutasi pembalik/reversal** (lihat `STATE-MACHINES.md` bagian 1a). Menulis `DomainOutboxEvent` dengan `eventType = "order.voided_after_production"` (baru, lihat `docs/database/15-platform-infra.md`). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`) - retry tanpa idempotensi berisiko mencatat waste ganda. | `pesanan.void-setelah-produksi` |
+| POST | `/api/v1/pesanan/{id}/retur` | **ADR-036 sub-problem B.** Ajukan retur (`PesananRetur` baru, status `DRAF`) untuk pesanan `SELESAI` (atau status lain sesuai kebijakan retur tenant). Body wajib `{ "alasan": string, "baris": [{ "itemPesananId": string, "kuantitasDikembalikan": number, "nilaiPengembalian": number, "alasanBaris"?: string }, ...] }` - mendukung retur SEBAGIAN (subset item/kuantitas). Guard: `SUM(kuantitasDikembalikan)` per `itemPesananId` di seluruh `PesananRetur` berstatus SELAIN `DITOLAK`/`DIBATALKAN` tidak boleh melebihi `ItemPesanan.kuantitas`. | `pesanan.retur.kelola` |
+| POST | `/api/v1/pesanan/{id}/retur/{returId}/setujui` | `DIAJUKAN -> DISETUJUI` (approval supervisor, `BatasIzin.wajibPersetujuanManajer`). | `pesanan.retur.kelola` |
+| POST | `/api/v1/pesanan/{id}/retur/{returId}/tolak` | `DIAJUKAN -> DITOLAK`, body wajib `{ "alasan": string }`. | `pesanan.retur.kelola` |
+| POST | `/api/v1/pesanan/{id}/retur/{returId}/proses` | `DISETUJUI -> DIPROSES -> SELESAI` - eksekusi refund (`PembayaranRefund`) dan/atau mutasi stok (`RETUR_PENJUALAN` bila barang layak jual kembali, `WASTE` bila tidak - keputusan kondisi barang per baris, lihat `STATE-MACHINES.md` bagian 11). Begitu mencapai `SELESAI`, `Pesanan.statusRetur` direkomputasi OTOMATIS oleh trigger DB `recompute_status_retur_pesanan` - endpoint TIDAK perlu (dan TIDAK BOLEH) meng-UPDATE `Pesanan.statusRetur` secara manual. | `pesanan.retur.kelola` |
+| GET | `/api/v1/pesanan/{id}/retur` | Daftar `PesananRetur` (+ `PesananReturBaris`) milik pesanan ini, dan `Pesanan.statusRetur` saat ini. | `pesanan.riwayat.lihat` |
 | GET | `/api/v1/pesanan/{id}/riwayat-status` | Riwayat transisi status (`PesananRiwayatStatus`, enum `StatusPesanan` di kedua kolom, `ALT-DEF-005`/`ALT-PES-009`). | `pesanan.riwayat.lihat` |
 | GET | `/api/v1/pesanan/{id}/perubahan` | Riwayat perubahan pasca-konfirmasi (`PesananPerubahan`, `ALT-PES-010`). | `pesanan.riwayat.lihat` |
 | POST | `/api/v1/pesanan/{id}/promo` | Terapkan kode promo/kupon ke pesanan - menulis `PromoPemakaian` + `PromoPemakaianBaris` + `PromoSnapshot` (ALT-DEF-009/ADR-026). Boleh dipanggil berkali-kali untuk promo berbeda (stacking) selama lolos resolusi konflik `stackingPolicy`/`conflictGroup`/`prioritas` (lihat ADR-026 Keputusan 1). **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "penerapan promo" di master spec). | `promo.terapkan` (KASIR/PELAYAN, lihat `PERMISSION-MATRIX.md`) - ALT-DEF-034: kode ini menggantikan `promo.kelola` yang dipakai sebelum ADR-026 untuk aksi ini, `promo.kelola` sekarang HANYA untuk CRUD definisi promo (ALT-PRM-001). |
@@ -674,6 +679,50 @@ scope batch ALT-DEF-006 - batch ini hanya memodelkan skema + kontrak.
 | POST | `/api/v1/pembayaran/{id}/refund` | Ajukan/proses refund (butuh approval supervisor, `ALT-KSR-007`). Status menjadi `DIKEMBALIKAN_SEBAGIAN`/`DIKEMBALIKAN` sesuai agregat. **Wajib header `Idempotency-Key`** (`ALT-PLT-018`, kasus "refund" di master spec). | `pembayaran.refund` |
 | POST | `/api/v1/pembayaran/{id}/struk/cetak` | Cetak struk pembayaran (`ALT-KSR-008`). | `pembayaran.struk.cetak` |
 | POST | `/api/v1/pembayaran/{id}/struk/cetak-ulang` | Cetak ulang struk (increment `jumlahCetakUlang`, `ALT-KSR-009`). | `pembayaran.struk.cetak-ulang` |
+
+**ADR-036 sub-problem A - kontrak transaksi atomik untuk `/konfirmasi` dan
+`/konfirmasi-qris-manual` (KEDUANYA mengakhiri di `MENUNGGU`/
+`MENUNGGU_KONFIRMASI -> DIBAYAR`).** Belum ada kode handler nyata untuk
+kedua endpoint ini di repo ini (`ALT-DEF-047`, defect legitimately-deferred
+- lihat `DEFECT-LEDGER.md`). Kontrak WAJIB berikut mengikat implementasi
+manapun yang menulisnya:
+
+1. Validasi pembayaran (tunai diterima/saldo cukup, atau notifikasi
+   merchant QRIS terverifikasi kasir).
+2. `UPDATE pembayaran SET status = 'DIBAYAR', ...` (`WHERE version =
+   expectedVersion` - optimistic lock ADR-035).
+3. Hitung ulang `SUM(AlokasiPembayaran.jumlah)` atas seluruh `Pembayaran`
+   `DIBAYAR` untuk tiap `Pesanan` yang dialokasikan pembayaran ini.
+4. **Bila** total alokasi terhadap sebuah `Pesanan` sudah `>= totalAkhir`:
+   `UPDATE pesanan SET status = <DIKONFIRMASI atau SELESAI, sesuai status
+   Pesanan saat ini>` (`WHERE version = expectedVersion`).
+5. `INSERT domain_outbox_event (eventType = 'payment.confirmed', ...)`.
+6. `COMMIT`.
+
+Langkah 2-5 **WAJIB satu transaksi Postgres yang sama** - lihat
+`STATE-MACHINES.md` bagian 2 untuk penjelasan lengkap dan diagram.
+**Pengaman DB-level yang SUDAH terpasang** (independen dari ada/tidaknya
+kode handler di atas, migrasi
+`20260726130000_pengaman_atomik_pembayaran_pesanan`): `CONSTRAINT TRIGGER
+... DEFERRABLE INITIALLY DEFERRED` pada `pembayaran`/`alokasi_pembayaran`/
+`pesanan` menolak COMMIT apa pun yang akan menghasilkan `Pembayaran
+DIBAYAR` dengan `Pesanan` terkait (lewat `AlokasiPembayaran`) berstatus
+`DRAF`/`DIKIRIM`/`MENUNGGU_PERSETUJUAN`/`DITOLAK`/`MENUNGGU_PEMBAYARAN`/
+`DIBATALKAN`. Pesan error Postgres menyebut eksplisit
+`"Inkonsistensi pembayaran-pesanan"` beserta id kedua baris yang bentrok.
+
+**Query rekonsiliasi ad-hoc** (audit manual independen dari trigger,
+seharusnya SELALU mengembalikan nol baris):
+
+```sql
+SELECT pb.id AS pembayaran_id, p.id AS pesanan_id, p.status AS status_pesanan
+FROM alokasi_pembayaran ap
+JOIN pembayaran pb ON pb.id = ap."pembayaranId" AND pb."tenantId" = ap."tenantId"
+JOIN pesanan p ON p.id = ap."pesananId" AND p."tenantId" = ap."tenantId"
+WHERE pb.status = 'DIBAYAR'
+  AND p.status IN ('DRAF','DIKIRIM','MENUNGGU_PERSETUJUAN','DITOLAK',
+                    'MENUNGGU_PEMBAYARAN','DIBATALKAN');
+```
 
 ### 11.1 Invariant jumlah (`ALT-DEF-014`, ADR-019 Keputusan 4)
 

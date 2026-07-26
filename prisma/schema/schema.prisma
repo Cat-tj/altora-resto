@@ -5214,16 +5214,25 @@ enum StatusOutboxEvent {
 // publisher-nya dibangun:
 //   order.submitted, order.accepted, order.rejected, order.updated,
 //   order.cancelled, order.sent_to_kitchen, kitchen.started, kitchen.ready,
-//   order.served, order.completed, order.returned,
+//   order.served, order.completed,
 //   payment.awaiting_confirmation, payment.confirmed,
 //   stock.low, stock.adjusted, shift.opened, shift.closed,
-//   attendance.created
+//   attendance.created,
+//   order.voided_after_production,
+//   retur.diajukan, retur.disetujui, retur.ditolak, retur.diproses, retur.selesai
 //
 // ALT-DEF-005 (correction-loop lanjutan): `order.completed` (DISAJIKAN ->
-// SELESAI) dan `order.returned` (SELESAI -> DIRETUR) ditambahkan ke daftar
-// ini melengkapi state machine Pesanan 14-status penuh - lihat
-// docs/arsitektur/STATE-MACHINES.md bagian "Pesanan" untuk pemetaan lengkap
-// transisi -> auditEvent.
+// SELESAI) ditambahkan ke daftar ini melengkapi state machine Pesanan
+// 14-status penuh - lihat docs/arsitektur/STATE-MACHINES.md bagian
+// "Pesanan" untuk pemetaan lengkap transisi -> auditEvent.
+//
+// ADR-036 (batch retur/void-setelah-produksi): `order.returned` (nilai lama,
+// dipetakan dari transisi StatusPesanan SELESAI -> DIRETUR) DIHAPUS dari
+// daftar - `DIRETUR` tidak lagi ada sebagai transisi StatusPesanan (lihat
+// enum StatusPesanan di atas). Digantikan `retur.*` (siklus hidup penuh
+// PesananRetur) dan `order.voided_after_production` (void setelah
+// produksi, PesananPembatalan.jenisPembatalan = SETELAH_PRODUKSI) - lihat
+// docs/arsitektur/STATE-MACHINES.md bagian 1a dan 11.
 model DomainOutboxEvent {
   id            String            @id
   tenantId      String

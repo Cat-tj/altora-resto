@@ -3369,3 +3369,118 @@ adalah ENTITAS "versi resep" domain kuliner, konsep yang sama sekali
 berbeda dari version counter concurrency control, bukan sesuatu yang perlu
 disupersede). Tidak ada defect baru yang perlu dicatat untuk item ini -
 dilaporkan jujur sebagai "tidak ditemukan", bukan diam-diam dilewati.
+
+## Pass deep-loop 2026-07-26: retur, void-setelah-produksi, pengaman atomik pembayaran-pesanan (ADR-036)
+
+### 1. Migrasi diterapkan (dua migrasi baru, berurutan setelah 8 migrasi sebelumnya)
+
+```
+$ npx prisma migrate resolve --applied 20260726120000_retur_dan_void_setelah_produksi
+Migration 20260726120000_retur_dan_void_setelah_produksi marked as applied.
+$ npx prisma migrate resolve --applied 20260726130000_pengaman_atomik_pembayaran_pesanan
+Migration 20260726130000_pengaman_atomik_pembayaran_pesanan marked as applied.
+```
+
+Kedua migrasi ditulis dari `prisma migrate diff --from-schema-datasource --to-schema-datamodel --script`
+(untuk perubahan model B/C/D) DITAMBAH SQL manual (CHECK constraint,
+trigger recompute cache, deferred constraint trigger sub-problem A) yang
+diterapkan lewat `psql` sebelum `prisma migrate resolve --applied` -
+mengikuti workaround established yang sama seperti migrasi
+`harden_manual_invariants`/`redesign_ledger_reversal_membalik_pattern`.
+
+### 2. Verifikasi objek database nyata
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -t -c "select count(*) from information_schema.tables where table_schema='public';"
+   136
+$ psql -U icat -h localhost -d altora_resto_dev -t -c "select count(*) from pg_trigger where tgname like 'trg_%bump_version%';"
+    13
+$ psql -U icat -h localhost -d altora_resto_dev -t -c "select count(*) from pg_trigger where tgname like 'trg_cek_konsistensi%';"
+     3
+$ psql -U icat -h localhost -d altora_resto_dev -t -c "select count(*) from pg_constraint where conname in ('tiket_dapur_alasan_wajib_saat_dibatalkan','pesanan_pembatalan_approval_wajib_setelah_produksi');"
+     2
+```
+
+136 tabel (134 + `pesanan_retur` + `pesanan_retur_baris`, naik dari 134
+sebelum batch ini). 13 trigger bump-version TETAP (tidak berkurang - lihat
+catatan filter di `optimistic-locking-version-invariants.test.ts`). 3
+trigger `cek_konsistensi_pembayaran_pesanan` (pada `pembayaran`,
+`alokasi_pembayaran`, `pesanan`). 2 CHECK constraint baru.
+
+### 3. Bukti perilaku trigger deferred sub-problem A (manual, sebelum test otomatis ditulis)
+
+Urutan SALAH (Pembayaran DIBAYAR, Pesanan tidak pernah diubah) di dalam
+satu transaksi manual `psql`:
+
+```
+UPDATE pembayaran SET status='DIBAYAR' WHERE id='pb1';
+COMMIT;
+ERROR:  Inkonsistensi pembayaran-pesanan: pembayaran pb1 berstatus DIBAYAR
+tapi pesanan p1 (dialokasikan lewat alokasi_pembayaran) berstatus DRAF, ...
+```
+
+Urutan BENAR (Pembayaran DIBAYAR lalu Pesanan diubah ke status konsisten,
+transaksi yang sama):
+
+```
+UPDATE pembayaran SET status='DIBAYAR' WHERE id='pb2';
+UPDATE pesanan SET status='SELESAI' WHERE id='p2';
+COMMIT;
+COMMIT
+```
+
+### 4. Seluruh test (31 file: 9 database-integration + 22 architecture) - SETELAH redeploy fresh-database dari nol
+
+```
+$ psql -U icat -h localhost -d postgres -c "DROP DATABASE IF EXISTS altora_resto_dev;"
+$ psql -U icat -h localhost -d postgres -c "CREATE DATABASE altora_resto_dev;"
+$ npx prisma migrate deploy --schema prisma/schema/schema.prisma
+10 migrations found in prisma/migrations
+Applying migration `20260725154045_baseline_correction_loop`
+... (8 migrasi lama) ...
+Applying migration `20260726120000_retur_dan_void_setelah_produksi`
+Applying migration `20260726130000_pengaman_atomik_pembayaran_pesanan`
+All migrations have been successfully applied.
+```
+
+Hasil test setelah redeploy dari database kosong:
+
+```
+architecture (assertion-based, node --experimental-strip-types): 13 / 13 passed
+architecture (prisma-client-shape, tsc --noEmit --strict): 9 / 9 clean
+  (1 gap PRE-EXISTING tidak terkait batch ini dicatat di prisma-client-shape-persediaan.test.ts -
+   MutasiStok.alasan wajib pada fixture contoh, sudah ada sebelum batch ini, tidak disentuh batch ini)
+database-integration (npx tsx via node_modules/.bin/tsx): 9 / 9 passed
+```
+
+Naik dari 29 file (7 database-integration + 22 architecture) pada baseline
+sebelum batch ini menjadi 31 file (9 database-integration + 22
+architecture) - 2 file test baru
+(`atomik-pembayaran-pesanan-invariants.test.ts`,
+`retur-void-produksi-invariants.test.ts`), 0 file dihapus. Seluruhnya
+lulus tanpa pengecualian.
+
+**Regresi ditemukan dan diperbaiki saat menjalankan ulang seluruh suite**
+(bukan hanya test baru, mengikuti pelajaran proses batch sebelumnya):
+`optimistic-locking-version-invariants.test.ts` mengasumsikan setiap tabel
+punya PERSIS SATU trigger non-internal - asumsi itu pecah begitu tabel
+`pesanan` mendapat trigger KEDUA (`trg_cek_konsistensi_pada_pesanan`, tidak
+terkait ADR-035 sama sekali). Diperbaiki dengan memfilter query ke fungsi
+`optimistic_lock_bump_version` secara eksplisit, bukan mengandalkan
+"jumlah trigger = 1" sebagai proxy.
+
+### 5. Fixture lama diperiksa proaktif (lesson dari batch sebelumnya)
+
+Seluruh 9 file `database-integration` dan 22 file `architecture` diperiksa
+untuk fixture/assertion yang menyentuh tabel `pesanan`/`tiket_dapur`/
+`pesanan_pembatalan` (tabel yang bentuknya berubah batch ini). Ditemukan
+DUA yang perlu diperbaiki: `pesanan-state-machine-snapshot-constraints.test.ts`
+(assertion `DIRETUR` di `StatusPesanan` dan literal whitespace yang
+bergeser akibat `prisma format` menambah field baru di model `Pesanan`) dan
+`optimistic-locking-version-invariants.test.ts` (lihat poin 4 di atas).
+Tidak ada fixture raw-SQL lain yang gagal - tabel `pesanan`/`tiket_dapur`/
+`pesanan_pembatalan` HANYA mendapat kolom baru NULLABLE atau
+`DEFAULT`-bernilai (`statusRetur DEFAULT 'TANPA_RETUR'`, `jenisPembatalan
+DEFAULT 'SEBELUM_PRODUKSI'`, `disetujuiOlehId`/`alasanPembatalan`
+nullable), jadi fixture lama yang tidak menyebutkan kolom-kolom ini tetap
+valid tanpa perubahan.

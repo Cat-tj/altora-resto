@@ -134,6 +134,13 @@ pekerjaan fitur domain terkait di batch berikutnya, BUKAN batch ini):
 | `kitchen.started` | Dapur |
 | `kitchen.ready` | Dapur |
 | `order.served` | Pesanan |
+| `order.completed` | Pesanan (DISAJIKAN -> SELESAI, ALT-DEF-005 correction-loop) |
+| `order.voided_after_production` | Pesanan (ADR-036 sub-problem C - void setelah produksi, BEDA dari `order.cancelled` biasa) |
+| `retur.diajukan` | Pesanan/PesananRetur (ADR-036) |
+| `retur.disetujui` | Pesanan/PesananRetur (ADR-036) |
+| `retur.ditolak` | Pesanan/PesananRetur (ADR-036) |
+| `retur.diproses` | Pesanan/PesananRetur (ADR-036) |
+| `retur.selesai` | Pesanan/PesananRetur (ADR-036 - memicu recompute `Pesanan.statusRetur`) |
 | `payment.awaiting_confirmation` | Pembayaran |
 | `payment.confirmed` | Pembayaran |
 | `stock.low` | Persediaan |

@@ -3520,3 +3520,170 @@ transaksi/`SELECT FOR UPDATE` app-level TERPISAH untuk domain masing-masing
 Keputusan 1 di atas untuk `StokBahan`). Tidak ada kode handler command yang
 ditulis pada batch ini - murni schema, trigger, dan dokumentasi kontrak
 untuk diikuti batch implementasi mendatang.
+
+## ADR-036: Retur (sub-model penuh), void setelah produksi, dan pengaman atomicity pembayaran-pesanan
+
+**Konteks.** Tiga sub-problem terkait dari instruksi deep-loop section 9,
+seluruhnya menyentuh domain Pesanan/Pembayaran/Dapur:
+
+- **(A) Atomic payment->order transition.** Risiko desain: guard yang naif
+  memeriksa `if (Pembayaran.status === DIBAYAR) { jalankan side-effect
+  konfirmasi Pesanan }` sebagai DUA langkah terpisah yang bisa terinterupsi
+  di antaranya (crash setelah Pembayaran DIBAYAR tapi sebelum Pesanan
+  dikonfirmasi = state permanen yang inkonsisten).
+- **(B) Retur** - `StatusPesanan.DIRETUR` lama hanya flag order-level,
+  tidak bisa merepresentasikan retur SEBAGIAN ("3 dari 5 item").
+- **(C) Void setelah produksi** - pembatalan pra-produksi (lepas reservasi
+  stok) BERBEDA secara fundamental dari pembatalan pasca-produksi (bahan
+  SUDAH terpakai, tidak bisa di-"un-consume", side-effect harus WASTE).
+- **(D) Tiket batal tidak boleh memblokir order-ready** - status
+  `DIBATALKAN` pada `TiketDapur` harus dikecualikan dari guard "seluruh
+  tiket AKTIF sudah SIAP/DISAJIKAN", TAPI hanya setelah alasan dipenuhi.
+
+**Keputusan 1 (sub-problem A) - Pengaman DB-level: constraint trigger
+DEFERRED, bukan CHECK constraint biasa, bukan trigger BEFORE/AFTER biasa.**
+"Satu transaksi atomik" itu sendiri adalah tanggung jawab
+APPLICATION/service-layer murni - TIDAK ADA kode handler sama sekali di
+repo ini (dicatat sebagai defect terpisah yang MEMANG deferred,
+`ALT-DEF-047` di `DEFECT-LEDGER.md`, karena secara fundamental tidak bisa
+ditutup sampai kode itu ada). Yang BISA dikerjakan skema: jaring pengaman
+yang membuat state akhir yang TER-COMMIT tidak akan pernah inkonsisten,
+meski proses menuju ke sana (urutan statement dalam satu transaksi) bebas
+diatur aplikasi. Dipertimbangkan tiga opsi:
+  1. **CHECK constraint polos** - TIDAK BISA, CHECK constraint Postgres
+     hanya bisa memeriksa kolom-kolom dalam SATU baris/SATU tabel, tidak
+     bisa melakukan JOIN lintas `pembayaran`/`alokasi_pembayaran`/`pesanan`.
+  2. **Trigger BEFORE/AFTER biasa (non-deferred)** - DITOLAK. Trigger biasa
+     fire IMMEDIATELY setelah statement `UPDATE pembayaran ... SET status =
+     'DIBAYAR'` itu sendiri - pada titik itu, statement berikutnya dalam
+     transaksi yang sama (`UPDATE pesanan ...`) BELUM berjalan, sehingga
+     trigger non-deferred akan SELALU salah menolak urutan yang justru
+     diminta kontrak (ubah Pembayaran dulu, baru Pesanan).
+  3. **`CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED`** - DIPILIH.
+     Evaluasi ditunda sampai TEPAT SEBELUM COMMIT, sehingga aplikasi bebas
+     mengubah Pembayaran dan Pesanan dalam urutan apa pun ASALKAN pada titik
+     commit keduanya konsisten. Bila TIDAK konsisten pada titik itu, COMMIT
+     GAGAL KERAS dengan pesan eksplisit - bukan silent inconsistency, dan
+     bukan false-positive-reject terhadap urutan yang benar.
+Dipasang di TIGA tabel (`pembayaran`, `alokasi_pembayaran`, `pesanan`)
+sekaligus lewat SATU fungsi bersama `cek_konsistensi_pembayaran_pesanan` -
+supaya inkonsistensi tertangkap dari sisi mana pun perubahan terjadi
+(Pembayaran diubah DIBAYAR, alokasi baru ditambah ke pembayaran yang sudah
+DIBAYAR, atau Pesanan diregresikan setelah pembayarannya DIBAYAR). Migrasi
+`20260726130000_pengaman_atomik_pembayaran_pesanan`. Query rekonsiliasi
+ad-hoc didokumentasikan di komentar migrasi dan di `API-CONTRACT.md` untuk
+audit manual independen dari trigger.
+
+**Keputusan 2 (sub-problem B) - Model penuh `PesananRetur`/
+`PesananReturBaris`, `DIRETUR` DIHAPUS dari `StatusPesanan`.** Audit grep
+sebelum menghapus (`grep -rln "DIRETUR"` di seluruh repo) menemukan 12 file
+menyebut `DIRETUR`: `schema.prisma` (enum `StatusPesanan` DAN
+`StatusItemPesanan` - keduanya, TIDAK sama), `izin.seed.ts`,
+`docs/database/07-pesanan.md`, `docs/database/10-promo.md` (BERBEDA -
+merujuk `PromoPemakaian.status`, enum `StatusPemakaianPromo` yang TERPISAH
+sama sekali, tidak tersentuh), `STATE-MACHINES.md`, `API-CONTRACT.md`,
+`DECISION-LOG.md` (baris ADR-017 lama), `DEFECT-LEDGER.md`,
+`INVARIAN-BELUM-DITEGAKKAN.md`, `MASTER-CHECKLIST.md`,
+`PERMISSION-MATRIX.md`, dan DUA test arsitektur
+(`pesanan-state-machine-snapshot-constraints.test.ts` -
+`StatusPesanan`/`StatusItemPesanan` keduanya; `promo-stacking-reward-constraints.test.ts`
+- `StatusPemakaianPromo`, TIDAK terkait). Kesimpulan: `StatusPesanan.DIRETUR`
+memang melakukan DOUBLE DUTY - sekaligus "status lifecycle order terminal"
+DAN "penanda sudah diretur", padahal keduanya ORTOGONAL (pesanan bisa
+`SELESAI` di level lifecycle SEKALIGUS `RETUR_SEBAGIAN` di level retur).
+Nilai dihapus dari `StatusPesanan` (order-level, granularitas ORDER),
+`StatusItemPesanan.DIRETUR` (granularitas ITEM) SENGAJA TIDAK dihapus -
+tetap sah menandai satu baris item langsung diretur tanpa lewat
+`PesananRetur` untuk kasus trivial, meski pola yang direkomendasikan tetap
+lewat `PesananReturBaris` untuk audit penuh. Model baru:
+  - `PesananRetur` (id, tenantId, outletId, pesananId, `nomorRetur` unik
+    per tenant+outlet - pola sama seperti `Pesanan.nomorPesanan`, `status`
+    `StatusRetur`, `alasan` wajib, `diajukanOlehId`/`disetujuiOlehId` via
+    composite-FK `KeanggotaanOutlet` - retur adalah operasi fisik outlet
+    tertentu, pola sama dengan `Pesanan.dibuatOleh`/`CatatanWaste.dicatatOleh`,
+    `totalNilaiRetur` `BigInt` mengikuti konvensi migrasi uang ADR-034,
+    `version` optimistic-locking ADR-035 - PesananRetur adalah aggregate
+    root TAMBAHAN, race approve/reject ganda oleh dua supervisor sekaligus
+    adalah skenario konkret yang sama seperti `PermintaanPersetujuan`).
+  - `PesananReturBaris` (per `ItemPesanan`, `kuantitasDikembalikan Int`
+    mengikuti tipe `ItemPesanan.kuantitas`, `nilaiPengembalian BigInt`) -
+    inilah yang membuat retur SEBAGIAN representable.
+  - `Pesanan.statusRetur` (`StatusRingkasanRetur`: `TANPA_RETUR`/
+    `RETUR_SEBAGIAN`/`RETUR_PENUH`) - cache/ringkasan TURUNAN, sumber
+    kebenaran tetap baris `PesananRetur`/`PesananReturBaris` SELESAI,
+    mengikuti pola ledger-vs-cache yang sama dengan `StokBahan`/saldo
+    (ADR-023/ADR-027). **Diputuskan: trigger DB (`recompute_status_retur_pesanan`)
+    yang merawat cache ini, BUKAN app-computed murni** - konsisten dengan
+    preseden proyek ini (cache stok/saldo juga dirawat trigger, bukan
+    dipercaya ke aplikasi) dan lebih murah untuk diuji (satu jalur
+    kebenaran, bukan N jalur command berbeda yang semuanya harus ingat
+    merekomputasi). **Efek samping yang HARUS diketahui pemanggil** (dicatat
+    juga di `INVARIAN-BELUM-DITEGAKKAN.md`): `UPDATE pesanan` yang dilakukan
+    trigger ini SENDIRI memicu `trg_pesanan_bump_version` (ADR-035) -
+    `Pesanan.version` bertambah sebagai efek samping penyelesaian retur,
+    BUKAN hanya karena command yang secara eksplisit mengubah Pesanan.
+    Command layer yang membawa `expectedVersion` dari SEBELUM retur selesai
+    akan gagal optimistic-lock check pada percobaan berikutnya - PERILAKU
+    YANG BENAR (mencegah command lama menimpa efek retur), tapi mengejutkan
+    bila tidak didokumentasikan eksplisit seperti ini.
+
+**Keputusan 3 (sub-problem C) - `PesananPembatalan` DIPERLUAS (bukan model
+baru).** Model `PesananPembatalan` yang ada (ALT-DEF-005/ADR-017) sudah
+punya `alasan` wajib dan aktor (`dibatalkanOlehId`) - cukup diperluas
+dengan `jenisPembatalan` (`JenisPembatalan`: `SEBELUM_PRODUKSI` default,
+`SETELAH_PRODUKSI`) dan `disetujuiOlehId` (nullable). Menambah model baru
+terpisah akan menduplikasi kolom yang sudah ada (`alasan`, aktor, `pesananId
+@unique`) tanpa alasan struktural - `jenisPembatalan` sudah cukup
+membedakan guard/side-effect yang berbeda per nilai. **Approval supervisor**
+memakai `PermintaanPersetujuan` yang SUDAH ADA (`jenisAksi` string bebas -
+`"PEMBATALAN_SETELAH_PRODUKSI"`, `referensiJenis` = `"PesananPembatalan"`,
+`referensiId` = id baris) - TIDAK perlu FK baru, pola generik ini sudah
+dipakai domain lain. **CHECK constraint DB nyata**
+(`pesanan_pembatalan_approval_wajib_setelah_produksi`): `disetujuiOlehId`
+WAJIB diisi HANYA ketika `jenisPembatalan = SETELAH_PRODUKSI` - kondisional
+per-nilai-enum yang tidak bisa dinyatakan Prisma DSL, ditegakkan CHECK
+manual mengikuti pola yang sama seperti Keputusan 4 di bawah. **Side-effect
+WASTE, bukan reversal**: ingredients yang sudah dimasak TIDAK BISA
+"di-un-consume" - flow yang benar memakai `CatatanWaste`/
+`MutasiStok(jenis=WASTE)` yang SUDAH ADA (model persediaan, batch
+sebelumnya) dengan `referensiJenis = WASTE`, `referensiId = CatatanWaste.id`
+- TIDAK perlu perubahan skema persediaan, hanya dokumentasi flow di
+`STATE-MACHINES.md`. Event outbox baru `order.voided_after_production`
+ditambahkan ke katalog `eventType` di `docs/database/15-platform-infra.md`
+(satu baris tabel, BUKAN redesain outbox penuh - itu batch lain).
+
+**Keputusan 4 (sub-problem D) - CHECK constraint DB untuk alasan wajib
+tiket dibatalkan, predikat "order ready" didokumentasikan sebagai kontrak
+query, bukan constraint.** `TiketDapur.alasanPembatalan` (nullable di
+Prisma) + CHECK Postgres `tiket_dapur_alasan_wajib_saat_dibatalkan`:
+`status <> 'DIBATALKAN' OR "alasanPembatalan" IS NOT NULL` - kondisional
+per-nilai-enum yang sama tidak bisa dinyatakan Prisma DSL non-null biasa,
+DB-enforced nyata (diuji `retur-void-produksi-invariants.test.ts`, insert
+DAN update ke DIBATALKAN tanpa alasan sama-sama ditolak). Predikat "order
+ready" itu sendiri (`NOT EXISTS` tiket aktif yang bukan
+SIAP/DISAJIKAN/DIBATALKAN) TIDAK bisa jadi CHECK constraint (butuh join
+antar baris tiket dalam satu pesanan) - didokumentasikan sebagai kontrak
+query eksplisit di `STATE-MACHINES.md` bagian "Dapur", bukan ditegakkan
+struktural, karena belum ada kode handler yang menghitungnya.
+
+**Migrasi.** `20260726120000_retur_dan_void_setelah_produksi` (enum baru
+StatusRetur/StatusRingkasanRetur/JenisPembatalan, kolom
+Pesanan.statusRetur/PesananPembatalan.jenisPembatalan+disetujuiOlehId/
+TiketDapur.alasanPembatalan, tabel pesanan_retur/pesanan_retur_baris, DUA
+CHECK constraint, trigger recompute_status_retur_pesanan) dan
+`20260726130000_pengaman_atomik_pembayaran_pesanan` (trigger deferred
+konsistensi pembayaran-pesanan) - keduanya diterapkan ke `altora_resto_dev`
+via `psql` + `prisma migrate resolve --applied` (tidak ada baris `pesanan`
+berstatus `DIRETUR` dikonfirmasi 0 sebelum migrasi ditulis, aman tanpa
+backfill). Fresh-database redeploy (`DROP DATABASE`+`CREATE DATABASE`+
+`prisma migrate deploy` dari nol) dan hasil test lengkap ada di
+`RELEASE-EVIDENCE.md`.
+
+**Status.** Defect baru `ALT-DEF-047` dicatat di `DEFECT-LEDGER.md` untuk
+bagian "satu transaksi atomik" sub-problem A yang FUNDAMENTAL belum bisa
+ditutup sampai kode handler/service-layer nyata ada - dicatat eksplisit
+sebagai deferred yang SAH, bukan gap eksekusi batch ini.
+`INVARIAN-BELUM-DITEGAKKAN.md` diperbarui: baris kategori A baru untuk
+kedua CHECK constraint dan trigger deferred (DB-enforced, teruji), baris
+kategori C baru untuk "predikat order-ready" dan "satu transaksi atomik
+penuh" (app-level, didokumentasikan sebagai kontrak).

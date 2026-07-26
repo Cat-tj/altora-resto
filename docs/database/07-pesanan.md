@@ -16,6 +16,9 @@ erDiagram
     PESANAN ||--o| PESANAN_PEMBATALAN : bisa_dibatalkan
     PESANAN ||--o{ PEMBAYARAN : dilunasi_oleh
     PESANAN ||--o| PROMO_PEMAKAIAN : memakai
+    PESANAN ||--o{ PESANAN_RETUR : bisa_diretur
+    PESANAN_RETUR ||--o{ PESANAN_RETUR_BARIS : berisi
+    ITEM_PESANAN ||--o{ PESANAN_RETUR_BARIS : diretur_sebagian
 
     PESANAN {
         string id PK
@@ -25,7 +28,8 @@ erDiagram
         string pelangganId FK "nullable"
         string kanal "KASIR|PELAYAN|QR_PELANGGAN"
         string nomorPesanan UK "unik per outlet per hari"
-        string status "DRAF|DIKIRIM|MENUNGGU_PERSETUJUAN|DITERIMA|DITOLAK|MENUNGGU_PEMBAYARAN|DIKONFIRMASI|DIKIRIM_KE_DAPUR|SEDANG_DISIAPKAN|SIAP|DISAJIKAN|SELESAI|DIBATALKAN|DIRETUR"
+        string status "DRAF|DIKIRIM|MENUNGGU_PERSETUJUAN|DITERIMA|DITOLAK|MENUNGGU_PEMBAYARAN|DIKONFIRMASI|DIKIRIM_KE_DAPUR|SEDANG_DISIAPKAN|SIAP|DISAJIKAN|SELESAI|DIBATALKAN - DIRETUR DIHAPUS ADR-036, lihat statusRetur"
+        string statusRetur "ADR-036, cache turunan: TANPA_RETUR|RETUR_SEBAGIAN|RETUR_PENUH, ORTOGONAL thd status di atas"
         bigint subtotal "rupiah"
         bigint totalDiskon "rupiah"
         bigint totalPajak "rupiah"
@@ -34,6 +38,32 @@ erDiagram
         string dibuatOlehId FK
         datetime createdAt
         datetime dibatalkanPada "nullable"
+        int version "ADR-035, optimistic locking"
+    }
+    PESANAN_RETUR {
+        string id PK
+        string tenantId FK
+        string outletId FK
+        string pesananId FK
+        string nomorRetur UK "unik per tenant+outlet"
+        string status "DRAF|DIAJUKAN|DISETUJUI|DITOLAK|DIPROSES|SELESAI|DIBATALKAN, ADR-036"
+        string alasan
+        string diajukanOlehId FK "KeanggotaanOutlet"
+        string disetujuiOlehId FK "nullable, KeanggotaanOutlet"
+        bigint totalNilaiRetur "rupiah"
+        datetime createdAt
+        datetime updatedAt
+        int version "ADR-035, optimistic locking - aggregate root tambahan"
+    }
+    PESANAN_RETUR_BARIS {
+        string id PK
+        string tenantId FK
+        string pesananReturId FK
+        string itemPesananId FK
+        int kuantitasDikembalikan
+        bigint nilaiPengembalian "rupiah"
+        string alasanBaris "nullable"
+        datetime createdAt
     }
     ITEM_PESANAN {
         string id PK
@@ -96,7 +126,9 @@ erDiagram
         string tenantId FK
         string pesananId FK UK "satu baris per pesanan - DIBATALKAN status terminal, ADR-017 Keputusan 4"
         string alasan
+        string jenisPembatalan "SEBELUM_PRODUKSI (default)|SETELAH_PRODUKSI, ADR-036"
         string dibatalkanOlehId FK
+        string disetujuiOlehId FK "nullable - WAJIB jika jenisPembatalan=SETELAH_PRODUKSI (CHECK constraint DB, ADR-036)"
         datetime createdAt
     }
 ```
@@ -108,8 +140,9 @@ Catatan:
 - `ItemPesanan.resepVersiId` adalah forward-reference (scalar `String?` polos, TANPA relasi FK) ke model `VersiResep` yang BELUM ADA di skema ini (scope `ALT-DEF-007`/`ALT-DEF-008`, batch resep-versioning berikutnya) - lihat ADR-017 Keputusan 8.
 - **Perubahan pesanan pasca-konfirmasi** dicatat sebagai baris baru APPEND-ONLY di `PESANAN_PERUBAHAN` (`ALT-PES-010`) - tidak pernah menimpa `ItemPesanan` secara diam-diam.
 - **Penolakan** (`PESANAN_PENOLAKAN`) hanya relevan untuk pesanan kanal `QR_PELANGGAN` yang melalui `MENUNGGU_PERSETUJUAN -> DITOLAK`; pesanan yang ditolak BOLEH diedit dan dikirim ulang (`DITOLAK -> DIKIRIM`, lihat ADR-017 Keputusan 2) tanpa membuat baris `Pesanan` baru.
-- **Pembatalan seluruh pesanan** (`PESANAN_PEMBATALAN`) berbeda dari pembatalan SATU item (`ItemPesanan.status = DIBATALKAN`, yang tidak membatalkan pesanan induk) - lihat ADR-017 Keputusan 4. `DIBATALKAN` adalah status terminal: tidak dapat dicapai lagi dari `SIAP`/`DISAJIKAN`/`SELESAI` (lihat tabel transisi di `STATE-MACHINES.md`).
-- `DIRETUR` hanya dapat dicapai dari `SELESAI`; model detail retur (`PesananRetur`, alokasi refund proporsional) adalah scope `ALT-PES-018`/`ALT-DEF-014`, batch domain kasir berikutnya - batch ini hanya menambahkan nilai enum dan baris transisi.
+- **Pembatalan seluruh pesanan** (`PESANAN_PEMBATALAN`) berbeda dari pembatalan SATU item (`ItemPesanan.status = DIBATALKAN`, yang tidak membatalkan pesanan induk) - lihat ADR-017 Keputusan 4. `DIBATALKAN` adalah status terminal: tidak dapat dicapai lagi dari `SIAP`/`DISAJIKAN`/`SELESAI` **KECUALI** lewat jalur `VOID_SETELAH_PRODUKSI` (`jenisPembatalan = SETELAH_PRODUKSI`, ADR-036 - lihat `STATE-MACHINES.md` bagian 1a).
+- **ADR-036 (retur, menggantikan `DIRETUR`):** `StatusPesanan.DIRETUR` DIHAPUS - retur kini model penuh `PESANAN_RETUR`/`PESANAN_RETUR_BARIS` (state machine `StatusRetur` sendiri, lihat `STATE-MACHINES.md` bagian 11) yang mendukung retur SEBAGIAN per item, BUKAN flag order-level tunggal. `Pesanan.statusRetur` adalah cache turunan (ORTOGONAL terhadap `status`) yang direkomputasi OTOMATIS oleh trigger database `recompute_status_retur_pesanan` setiap `PesananRetur` mencapai `SELESAI` - efek samping: `Pesanan.version` ikut bertambah (lihat ADR-036 Keputusan 2, ADR-035). `PesananRetur.nomorRetur` unik per (`tenantId`, `outletId`); aktor (`diajukanOlehId`/`disetujuiOlehId`) memakai composite-FK `KeanggotaanOutlet` mengikuti pola `Pesanan.dibuatOleh` (ADR-033).
+- **ADR-036 (void setelah produksi):** `PesananPembatalan.jenisPembatalan` (`SEBELUM_PRODUKSI` default/`SETELAH_PRODUKSI`) membedakan pembatalan yang hanya melepas reservasi stok dari pembatalan setelah bahan SUDAH terpakai (side-effect harus `CatatanWaste`/`MutasiStok(WASTE)`, BUKAN reversal). `disetujuiOlehId` (composite-FK `KeanggotaanTenant`, sama seperti `dibatalkanOlehId`) WAJIB diisi ketika `jenisPembatalan = SETELAH_PRODUKSI` - ditegakkan CHECK constraint database `pesanan_pembatalan_approval_wajib_setelah_produksi`, bukan hanya validasi aplikasi.
 - `packages/dapur` membaca domain ini HANYA lewat read-contract `kontrak-dapur` (subset field: id pesanan, item, catatan, status dapur, meja/nomor) - lihat `08-dapur.md`. Kardinalitas `TiketDapur.pesananId` (masih 1:1) TIDAK diubah pada batch ini - itu scope `ALT-DEF-006`.
 - **ALT-DEF-010 (composite tenant/outlet-scoped FK, lihat ADR-013 di `docs/engineering/DECISION-LOG.md`):** `PESANAN.outletId` kini composite-FK `(tenantId, outletId) -> Outlet(tenantId, id)`; `PESANAN.mejaId` (nullable) kini composite-FK level-outlet `(outletId, mejaId) -> Meja(outletId, id)` - menjamin meja yang dirujuk berada di outlet yang sama dengan pesanan; `PESANAN.pelangganId` (nullable) kini composite-FK `(tenantId, pelangganId) -> Pelanggan(tenantId, id)`.
 - **ADR-033:** `Pesanan.dibuatOlehId` dipindah ke composite-FK OUTLET-LEVEL `(tenantId, outletId, dibuatOlehId) -> KeanggotaanOutlet(tenantId, outletId, id)`; `PesananPerubahan.diubahOlehId`/`PesananPenolakan.ditolakOlehId`/`PesananPembatalan.dibatalkanOlehId` dipindah ke composite-FK TENANT-LEVEL `(tenantId, xxxOlehId) -> KeanggotaanTenant(tenantId, id)` - seluruhnya sebelumnya FK langsung ke `Pengguna`. **Gap diketahui, TIDAK diubah batch ini:** `PesananRiwayatStatus.diubahOlehId` TIDAK punya kolom `tenantId` sendiri sehingga tidak bisa memakai composite-FK tanpa menambah kolom tersebut - dicatat eksplisit di `docs/engineering/INVARIAN-BELUM-DITEGAKKAN.md`, bukan dilewati diam-diam. Lihat `docs/engineering/DECISION-LOG.md` ADR-033.

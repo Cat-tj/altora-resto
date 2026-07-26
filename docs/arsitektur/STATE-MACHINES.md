@@ -2,6 +2,14 @@
 
 Delapan state machine inti yang menjadi tulang punggung alur operasional restoran.
 
+**ADR-036 (batch retur/void-setelah-produksi):** `StatusPesanan.DIRETUR`
+DIHAPUS - digantikan model penuh `PesananRetur`/`PesananReturBaris` (bagian
+11, baru) + cache `Pesanan.statusRetur` yang ORTOGONAL terhadap
+`StatusPesanan`. `PesananPembatalan` diperluas dengan `jenisPembatalan`
+(`SEBELUM_PRODUKSI`/`SETELAH_PRODUKSI`) - lihat bagian 1 baris
+`SIAP`/`DISAJIKAN -> DIBATALKAN` (baru) dan bagian 1a "Void Setelah
+Produksi". Bagian 5 (Dapur) mendapat predikat "order ready" eksplisit.
+
 **ALT-DEF-008 (correction-loop lanjutan):** bagian 7 (Opname) ditulis ulang
 penuh - diagram lama 4-status (`DIRENCANAKAN`/`BERLANGSUNG`/`SELESAI`/
 `DIBATALKAN`) tidak punya tempat sama sekali untuk `ALT-PSD-017` (approval
@@ -37,27 +45,34 @@ stateDiagram-v2
     SEDANG_DISIAPKAN --> SIAP: seluruh item selesai dimasak
     SIAP --> DISAJIKAN: pelayan mengantar ke meja
     DISAJIKAN --> SELESAI: pembayaran lunas & tamu selesai
-    SELESAI --> DIRETUR: retur diajukan (dlm batas waktu kebijakan)
     DRAF --> DIBATALKAN
     DIKIRIM --> DIBATALKAN
     MENUNGGU_PERSETUJUAN --> DIBATALKAN
     DITERIMA --> DIBATALKAN
     MENUNGGU_PEMBAYARAN --> DIBATALKAN
-    DIKONFIRMASI --> DIBATALKAN: approval supervisor
-    DIKIRIM_KE_DAPUR --> DIBATALKAN: approval supervisor (bahan mulai terpakai)
-    SEDANG_DISIAPKAN --> DIBATALKAN: approval supervisor (bahan sudah terpakai)
+    DIKONFIRMASI --> DIBATALKAN: approval supervisor (SEBELUM_PRODUKSI)
+    DIKIRIM_KE_DAPUR --> DIBATALKAN: approval supervisor (SEBELUM_PRODUKSI - reservasi dilepas)
+    SEDANG_DISIAPKAN --> DIBATALKAN: approval supervisor (SETELAH_PRODUKSI - waste, lihat 1a)
+    SIAP --> DIBATALKAN: approval supervisor (SETELAH_PRODUKSI - void, lihat 1a)
+    DISAJIKAN --> DIBATALKAN: approval supervisor (SETELAH_PRODUKSI - void, lihat 1a)
     SELESAI --> [*]
     DIBATALKAN --> [*]
-    DIRETUR --> [*]
 ```
 
 Catatan penting yang TIDAK terlihat langsung di diagram (lihat tabel penuh
 di bawah untuk detail per baris):
 
-- `DIBATALKAN` **TIDAK** dapat dicapai dari `SIAP`/`DISAJIKAN`/`SELESAI` -
-  begitu makanan siap/disajikan, jalur yang benar adalah `DIRETUR` (setelah
-  `SELESAI`) atau pembatalan level-item (`ItemPesanan.status = DIBATALKAN`).
-- `DIRETUR` **HANYA** dapat dicapai dari `SELESAI`.
+- `DIBATALKAN` dari `SIAP`/`DISAJIKAN` **HANYA** diizinkan lewat jalur
+  `VOID_SETELAH_PRODUKSI` khusus (bagian 1a, ADR-036) - BUKAN pembatalan
+  biasa (`jenisPembatalan = SEBELUM_PRODUKSI`), yang tetap TIDAK bisa
+  dicapai dari `SIAP`/`DISAJIKAN`/`SELESAI`. `SELESAI` sendiri TETAP tidak
+  punya jalur pembatalan sama sekali (order sudah lunas & tuntas).
+- **Retur** (mengembalikan sebagian/seluruh item pesanan yang `SELESAI`)
+  BUKAN LAGI transisi `StatusPesanan` (nilai `DIRETUR` DIHAPUS, ADR-036) -
+  kini model terpisah `PesananRetur` (bagian 11) yang membaca/mengubah
+  `Pesanan.statusRetur`, ORTOGONAL terhadap `status` di sini. Pesanan bisa
+  `SELESAI` (lifecycle) SEKALIGUS `RETUR_SEBAGIAN`/`RETUR_PENUH`
+  (ringkasan retur) secara bersamaan.
 - Cabang `DIKIRIM -> MENUNGGU_PERSETUJUAN` vs `DIKIRIM -> DITERIMA` dan
   `DITERIMA -> MENUNGGU_PEMBAYARAN` vs `DITERIMA -> DIKONFIRMASI` adalah
   transisi **otomatis oleh sistem** berdasarkan guard (`kanal`/kebijakan
@@ -77,20 +92,21 @@ di bawah untuk detail per baris):
 | DITERIMA | DIKONFIRMASI | sistem (otomatis) | Kebijakan tenant `wajibBayarDimuka = false`, ATAU `kanal IN (KASIR, PELAYAN)` (bayar di akhir) | Tidak ada efek samping tambahan | `order.updated` | `pesanan_tanpa_prepaid_langsung_konfirmasi` |
 | MENUNGGU_PEMBAYARAN | DIKONFIRMASI | KASIR (verifikasi pembayaran, izin `pembayaran.buat`) | Total `AlokasiPembayaran.jumlah` untuk pesanan ini atas `Pembayaran` berstatus `DIBAYAR` sudah `>= totalAkhir` (atau sesuai kebijakan DP tenant) - ALT-DEF-014/ADR-019 | Update baris `Pembayaran` terkait menjadi `DIBAYAR` (lihat state machine Pembayaran, bagian 2) | `payment.confirmed` | `pesanan_prepaid_lunas_dikonfirmasi` |
 | MENUNGGU_PEMBAYARAN | DIBATALKAN | sistem (batas waktu bayar terlampaui) atau pelanggan (batalkan sendiri) | Batas waktu pembayaran (kebijakan tenant) terlampaui TANPA pembayaran masuk | Tulis 1 baris `PesananPembatalan` (`alasan = "Batas waktu pembayaran dimuka terlampaui"` atau alasan pelanggan) | `order.cancelled` | `pesanan_prepaid_timeout_dibatalkan` |
-| DIKONFIRMASI | DIKIRIM_KE_DAPUR | sistem/KASIR/PELAYAN (izin `pesanan.status.ubah`) | Seluruh `ItemPesanan` berstatus valid untuk dikirim (bukan `DIBATALKAN`/`DIRETUR`) | Buat **satu atau lebih** `TiketDapur` - satu per stasiun tujuan per gelombang, sesuai `AturanRoutingDapur` (kardinalitas 1:N sejak ALT-DEF-006/ADR-018, lihat bagian 5); reservasi/pengurangan stok bahan sesuai resep bila berlaku | `order.sent_to_kitchen` | `pesanan_dikonfirmasi_kirim_ke_dapur` |
+| DIKONFIRMASI | DIKIRIM_KE_DAPUR | sistem/KASIR/PELAYAN (izin `pesanan.status.ubah`) | Seluruh `ItemPesanan` berstatus valid untuk dikirim (bukan `DIBATALKAN`) | Buat **satu atau lebih** `TiketDapur` - satu per stasiun tujuan per gelombang, sesuai `AturanRoutingDapur` (kardinalitas 1:N sejak ALT-DEF-006/ADR-018, lihat bagian 5); reservasi/pengurangan stok bahan sesuai resep bila berlaku | `order.sent_to_kitchen` | `pesanan_dikonfirmasi_kirim_ke_dapur` |
 | DIKIRIM_KE_DAPUR | SEDANG_DISIAPKAN | DAPUR (event internal `TiketDapur.status = SEDANG_DISIAPKAN`, lihat bagian 5) | Minimal 1 `TiketDapur` milik pesanan ini masuk `SEDANG_DISIAPKAN` (minimal 1 baris `TiketDapurBaris` mulai dimasak) | Tidak ada efek samping tambahan di level Pesanan (state dapur granular ada di `TiketDapur`) | `kitchen.started` | `pesanan_dapur_mulai_diproses` |
 | SEDANG_DISIAPKAN | SIAP | DAPUR (event internal `TiketDapur.status = SIAP`) | **SELURUH** `TiketDapur` milik pesanan ini berstatus `SIAP`/`DISAJIKAN` (masing-masing tiket sendiri baru `SIAP` bila seluruh `TiketDapurBaris`-nya `SIAP`) - agregat lintas-stasiun sejak ALT-DEF-006/ADR-018 | Notifikasi in-app ke pelayan (`Notification.tipe = PESANAN_SIAP`) | `kitchen.ready` | `pesanan_seluruh_tiket_dapur_siap` |
 | SIAP | DISAJIKAN | PELAYAN (izin `pesanan.status.ubah`) | - | Update `Meja.status` terkait jika relevan (di luar scope perubahan skema batch ini) | `order.served` | `pesanan_disajikan_ke_meja` |
 | DISAJIKAN | SELESAI | KASIR (verifikasi pelunasan, izin `pembayaran.buat`/`pesanan.status.ubah`) | Total `AlokasiPembayaran.jumlah` untuk pesanan ini atas `Pembayaran` berstatus `DIBAYAR` `>= totalAkhir` (agregat lintas-pembayaran sejak ALT-DEF-014/ADR-019 - mendukung pembayaran bertahap) | Tidak ada efek samping tambahan (pelunasan sudah tercatat di `Pembayaran`) | `order.completed` | `pesanan_lunas_selesai` |
-| SELESAI | DIRETUR | KASIR/MANAJER (izin `pesanan.retur.kelola`), butuh approval supervisor | Dalam batas waktu kebijakan retur tenant; model detail `PesananRetur` adalah scope `ALT-PES-018` (batch berikutnya); refund dananya lewat `PembayaranRefund` (bagian 2) | Refund tercatat sebagai baris `PembayaranRefund`; model `PesananRetur` di luar scope batch ini (`ALT-PES-018`) | `order.returned` | `pesanan_retur_setelah_selesai` (batch berikutnya) |
-| DRAF | DIBATALKAN | Pemesan asli / KASIR/PELAYAN (izin `pesanan.batalkan`) | - | Tulis 1 baris `PesananPembatalan` | `order.cancelled` | `pesanan_draf_dibatalkan` |
-| DIKIRIM | DIBATALKAN | KASIR/PELAYAN (izin `pesanan.batalkan`) | - | Tulis 1 baris `PesananPembatalan` | `order.cancelled` | `pesanan_dikirim_dibatalkan` |
-| MENUNGGU_PERSETUJUAN | DIBATALKAN | KASIR/PELAYAN (izin `pesanan.batalkan`) | Dibatalkan sebelum sempat diputuskan terima/tolak | Tulis 1 baris `PesananPembatalan` | `order.cancelled` | `pesanan_menunggu_persetujuan_dibatalkan` |
-| DITERIMA | DIBATALKAN | KASIR/PELAYAN (izin `pesanan.batalkan`) | - | Tulis 1 baris `PesananPembatalan` | `order.cancelled` | `pesanan_diterima_dibatalkan` |
-| MENUNGGU_PEMBAYARAN | DIBATALKAN | KASIR/PELAYAN/pelanggan (izin `pesanan.batalkan` atau self-cancel) | - | Tulis 1 baris `PesananPembatalan` | `order.cancelled` | `pesanan_menunggu_pembayaran_dibatalkan_manual` |
-| DIKONFIRMASI | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, `BatasIzin.wajibPersetujuanManajer`) | Approval supervisor wajib (mis. stok habis ditemukan setelah konfirmasi) | Tulis 1 baris `PesananPembatalan` (`dibatalkanOlehId` = supervisor penyetuju) | `order.cancelled` | `pesanan_dikonfirmasi_dibatalkan_approval` |
-| DIKIRIM_KE_DAPUR | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, wajib approval) | Approval supervisor wajib; bahan mungkin sudah mulai terpakai | Tulis 1 baris `PesananPembatalan`; mutasi stok pembalik (`MutasiStok.jenis = RETUR_PENJUALAN`) bila bahan sudah dipakai | `order.cancelled` | `pesanan_kirim_dapur_dibatalkan_approval_dgn_pembalik_stok` |
-| SEDANG_DISIAPKAN | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, wajib approval) | Approval supervisor wajib; bahan sudah terpakai | Tulis 1 baris `PesananPembatalan`; mutasi stok pembalik sebagian sesuai progres masak | `order.cancelled` | `pesanan_sedang_disiapkan_dibatalkan_approval_dgn_pembalik_stok` |
+| DRAF | DIBATALKAN | Pemesan asli / KASIR/PELAYAN (izin `pesanan.batalkan`) | - | Tulis 1 baris `PesananPembatalan` (`jenisPembatalan = SEBELUM_PRODUKSI`, default) | `order.cancelled` | `pesanan_draf_dibatalkan` |
+| DIKIRIM | DIBATALKAN | KASIR/PELAYAN (izin `pesanan.batalkan`) | - | Tulis 1 baris `PesananPembatalan` (`SEBELUM_PRODUKSI`) | `order.cancelled` | `pesanan_dikirim_dibatalkan` |
+| MENUNGGU_PERSETUJUAN | DIBATALKAN | KASIR/PELAYAN (izin `pesanan.batalkan`) | Dibatalkan sebelum sempat diputuskan terima/tolak | Tulis 1 baris `PesananPembatalan` (`SEBELUM_PRODUKSI`) | `order.cancelled` | `pesanan_menunggu_persetujuan_dibatalkan` |
+| DITERIMA | DIBATALKAN | KASIR/PELAYAN (izin `pesanan.batalkan`) | - | Tulis 1 baris `PesananPembatalan` (`SEBELUM_PRODUKSI`) | `order.cancelled` | `pesanan_diterima_dibatalkan` |
+| MENUNGGU_PEMBAYARAN | DIBATALKAN | KASIR/PELAYAN/pelanggan (izin `pesanan.batalkan` atau self-cancel) | - | Tulis 1 baris `PesananPembatalan` (`SEBELUM_PRODUKSI`) | `order.cancelled` | `pesanan_menunggu_pembayaran_dibatalkan_manual` |
+| DIKONFIRMASI | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, `BatasIzin.wajibPersetujuanManajer`) | Approval supervisor wajib (mis. stok habis ditemukan setelah konfirmasi); TiketDapur BELUM dibuat, bahan belum dipakai | Tulis 1 baris `PesananPembatalan` (`SEBELUM_PRODUKSI`, `dibatalkanOlehId` = pemohon, `disetujuiOlehId` opsional untuk jenis ini); lepas `ReservasiStok` bila ada | `order.cancelled` | `pesanan_dikonfirmasi_dibatalkan_approval` |
+| DIKIRIM_KE_DAPUR | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.batalkan`, wajib approval) | Approval supervisor wajib; ADR-036 Keputusan 3: guard TAMBAHAN memeriksa `TiketDapurBaris.statusMasak` SELURUH baris masih `MENUNGGU` (bahan BELUM benar-benar mulai dimasak walau tiket sudah terkirim) | Tulis 1 baris `PesananPembatalan` (`SEBELUM_PRODUKSI`); lepas `ReservasiStok` - TIDAK ADA mutasi stok (belum ada yang dikonsumsi) | `order.cancelled` | `pesanan_kirim_dapur_dibatalkan_approval_sebelum_produksi` |
+| SEDANG_DISIAPKAN | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.void-setelah-produksi`, wajib approval `PermintaanPersetujuan`) | ADR-036 Keputusan 3: **VOID_SETELAH_PRODUKSI** - minimal 1 `TiketDapurBaris` sudah `DIMASAK`/`SIAP` (bahan SUDAH terpakai, tidak bisa di-un-consume) | Tulis 1 baris `PesananPembatalan` (`jenisPembatalan = SETELAH_PRODUKSI`, `disetujuiOlehId` WAJIB - CHECK DB); `CatatanWaste`/`MutasiStok(jenis=WASTE)` untuk bahan yang sudah terpakai, **BUKAN** mutasi pembalik/reversal | `order.voided_after_production` | `pesanan_void_setelah_produksi_waste_bukan_reversal` |
+| SIAP | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.void-setelah-produksi`, wajib approval) | ADR-036 Keputusan 3: VOID_SETELAH_PRODUKSI - seluruh item sudah matang, TAPI belum diantar (mis. pelanggan walk-out sebelum diantar) | Tulis 1 baris `PesananPembatalan` (`SETELAH_PRODUKSI`, `disetujuiOlehId` wajib); `CatatanWaste`/`MutasiStok(WASTE)` untuk seluruh bahan pesanan ini | `order.voided_after_production` | `pesanan_void_setelah_produksi_dari_siap` |
+| DISAJIKAN | DIBATALKAN | SUPERVISOR ke atas (izin `pesanan.void-setelah-produksi`, wajib approval) | ADR-036 Keputusan 3: VOID_SETELAH_PRODUKSI - sudah diantar ke meja tapi TIDAK dikonsumsi/dibayar (mis. kesalahan pesanan ditemukan setelah diantar, pelanggan menolak) | Tulis 1 baris `PesananPembatalan` (`SETELAH_PRODUKSI`, `disetujuiOlehId` wajib); `CatatanWaste`/`MutasiStok(WASTE)` | `order.voided_after_production` | `pesanan_void_setelah_produksi_dari_disajikan` |
 
 Catatan tambahan (bukan transisi status, tetapi bagian dari alur `ALT-PES-010`):
 
@@ -100,6 +116,53 @@ Catatan tambahan (bukan transisi status, tetapi bagian dari alur `ALT-PES-010`):
   mengubah `StatusPesanan` secara langsung, dan tidak menimpa `ItemPesanan`
   secara diam-diam. `auditEvent`: `order.updated`. `testRequired`:
   `pesanan_perubahan_tercatat_sebagai_baris_baru`.
+
+## 1a. Void Setelah Produksi (ADR-036)
+
+**Kapan dipakai vs pembatalan biasa.** Pembatalan biasa
+(`jenisPembatalan = SEBELUM_PRODUKSI`, default) berlaku selama bahan BELUM
+benar-benar dikonsumsi - reservasi (`ReservasiStok`) cukup dilepas, tidak
+ada bahan yang hilang. **Void setelah produksi**
+(`jenisPembatalan = SETELAH_PRODUKSI`) berlaku begitu bahan SUDAH
+dikonsumsi (tiket dapur sudah mulai dimasak, `TiketDapurBaris.statusMasak
+IN (DIMASAK, SIAP)`) - bahan itu **tidak bisa "di-un-consume"**, jadi
+side-effect yang benar adalah mencatatnya sebagai **kerugian (waste)**,
+bukan mengembalikannya ke stok.
+
+**Guard kelayakan (siapa boleh masuk jalur ini):**
+
+- Pesanan HARUS berstatus `SEDANG_DISIAPKAN`, `SIAP`, atau `DISAJIKAN` -
+  jalur normal `DIKIRIM_KE_DAPUR -> DIBATALKAN` (SEBELUM_PRODUKSI) TETAP
+  dipakai selama seluruh `TiketDapurBaris` masih `MENUNGGU`.
+- `PesananPembatalan.disetujuiOlehId` **WAJIB diisi** - ditegakkan CHECK
+  constraint database `pesanan_pembatalan_approval_wajib_setelah_produksi`
+  (migrasi `20260726120000_retur_dan_void_setelah_produksi`), BUKAN hanya
+  konvensi aplikasi. Approval dicatat lewat `PermintaanPersetujuan`
+  (`jenisAksi = "PEMBATALAN_SETELAH_PRODUKSI"`, `referensiJenis =
+  "PesananPembatalan"`, `referensiId` = id baris `PesananPembatalan`) -
+  izin `pesanan.void-setelah-produksi`.
+- `alasan` wajib diisi (kolom sudah `NOT NULL` sejak ADR-017, berlaku untuk
+  kedua `jenisPembatalan`).
+
+**Side-effect (BERBEDA dari pembatalan biasa):**
+
+1. TIDAK ADA pelepasan `ReservasiStok` yang "mengembalikan" bahan - bahan
+   itu memang sudah keluar dari stok secara nyata (`MutasiStok` KELUAR
+   sudah tercatat saat tiket mulai dimasak, lihat bagian 5).
+2. Tulis 1 baris `CatatanWaste` per bahan yang terpakai pada item yang
+   dibatalkan, DENGAN `MutasiStok` terkait berjenis `WASTE` (`jenis =
+   WASTE`, `referensiJenis = WASTE`, `referensiId = CatatanWaste.id`) -
+   model yang SUDAH ADA sejak batch persediaan, TIDAK ada perubahan skema
+   persediaan pada batch ini.
+3. Tulis 1 baris `DomainOutboxEvent` dengan `eventType =
+   "order.voided_after_production"` (baru, ditambahkan ke katalog di
+   `docs/database/15-platform-infra.md`).
+
+**Bukan scope batch ini:** menghitung OTOMATIS bahan mana saja yang sudah
+terpakai dari `VersiResep`/`KomponenResep` pada titik pembatalan (mis. item
+yang baru separuh dimasak) - itu logika kalkulasi level-aplikasi yang butuh
+kode handler nyata, belum ada di repo ini. Skema hanya menyediakan model
+(`CatatanWaste`/`MutasiStok`) untuk MENYIMPAN hasil kalkulasi itu.
 
 ## 2. Pembayaran
 
@@ -115,6 +178,41 @@ ke satu `Pesanan`. Ia adalah satu PERISTIWA penerimaan uang; keterkaitannya ke
 pesanan selalu lewat baris `AlokasiPembayaran`. State machine di bawah berlaku
 **per-Pembayaran**, bukan per-pesanan - status pelunasan sebuah `Pesanan` adalah
 turunan AGREGAT dari alokasi seluruh pembayaran yang berstatus `DIBAYAR`.
+
+**ADR-036 sub-problem A - kontrak transaksi atomik `MENUNGGU_KONFIRMASI ->
+DIBAYAR` (dan `MENUNGGU -> DIBAYAR`).** Kode handler command untuk transisi
+ini BELUM ADA di repo ini (`ALT-DEF-047`, tetap dicatat sebagai defect
+legitimately-deferred) - tapi kontraknya SUDAH ditentukan di sini untuk
+diikuti persis begitu handler ditulis:
+
+```
+BEGIN;
+  -- 1. Validasi pembayaran (kasir memverifikasi notifikasi merchant/uang fisik).
+  -- 2. UPDATE pembayaran SET status = 'DIBAYAR', "dikonfirmasiOlehId" = ?, "dikonfirmasiPada" = now()
+  --    WHERE id = ? AND "tenantId" = ? AND version = <expectedVersion>;
+  -- 3. Hitung ulang total alokasi vs totalAkhir tiap Pesanan yang dialokasikan
+  --    pembayaran ini (SUM(AlokasiPembayaran.jumlah) atas Pembayaran DIBAYAR).
+  -- 4. BILA memenuhi guard (total alokasi >= totalAkhir): UPDATE pesanan SET
+  --    status = <status konsisten - DIKONFIRMASI/SELESAI sesuai baris pesanan
+  --    yang relevan> WHERE id = ? AND "tenantId" = ? AND version = <expectedVersion>;
+  -- 5. INSERT domain_outbox_event (eventType = 'payment.confirmed', ...).
+COMMIT;
+```
+
+Seluruh langkah 2-5 WAJIB satu transaksi Postgres yang sama. **Pengaman
+DB-level yang SUDAH terpasang** (migrasi
+`20260726130000_pengaman_atomik_pembayaran_pesanan`, terlepas dari ada/
+tidaknya kode handler di atas): `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY
+DEFERRED` (`cek_konsistensi_pembayaran_pesanan`) pada `pembayaran`,
+`alokasi_pembayaran`, dan `pesanan` - dievaluasi TEPAT SEBELUM COMMIT.
+Bila pada titik commit ada `Pembayaran DIBAYAR` yang alokasinya menunjuk
+`Pesanan` berstatus `DRAF`/`DIKIRIM`/`MENUNGGU_PERSETUJUAN`/`DITOLAK`/
+`MENUNGGU_PEMBAYARAN`/`DIBATALKAN`, **COMMIT DITOLAK KERAS** - lihat
+`docs/api/API-CONTRACT.md` untuk detail pesan error dan query rekonsiliasi.
+Ini TIDAK menggantikan kebutuhan membungkus langkah 2-5 dalam satu
+transaksi (kalau handler tidak melakukan itu, transaksi terpisah masing-
+masing tetap akan gagal saat mencoba commit Pembayaran DIBAYAR sendirian) -
+tapi mencegah state permanen yang inkonsisten benar-benar tersimpan.
 
 ```mermaid
 stateDiagram-v2
@@ -311,6 +409,40 @@ Catatan tambahan (bukan transisi status `TiketDapur`):
   adalah enum terpisah dan lebih halus - ia yang menjadi **guard** bagi
   transisi tiket `SEDANG_DISIAPKAN`/`SELESAI_SEBAGIAN`/`SIAP` di atas.
   Alasan tidak digabung: ADR-018 Keputusan 6.
+- **ADR-036 (sub-problem D): `TiketDapur.alasanPembatalan` WAJIB saat
+  `DIBATALKAN`** - ditegakkan CHECK constraint database
+  `tiket_dapur_alasan_wajib_saat_dibatalkan` (`status <> 'DIBATALKAN' OR
+  "alasanPembatalan" IS NOT NULL`), bukan hanya konvensi aplikasi. Ini
+  prasyarat supaya predikat "order ready" di bawah bisa mengecualikan tiket
+  `DIBATALKAN` dari guard TANPA kehilangan jejak kenapa tiket itu
+  dikecualikan.
+
+**Predikat "order ready" (kontrak query, BUKAN constraint database - butuh
+JOIN antar baris, belum ada handler yang menghitungnya):**
+
+> Sebuah `Pesanan` dianggap **siap** (seluruh makanan sudah matang) ketika
+> **tidak ada** `TiketDapur` miliknya yang AKTIF (bukan `DIBATALKAN`) dan
+> BELUM `SIAP`/`DISAJIKAN`. Tiket `DIBATALKAN` DIKELUARKAN dari guard -
+> tiket yang batal bukan penghalang kesiapan pesanan - tapi HANYA setelah
+> `alasanPembatalan` terisi (dijamin CHECK di atas), sehingga
+> pengecualian ini selalu punya jejak audit, bukan celah diam-diam.
+
+SQL logisnya:
+
+```sql
+SELECT NOT EXISTS (
+  SELECT 1 FROM tiket_dapur
+  WHERE "pesananId" = :pesananId
+    AND status NOT IN ('SIAP', 'DISAJIKAN', 'DIBATALKAN')
+) AS order_ready;
+```
+
+Bila tabel `tiket_dapur` kosong untuk pesanan ini (belum ada tiket dibuat
+sama sekali, mis. pesanan belum `DIKIRIM_KE_DAPUR`), `order_ready` bernilai
+`true` secara vakum - pemanggil WAJIB menggabungkan predikat ini dengan
+guard `Pesanan.status >= DIKIRIM_KE_DAPUR` di level aplikasi supaya tidak
+salah menganggap pesanan yang belum pernah dikirim ke dapur sebagai
+"siap".
 
 ## 6. Pembelian (Purchase Order)
 
@@ -546,6 +678,61 @@ Catatan penting yang TIDAK terlihat langsung di diagram:
 | DISETUJUI_REKAN | DISETUJUI_MANAJER | MANAJER/SUPERVISOR (izin `karyawan.tukar-shift.kelola`) | - | Set `disetujuiOlehId`, `status = DISETUJUI_MANAJER`; `JadwalKerja.karyawanId` (baris asal) ditukar ke `karyawanPenggantiId` - baris `JadwalKerja` TIDAK dihapus/diduplikasi, hanya kepemilikannya berpindah dengan jejak `PermintaanTukarShift` sebagai bukti audit | `attendance.shift_swap_approved` | `tukar_shift_disetujui_manajer_pindah_kepemilikan_jadwal` |
 | DISETUJUI_REKAN | DITOLAK | MANAJER/SUPERVISOR (izin `karyawan.tukar-shift.kelola`) | - | Set `disetujuiOlehId` (penolak), `status = DITOLAK`; `JadwalKerja` TIDAK berubah | `attendance.shift_swap_rejected` | `tukar_shift_ditolak_manajer_setelah_rekan_setuju` |
 | DISETUJUI_REKAN | DIBATALKAN | Karyawan pemohon atau pengganti | - | Set status; `JadwalKerja` TIDAK berubah | `attendance.shift_swap_cancelled` | `tukar_shift_dibatalkan_setelah_rekan_setuju` |
+
+## 11. Retur (PesananRetur, ADR-036)
+
+**Konteks.** Menggantikan makna lama `StatusPesanan.DIRETUR` (dihapus) -
+lihat bagian 1 dan ADR-036 di `docs/engineering/DECISION-LOG.md`. Model
+`PesananRetur` (header) + `PesananReturBaris` (per item) merepresentasikan
+retur SEBAGIAN atau PENUH; `Pesanan.statusRetur` adalah cache turunan yang
+direkomputasi OTOMATIS oleh trigger DB `recompute_status_retur_pesanan`
+setiap `PesananRetur` mencapai `SELESAI`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAF: staf mulai menyusun retur (pilih baris item)
+    DRAF --> DIAJUKAN: diajukan resmi
+    DIAJUKAN --> DISETUJUI: supervisor menyetujui
+    DIAJUKAN --> DITOLAK: supervisor menolak (alasan wajib)
+    DIAJUKAN --> DIBATALKAN: dibatalkan sebelum diputuskan
+    DISETUJUI --> DIPROSES: mulai eksekusi (refund/waste/reversal)
+    DIPROSES --> SELESAI: refund & mutasi stok selesai dieksekusi
+    DITOLAK --> [*]
+    DIBATALKAN --> [*]
+    SELESAI --> [*]
+```
+
+### Tabel transisi lengkap
+
+| statusAsal | statusTujuan | aktorDiizinkan | guard | sideEffect | auditEvent | testRequired |
+|---|---|---|---|---|---|---|
+| (baru) | DRAF | KASIR/MANAJER (izin `pesanan.retur.kelola`) | `Pesanan.status = SELESAI` (atau status lain yang diizinkan kebijakan retur tenant); dalam batas waktu kebijakan retur | Buat `PesananRetur` + baris `PesananReturBaris` per item yang mau diretur (`kuantitasDikembalikan <= sisa kuantitas item yang belum diretur di baris SELESAI lain`) | `retur.diajukan` (draf, belum notifikasi) | `retur_draf_dibuat_per_item` |
+| DRAF | DIAJUKAN | KASIR/MANAJER (pemohon) | `alasan` terisi; minimal 1 `PesananReturBaris` | Notifikasi ke supervisor untuk approval | `retur.diajukan` | `retur_diajukan_notifikasi_supervisor` |
+| DIAJUKAN | DISETUJUI | SUPERVISOR ke atas (izin `pesanan.retur.kelola`, `BatasIzin.wajibPersetujuanManajer`) | - | Set `disetujuiOlehId` | `retur.disetujui` | `retur_disetujui_supervisor` |
+| DIAJUKAN | DITOLAK | SUPERVISOR ke atas | `catatan`/alasan penolakan wajib | Set `disetujuiOlehId` (penolak) | `retur.ditolak` | `retur_ditolak_supervisor` |
+| DIAJUKAN | DIBATALKAN | Pemohon asli | Belum diputuskan supervisor | - | `retur.dibatalkan` | `retur_dibatalkan_sebelum_diputuskan` |
+| DISETUJUI | DIPROSES | KASIR/MANAJER (eksekusi) | - | Mulai refund (`PembayaranRefund`, bagian 2) dan/atau mutasi stok - lihat catatan waste/reversal di bawah | `retur.diproses` | `retur_mulai_diproses` |
+| DIPROSES | SELESAI | sistem/KASIR (konfirmasi eksekusi selesai) | Refund (bila ada) sudah tercatat; mutasi stok (bila ada) sudah tercatat | **Trigger DB `recompute_status_retur_pesanan` OTOMATIS** merekomputasi `Pesanan.statusRetur` (`RETUR_SEBAGIAN` bila belum seluruh item pada pesanan diretur penuh, `RETUR_PENUH` bila seluruh `ItemPesanan.kuantitas` sudah tertutup baris retur `SELESAI`) - efek samping: `Pesanan.version` ikut bertambah (lihat ADR-036 Keputusan 2) | `retur.selesai` (+ `order.returned` untuk kompatibilitas katalog event lama) | `retur_selesai_merekomputasi_status_ringkasan_pesanan` |
+
+**Waste vs reversal (guard untuk sideEffect `DISETUJUI -> DIPROSES`):**
+bahan dari item yang diretur DIKEMBALIKAN ke stok (`MutasiStok.jenis =
+RETUR_PENJUALAN`, model yang SUDAH ADA) HANYA bila kondisi barang masih
+layak jual (mis. minuman kemasan utuh yang salah kirim); bila kondisi
+barang TIDAK layak jual lagi (mis. makanan yang sudah disentuh/dibungkus
+dibuka), dicatat sebagai `CatatanWaste`/`MutasiStok(WASTE)` seperti void
+setelah produksi (bagian 1a) - keputusan KONDISI BARANG per baris retur
+adalah judgment call staf saat memproses (`DIPROSES`), didokumentasikan di
+`PesananReturBaris.alasanBaris`, BUKAN dihitung otomatis oleh skema.
+
+**Catatan cache `statusRetur` (lihat juga ADR-036 Keputusan 2):**
+`Pesanan.statusRetur` HANYA berubah pada transisi `PesananRetur` KE
+`SELESAI` - status DRAF/DIAJUKAN/DISETUJUI/DIPROSES TIDAK PERNAH mengubah
+cache ini (dibuktikan `retur-void-produksi-invariants.test.ts`). Invariant
+rekonsiliasi (lihat `INVARIAN-BELUM-DITEGAKKAN.md`): `Pesanan.statusRetur`
+harus SELALU sama dengan hasil recompute manual dari
+`PesananRetur`/`PesananReturBaris` SELESAI - trigger menjamin ini
+otomatis, tapi query rekonsiliasi ad-hoc tetap didokumentasikan sebagai
+jaring pengaman kedua.
 
 ## Catatan umum
 
