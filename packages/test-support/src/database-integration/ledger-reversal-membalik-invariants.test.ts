@@ -28,6 +28,7 @@
 
 import {
   assertTrue,
+  createAktorFixture,
   createBaseFixtures,
   createKeanggotaanFixtures,
   createPelangganTambahan,
@@ -143,6 +144,12 @@ async function insertMutasi(
 async function testMutasiStokAppendOnlyUnconditional(): Promise<void> {
   await withTransaction(async (client) => {
     const fx = await createBaseFixtures(client);
+    // ADR-033: dibuatOlehId sekarang composite-FK OUTLET-LEVEL ke
+    // KeanggotaanOutlet - raw penggunaId tidak lagi valid sebagai nilai
+    // dibuatOlehId, jadi fx.penggunaId di-override dengan id aktor outlet
+    // yang sah untuk tenant/outlet fixture ini.
+    const aktorMutasi = await createAktorFixture(client, fx.tenantId, fx.outletId);
+    fx.penggunaId = aktorMutasi.keanggotaanOutletId;
     const mA = await insertMutasi(client, fx, { jumlah: 10 });
 
     // UPDATE kolom APA PUN ditolak sekarang - bukan hanya kolom tertentu seperti
@@ -184,6 +191,12 @@ async function testMutasiStokAppendOnlyUnconditional(): Promise<void> {
 async function testMutasiStokReversalValid(): Promise<void> {
   await withTransaction(async (client) => {
     const fx = await createBaseFixtures(client);
+    // ADR-033: dibuatOlehId sekarang composite-FK OUTLET-LEVEL ke
+    // KeanggotaanOutlet - raw penggunaId tidak lagi valid sebagai nilai
+    // dibuatOlehId, jadi fx.penggunaId di-override dengan id aktor outlet
+    // yang sah untuk tenant/outlet fixture ini.
+    const aktorMutasi = await createAktorFixture(client, fx.tenantId, fx.outletId);
+    fx.penggunaId = aktorMutasi.keanggotaanOutletId;
     const mA = await insertMutasi(client, fx, { jumlah: 10, alasan: "Pembelian awal" });
     const mB = await insertMutasi(client, fx, { jumlah: -10, alasan: "Koreksi salah catat", membalikMutasiId: mA });
     const cek = await client.query(`SELECT "membalikMutasiId" FROM mutasi_stok WHERE id = $1`, [mB]);
@@ -198,6 +211,12 @@ async function testMutasiStokReversalValid(): Promise<void> {
 async function testMutasiStokReversalRejections(): Promise<void> {
   await withTransaction(async (client) => {
     const fx = await createBaseFixtures(client);
+    // ADR-033: dibuatOlehId sekarang composite-FK OUTLET-LEVEL ke
+    // KeanggotaanOutlet - raw penggunaId tidak lagi valid sebagai nilai
+    // dibuatOlehId, jadi fx.penggunaId di-override dengan id aktor outlet
+    // yang sah untuk tenant/outlet fixture ini.
+    const aktorMutasi = await createAktorFixture(client, fx.tenantId, fx.outletId);
+    fx.penggunaId = aktorMutasi.keanggotaanOutletId;
     const mA = await insertMutasi(client, fx, { jumlah: 10, alasan: "Pembelian awal" });
 
     // (a) Membalik diri sendiri.
@@ -310,6 +329,12 @@ async function testMutasiStokReversalRejections(): Promise<void> {
 async function testMutasiStokKeduaPembalikDanRantai(): Promise<void> {
   await withTransaction(async (client) => {
     const fx = await createBaseFixtures(client);
+    // ADR-033: dibuatOlehId sekarang composite-FK OUTLET-LEVEL ke
+    // KeanggotaanOutlet - raw penggunaId tidak lagi valid sebagai nilai
+    // dibuatOlehId, jadi fx.penggunaId di-override dengan id aktor outlet
+    // yang sah untuk tenant/outlet fixture ini.
+    const aktorMutasi = await createAktorFixture(client, fx.tenantId, fx.outletId);
+    fx.penggunaId = aktorMutasi.keanggotaanOutletId;
     const mA = await insertMutasi(client, fx, { jumlah: 10, alasan: "asal" });
     const mB = await insertMutasi(client, fx, { jumlah: -10, alasan: "pembalik pertama", membalikMutasiId: mA });
 

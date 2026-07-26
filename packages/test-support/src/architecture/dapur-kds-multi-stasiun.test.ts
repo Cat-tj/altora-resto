@@ -388,16 +388,19 @@ export function jalankanSemuaAssertion(): void {
   ]) {
     assertContains(tenantBody, relasi, `Tenant harus punya back-relation "${relasi}" untuk model baru ALT-DEF-006.`);
   }
-  const penggunaBody = getModelBody(schema, "Pengguna");
+  // ADR-033: diubahOlehId/dipicuOlehId sekarang composite-FK tenant-scoped ke
+  // KeanggotaanTenant (bukan lagi FK langsung ke Pengguna) - back-relation
+  // dipindah ke KeanggotaanTenant.
+  const keanggotaanTenantBody = getModelBody(schema, "KeanggotaanTenant");
   assertContains(
-    penggunaBody,
-    "riwayatStatusTiketDapurDiubah RiwayatStatusTiketDapur[]",
-    "Pengguna harus punya back-relation ke RiwayatStatusTiketDapur (aktor yang mengubah status tiket).",
+    keanggotaanTenantBody,
+    'riwayatStatusTiketDapurDiubah   RiwayatStatusTiketDapur[] @relation("RiwayatStatusTiketDapurDiubahOleh")',
+    "KeanggotaanTenant harus punya back-relation ke RiwayatStatusTiketDapur (aktor yang mengubah status tiket, ADR-033).",
   );
   assertContains(
-    penggunaBody,
-    "gelombangDapurDipicu GelombangDapur[]",
-    "Pengguna harus punya back-relation ke GelombangDapur (aktor yang memicu gelombang).",
+    keanggotaanTenantBody,
+    'gelombangDapurDipicu            GelombangDapur[]          @relation("GelombangDapurDipicuOleh")',
+    "KeanggotaanTenant harus punya back-relation ke GelombangDapur (aktor yang memicu gelombang, ADR-033).",
   );
 
   // ===================================================================

@@ -583,11 +583,14 @@ export function jalankanSemuaAssertion(): void {
     "versiResep VersiResep @relation(fields: [tenantId, versiResepId], references: [tenantId, id])",
     "ProsesProduksi.versiResep harus composite-FK mengikuti ADR-013.",
   );
-  // ADR-013 poin 5: relasi ke Pengguna TIDAK PERNAH di-composite-kan ke tenant.
+  // ADR-033: composite-FK OUTLET-LEVEL ke KeanggotaanOutlet - proses produksi
+  // adalah operasi fisik di SATU outlet tertentu (dapur outlet A tidak boleh
+  // mengklaim batch milik outlet B, ALT-DEF-007), jadi aktornya divalidasi
+  // punya akses outlet itu, bukan cuma anggota tenant.
   assertContains(
     prosesBody,
-    'dibuatOleh Pengguna @relation("ProsesProduksiDibuatOleh", fields: [dibuatOlehId], references: [id])',
-    "ProsesProduksi.dibuatOleh harus FK ID tunggal ke Pengguna - relasi ke Pengguna TIDAK PERNAH di-composite-kan ke tenant (Pengguna sengaja lintas-tenant, ADR-013 poin 5).",
+    'dibuatOleh KeanggotaanOutlet   @relation("ProsesProduksiDibuatOleh", fields: [tenantId, outletId, dibuatOlehId], references: [tenantId, outletId, id])',
+    "ProsesProduksi.dibuatOleh harus composite-FK OUTLET-LEVEL ke KeanggotaanOutlet (ADR-033).",
   );
   assertContains(
     getAtributBlok(schema, "ProsesProduksi").join("\n"),
@@ -731,9 +734,9 @@ export function jalankanSemuaAssertion(): void {
     assertContains(outletBody, relasi, `Outlet harus punya back-relation "${relasi}" - produksi bahan setengah jadi berjalan PER OUTLET (ALT-RSP-009).`);
   }
   assertContains(
-    getModelBody(schema, "Pengguna"),
-    'prosesProduksiDibuat ProsesProduksi[] @relation("ProsesProduksiDibuatOleh")',
-    "Pengguna harus punya back-relation prosesProduksiDibuat (aktor pembuat proses produksi).",
+    getModelBody(schema, "KeanggotaanOutlet"),
+    'prosesProduksiDibuat       ProsesProduksi[]         @relation("ProsesProduksiDibuatOleh")',
+    "KeanggotaanOutlet harus punya back-relation prosesProduksiDibuat (aktor pembuat proses produksi, ADR-033).",
   );
   // ItemMenu.resep BUKAN LAGI 1:1 - `Resep?` akan mengunci kembali satu item
   // menu ke satu resep, yaitu defect yang sedang diperbaiki.

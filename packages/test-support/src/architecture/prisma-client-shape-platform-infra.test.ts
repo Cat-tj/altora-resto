@@ -38,7 +38,9 @@ const contohNotification = {
   id: "01J...NOTIFIKASI",
   tenantId: "01J...TENANT",
   outletId: "01J...OUTLET",
-  penggunaId: "01J...PENGGUNA",
+  // ADR-033: penggunaId (FK langsung ke Pengguna) diganti keanggotaanTenantId
+  // (composite-FK ke KeanggotaanTenant).
+  keanggotaanTenantId: "01J...KEANGGOTAAN_TENANT",
   tipe: "PESANAN_SIAP",
   judul: "Pesanan siap disajikan",
   pesan: "Pesanan #123 sudah siap diambil dari dapur.",

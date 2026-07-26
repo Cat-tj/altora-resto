@@ -177,46 +177,52 @@ export function jalankanSemuaAssertion(): void {
   // --- Notification (ALT-PLT-020) ---
   assertContains(schema, "model Notification {", "Model Notification harus ada.");
   const notificationBody = getModelBody(schema, "Notification");
+  // ADR-033: penggunaId (FK langsung ke Pengguna) diganti keanggotaanTenantId
+  // (composite-FK ke KeanggotaanTenant(tenantId, id)) - tetap nullable untuk
+  // broadcast (ADR-016 Keputusan 5). Redesain targeting lebih dalam
+  // (keanggotaanOutletId/peranId) TETAP belum dikerjakan - lihat ADR-033.
   assertContains(
     notificationBody,
-    "penggunaId String?",
-    "Notification.penggunaId harus nullable (broadcast ke role/outlet, ADR-016 Keputusan 5).",
+    "keanggotaanTenantId String?",
+    "Notification.keanggotaanTenantId harus nullable (broadcast ke role/outlet, ADR-016 Keputusan 5).",
   );
   assertContains(
     notificationBody,
-    "tipe       TipeNotifikasi",
+    "tipe                TipeNotifikasi",
     "Notification.tipe harus enum TipeNotifikasi.",
   );
   assertContains(
     notificationBody,
-    "judul      String",
+    "judul               String",
     "Notification harus punya judul.",
   );
   assertContains(
     notificationBody,
-    "pesan      String",
+    "pesan               String",
     "Notification harus punya pesan.",
   );
   assertContains(
     notificationBody,
-    "data       Json?",
+    "data                Json?",
     "Notification.data harus nullable Json (payload deep-link).",
   );
   assertContains(
     notificationBody,
-    "dibacaPada DateTime?",
+    "dibacaPada          DateTime?",
     "Notification.dibacaPada harus nullable DateTime.",
   );
+  // ADR-033: FK opsional sekarang composite ke KeanggotaanTenant, bukan lagi
+  // langsung ke Pengguna (identitas global) - lihat catatan cakupan di atas
+  // model Notification.
   assertContains(
     notificationBody,
-    "pengguna Pengguna? @relation(fields: [penggunaId], references: [id])",
-    "Notification.pengguna harus FK opsional ke Pengguna, TIDAK di-composite-kan ke tenant " +
-      "(Pengguna adalah identitas global, ADR-011).",
+    'keanggotaanTenant KeanggotaanTenant? @relation("NotificationKeanggotaan", fields: [tenantId, keanggotaanTenantId], references: [tenantId, id])',
+    "Notification.keanggotaanTenant harus composite-FK opsional ke KeanggotaanTenant (ADR-033).",
   );
   assertContains(
     notificationBody,
-    "@@index([penggunaId, dibacaPada])",
-    "Notification harus punya index (penggunaId, dibacaPada) untuk query unread.",
+    "@@index([keanggotaanTenantId, dibacaPada])",
+    "Notification harus punya index (keanggotaanTenantId, dibacaPada) untuk query unread.",
   );
   assertContains(schema, "enum TipeNotifikasi {", "Enum TipeNotifikasi harus ada.");
   for (const tipe of [

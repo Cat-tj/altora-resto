@@ -323,11 +323,15 @@ export function jalankanSemuaAssertion(): void {
     "hargaPerolehan Int?",
     "MutasiStok.hargaPerolehan harus Int (rupiah bulat per ADR-005) DAN nullable - hanya mutasi MASUK yang membawa biaya perolehan.",
   );
-  // `dibuatOlehId` sebelumnya kolom scalar TANPA relasi FK sama sekali.
+  // `dibuatOlehId` sebelumnya kolom scalar TANPA relasi FK sama sekali, lalu
+  // FK ID tunggal ke Pengguna (ADR-013). ADR-033: sekarang composite-FK
+  // OUTLET-LEVEL ke KeanggotaanOutlet - mutasi stok adalah operasi fisik di
+  // SATU outlet/gudang tertentu, jadi aktornya harus divalidasi punya akses
+  // outlet itu, bukan cuma anggota tenant.
   assertContains(
     mutasiBody,
-    'dibuatOleh Pengguna @relation("MutasiStokDibuatOleh", fields: [dibuatOlehId], references: [id])',
-    "MutasiStok.dibuatOleh harus FK sungguhan ke Pengguna (sebelumnya `dibuatOlehId` hanya kolom scalar tanpa relasi apa pun - gap yang sama seperti `gudangId` dulu). FK ID TUNGGAL, bukan composite: relasi ke Pengguna TIDAK PERNAH di-composite-kan ke tenant (ADR-013 poin 5).",
+    'dibuatOleh   KeanggotaanOutlet    @relation("MutasiStokDibuatOleh", fields: [tenantId, outletId, dibuatOlehId], references: [tenantId, outletId, id])',
+    "MutasiStok.dibuatOleh harus composite-FK OUTLET-LEVEL ke KeanggotaanOutlet (ADR-033).",
   );
   const atributMutasi = getAtributBlok(schema, "MutasiStok").join("\n");
   assertContains(
@@ -816,10 +820,13 @@ export function jalankanSemuaAssertion(): void {
       `StokOpname.${aktor.split(" ")[0]} wajib ada dan nullable - EMPAT aktor terpisah (pembuat/penghitung/pengunci/penyetuju), bukan satu kolom diubahOlehId. Pemisahan penghitung dari penyetuju adalah INTI kontrol internal opname: orang yang menghitung tidak boleh menyetujui hitungannya sendiri (ADR-025 Keputusan 5).`,
     );
   }
+  // ADR-033: StokOpname tidak punya outletId sendiri (hanya gudangId) - jadi
+  // keempat aktor divalidasi TENANT-LEVEL (KeanggotaanTenant), bukan
+  // outlet-level - lihat DECISION-LOG.md ADR-033.
   assertContains(
     opnameBody,
-    'penyetuju Pengguna? @relation("OpnameDisetujuiOleh", fields: [penyetujuId], references: [id])',
-    "StokOpname.penyetuju harus FK ID TUNGGAL ke Pengguna (ADR-013 poin 5).",
+    'penyetuju  KeanggotaanTenant?         @relation("OpnameDisetujuiOleh", fields: [tenantId, penyetujuId], references: [tenantId, id])',
+    "StokOpname.penyetuju harus composite-FK TENANT-LEVEL ke KeanggotaanTenant (ADR-033).",
   );
 
   // StokOpnameBaris: kuantitasFisik/selisih WAJIB nullable.

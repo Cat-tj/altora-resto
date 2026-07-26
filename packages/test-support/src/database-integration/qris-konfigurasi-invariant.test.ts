@@ -12,6 +12,7 @@
 
 import {
   assertTrue,
+  createAktorFixture,
   createBaseFixtures,
   expectReject,
   fixtureId,
@@ -51,6 +52,10 @@ async function testIndexExists(): Promise<void> {
 async function testDuplikatAktifDitolak(): Promise<void> {
   await withTransaction(async (client) => {
     const fx = await createBaseFixtures(client);
+    // ADR-033: dibuatOlehId sekarang composite-FK OUTLET-LEVEL ke
+    // KeanggotaanOutlet - raw penggunaId tidak lagi valid.
+    const aktor = await createAktorFixture(client, fx.tenantId, fx.outletId);
+    fx.penggunaId = aktor.keanggotaanOutletId;
 
     const konfig1 = fixtureId("qris");
     await client.query(

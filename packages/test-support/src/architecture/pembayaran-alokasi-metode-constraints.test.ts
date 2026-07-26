@@ -367,10 +367,12 @@ export function jalankanSemuaAssertion(): void {
   ]) {
     assertContains(tenantBody, relasi, `Tenant harus punya back-relation "${relasi}" untuk model pembayaran ALT-DEF-014.`);
   }
+  // ADR-033: dikoreksiOlehId sekarang composite-FK tenant-scoped ke
+  // KeanggotaanTenant (bukan lagi FK langsung ke Pengguna).
   assertContains(
-    getModelBody(schema, "Pengguna"),
-    "koreksiPembayaranDikoreksi KoreksiPembayaran[]",
-    "Pengguna harus punya back-relation ke KoreksiPembayaran (aktor yang mengoreksi pembayaran).",
+    getModelBody(schema, "KeanggotaanTenant"),
+    'koreksiPembayaranDikoreksi      KoreksiPembayaran[]       @relation("KoreksiPembayaranDikoreksiOleh")',
+    "KeanggotaanTenant harus punya back-relation ke KoreksiPembayaran (aktor yang mengoreksi pembayaran, ADR-033).",
   );
 
   // ===================================================================

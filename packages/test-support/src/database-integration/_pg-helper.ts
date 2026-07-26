@@ -183,6 +183,45 @@ export async function createTenantTambahan(client: pg.PoolClient): Promise<strin
   return tenantId;
 }
 
+/** Aktor keanggotaan (ADR-033): Pengguna + KeanggotaanTenant + KeanggotaanOutlet
+ * lengkap, dipakai untuk test validasi actor tenant/outlet-scoped
+ * (`actor-keanggotaan-tenant-outlet-invariants.test.ts`). */
+export interface AktorFixture {
+  penggunaId: string;
+  keanggotaanTenantId: string;
+  keanggotaanOutletId: string;
+}
+
+/** Membuat SATU Pengguna + KeanggotaanTenant(tenantId) + KeanggotaanOutlet(tenantId, outletId) -
+ * aktor yang SAH untuk tenant/outlet yang diberikan. */
+export async function createAktorFixture(
+  client: pg.PoolClient,
+  tenantId: string,
+  outletId: string,
+): Promise<AktorFixture> {
+  const penggunaId = fixtureId("aktor_pengguna");
+  const keanggotaanTenantId = fixtureId("aktor_kt");
+  const keanggotaanOutletId = fixtureId("aktor_ko");
+
+  await client.query(
+    `INSERT INTO pengguna (id, "namaLengkap", email, status, "jumlahPercobaanGagal", "createdAt", "updatedAt")
+     VALUES ($1, 'Aktor Uji', $2, 'AKTIF', 0, now(), now())`,
+    [penggunaId, `${penggunaId}@example.test`],
+  );
+  await client.query(
+    `INSERT INTO keanggotaan_tenant (id, "penggunaId", "tenantId", status, "isOwner", "bergabungPada", "createdAt", "updatedAt")
+     VALUES ($1, $2, $3, 'AKTIF', false, now(), now(), now())`,
+    [keanggotaanTenantId, penggunaId, tenantId],
+  );
+  await client.query(
+    `INSERT INTO keanggotaan_outlet (id, "keanggotaanTenantId", "tenantId", "outletId", status, "createdAt", "updatedAt")
+     VALUES ($1, $2, $3, $4, 'AKTIF', now(), now())`,
+    [keanggotaanOutletId, keanggotaanTenantId, tenantId, outletId],
+  );
+
+  return { penggunaId, keanggotaanTenantId, keanggotaanOutletId };
+}
+
 export async function createBaseFixtures(client: pg.PoolClient): Promise<Fixtures> {
   const tenantId = fixtureId("tenant");
   const outletId = fixtureId("outlet");

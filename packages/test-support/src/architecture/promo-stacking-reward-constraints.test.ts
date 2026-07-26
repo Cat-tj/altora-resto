@@ -395,10 +395,12 @@ export function jalankanSemuaAssertion(): void {
     "promo Promo? @relation(fields: [tenantId, promoId], references: [tenantId, id])",
     "PromoSimulasi.promo harus composite-FK NULLABLE (tenantId, promoId) -> Promo(tenantId, id) (ADR-013/ADR-026).",
   );
+  // ADR-033: composite-FK TENANT-LEVEL ke KeanggotaanTenant (bukan lagi FK
+  // langsung ke Pengguna) - dry-run promo tidak terikat outlet tertentu.
   assertContains(
     simulasiBody,
-    'disimulasikanOleh Pengguna @relation("PromoSimulasiDijalankanOleh", fields: [disimulasikanOlehId], references: [id])',
-    "PromoSimulasi.disimulasikanOleh harus FK ke Pengguna (aktor yang menjalankan dry-run).",
+    'disimulasikanOleh KeanggotaanTenant @relation("PromoSimulasiDijalankanOleh", fields: [tenantId, disimulasikanOlehId], references: [tenantId, id])',
+    "PromoSimulasi.disimulasikanOleh harus composite-FK ke KeanggotaanTenant (aktor yang menjalankan dry-run, ADR-033).",
   );
 
   // ===================================================================
@@ -409,9 +411,9 @@ export function jalankanSemuaAssertion(): void {
     assertContains(tenantBody, relasi, `Tenant harus punya back-relation "${relasi}" untuk model baru domain promo ALT-DEF-009.`);
   }
   assertContains(
-    getModelBody(schema, "Pengguna"),
-    "promoSimulasiDijalankan         PromoSimulasi[]           @relation(\"PromoSimulasiDijalankanOleh\")",
-    "Pengguna harus punya back-relation ke PromoSimulasi (aktor yang menjalankan dry-run).",
+    getModelBody(schema, "KeanggotaanTenant"),
+    'promoSimulasiDijalankan         PromoSimulasi[]           @relation("PromoSimulasiDijalankanOleh")',
+    "KeanggotaanTenant harus punya back-relation ke PromoSimulasi (aktor yang menjalankan dry-run, ADR-033).",
   );
   assertContains(
     getModelBody(schema, "ItemMenu"),

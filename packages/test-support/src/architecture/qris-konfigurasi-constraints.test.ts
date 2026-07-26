@@ -321,13 +321,16 @@ export function jalankanSemuaAssertion(): void {
   for (const relasi of ["konfigurasiQris KonfigurasiQris[]", "riwayatKonfigurasiQris RiwayatKonfigurasiQris[]"]) {
     assertContains(outletBody, relasi, `Outlet harus punya back-relation "${relasi}" (konfigurasi QRIS bersifat per-outlet, ALT-QRS-001).`);
   }
-  const penggunaBody = getModelBody(schema, "Pengguna");
+  // ADR-033: aktor konfigurasi QRIS divalidasi OUTLET-LEVEL (KeanggotaanOutlet) -
+  // konfigurasi QRIS SELALU per-outlet (ALT-QRS-001), jadi back-relation-nya
+  // pindah dari Pengguna ke KeanggotaanOutlet.
+  const keanggotaanOutletBody = getModelBody(schema, "KeanggotaanOutlet");
   for (const relasi of [
-    "konfigurasiQrisDibuat KonfigurasiQris[]",
-    "konfigurasiQrisDiverifikasi KonfigurasiQris[]",
-    "riwayatKonfigurasiQrisDilakukan RiwayatKonfigurasiQris[]",
+    'konfigurasiQrisDibuat      KonfigurasiQris[]        @relation("KonfigurasiQrisDibuatOleh")',
+    'konfigurasiQrisDiverifikasi KonfigurasiQris[]       @relation("KonfigurasiQrisDiverifikasiOleh")',
+    'riwayatKonfigurasiQrisDilakukan RiwayatKonfigurasiQris[] @relation("RiwayatKonfigurasiQrisDilakukanOleh")',
   ]) {
-    assertContains(penggunaBody, relasi, `Pengguna harus punya back-relation "${relasi}" (aktor konfigurasi QRIS).`);
+    assertContains(keanggotaanOutletBody, relasi, `KeanggotaanOutlet harus punya back-relation "${relasi}" (aktor konfigurasi QRIS, ADR-033).`);
   }
 
   // ===================================================================
