@@ -18,9 +18,9 @@ erDiagram
         string outletId FK
         date tanggal
         int totalTransaksi
-        int totalPenjualan "rupiah"
-        int totalDiskon "rupiah"
-        int totalRefund "rupiah"
+        bigint totalPenjualan "rupiah"
+        bigint totalDiskon "rupiah"
+        bigint totalRefund "rupiah"
         datetime dihitungPada
     }
     RM_PENJUALAN_ITEM_HARIAN {
@@ -30,7 +30,7 @@ erDiagram
         string itemMenuId FK
         date tanggal
         int kuantitasTerjual
-        int totalPenjualan "rupiah"
+        bigint totalPenjualan "rupiah"
     }
     RM_STOK_KRITIS {
         string id PK
@@ -48,7 +48,7 @@ erDiagram
         string karyawanId FK
         date tanggal
         int totalTransaksiDitangani
-        int totalPenjualanDitangani "rupiah"
+        bigint totalPenjualanDitangani "rupiah"
         int menitTerlambat
     }
 ```

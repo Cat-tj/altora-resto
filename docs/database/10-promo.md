@@ -34,7 +34,7 @@ erDiagram
         string stackingPolicy "TIDAK_BOLEH_DIGABUNG|BOLEH_DIGABUNG|AMBIL_DISKON_TERBAIK|BERDASARKAN_PRIORITAS"
         string conflictGroup "nullable, promo se-grup saling eksklusif"
         int prioritas "default 0, tie-breaker BERDASARKAN_PRIORITAS"
-        int maximumDiscount "nullable, batas potongan rupiah"
+        bigint maximumDiscount "nullable, batas potongan rupiah"
         int usageQuota "nullable, kuota total lintas pelanggan"
         int usageLimitPerCustomer "nullable"
         int usageLimitPerOrder "nullable, default 1"
@@ -101,7 +101,7 @@ erDiagram
         string tenantId FK
         string promoPemakaianId FK
         string itemPesananId FK "nullable, null = diskon level-order"
-        int nilaiDiskon "rupiah"
+        bigint nilaiDiskon "rupiah"
         datetime createdAt
     }
     PROMO_SNAPSHOT {

@@ -89,7 +89,7 @@ erDiagram
         string tenantId FK
         string pelangganId FK "digantung ke Pelanggan, BUKAN Keanggotaan - lihat catatan"
         string jenis "PENAMBAHAN|PEMAKAIAN|REFUND|PENYESUAIAN|PEMBALIKAN"
-        int jumlah "rupiah, positif=masuk, negatif=keluar"
+        bigint jumlah "rupiah, positif=masuk, negatif=keluar"
         string pesananId FK "nullable"
         string pembayaranId FK "nullable - terisi bila dihasilkan oleh Pembayaran metode SALDO_TOKO"
         string alasan "WAJIB (ADR-032)"

@@ -2872,6 +2872,225 @@ TERBUKA (`INV-045`/`INV-046`), menunggu batch implementasi handler/
 service-layer terpisah. Lihat ADR-033 untuk rasional desain lengkap dan
 `DEFECT-LEDGER.md` (`ALT-DEF-045`) untuk closure-checklist penuh.
 
+## Batch ADR-034: Migrasi seluruh field uang dari `Int` ke `BigInt` (`ALT-DEF-046`, `INV-047`)
+
+### 1. Fakta perilaku Postgres `int4` overflow - dikonfirmasi LANGSUNG sebelum menulis migrasi
+
+Probe nyata terhadap `altora_resto_dev` (tabel buang-pakai, dihapus setelahnya) -
+dijalankan SEBELUM satu baris kode migrasi pun ditulis, supaya justifikasi ADR-034
+tidak berdiri di atas asumsi yang belum diverifikasi:
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev <<'SQL'
+DROP TABLE IF EXISTS _overflow_probe;
+CREATE TABLE _overflow_probe (n int4);
+INSERT INTO _overflow_probe VALUES (2147483647);
+DO $$
+BEGIN
+  UPDATE _overflow_probe SET n = n + 1;
+  RAISE NOTICE 'NO ERROR: arithmetic overflow silently succeeded, n=%', (SELECT n FROM _overflow_probe);
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'ERROR RAISED on arithmetic overflow: %', SQLERRM;
+END $$;
+DO $$
+BEGIN
+  INSERT INTO _overflow_probe VALUES (2147483648);
+  RAISE NOTICE 'NO ERROR: out-of-range literal insert silently succeeded';
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'ERROR RAISED on out-of-range literal insert: %', SQLERRM;
+END $$;
+DROP TABLE _overflow_probe;
+SQL
+
+NOTICE:  ERROR RAISED on arithmetic overflow: integer out of range
+NOTICE:  ERROR RAISED on out-of-range literal insert: integer out of range
+```
+
+**TEMUAN FAKTUAL: Postgres `int4` MENOLAK (raise error keras "integer out of
+range") baik aritmetika maupun literal INSERT di luar jangkauan
+-2.147.483.648..2.147.483.647 - BUKAN silent wraparound.** Premis awal batch
+ini ("overflow diam-diam menjadi negatif") SALAH dan dikoreksi di ADR-034
+sebelum ditulis sebagai justifikasi final.
+
+### 2. Konfirmasi database dev kosong (nol risiko migrasi data) sebelum menulis migrasi
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -c \
+    "SELECT (SELECT count(*) FROM pesanan) AS pesanan, (SELECT count(*) FROM pembayaran) AS pembayaran, (SELECT count(*) FROM rm_penjualan_harian) AS rm_penjualan_harian;"
+ pesanan | pembayaran | rm_penjualan_harian
+---------+------------+---------------------
+       0 |          0 |                   0
+(1 row)
+```
+
+### 3. Audit lapangan - dua putaran (lihat ADR-034 Keputusan 1 untuk tabel lengkap)
+
+- Putaran 1 (grep kata kunci nama field): 46 field/24 model.
+- Putaran 2 (dipicu kegagalan 3 test arsitektur yang menegaskan tipe `Int`
+  lama secara tekstual, BUKAN grep tambahan): menemukan 5 field terlewat -
+  `VersiResep.snapshotBiaya`, `GiliranKasir.modalAwal`/`modalAkhirDihitung`/
+  `modalAkhirSistem`, `Promo.maximumDiscount`.
+- Putaran 3 (dipicu cross-check dokumen ERD `docs/database/*.md` saat
+  menulis dokumentasi batch ini): menemukan 1 field terlewat lagi -
+  `PengaturanPersediaanOutlet.ambangSelisihOpname`.
+- **Total: 52 field / 28 model.**
+
+### 4. `prisma format` + `prisma validate` setelah seluruh 52 field diubah ke `BigInt`
+
+```
+$ npx prisma format --schema prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 85ms 🚀
+$ npx prisma validate --schema prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid 🚀
+```
+
+### 5. Diff migrasi (`prisma migrate diff --from-schema-datasource --to-schema-datamodel`) - review manual
+
+Ketiga batch (46 field/24 tabel, lalu 5 field/3 tabel tambahan, lalu 1
+field/1 tabel tambahan) semuanya menghasilkan MURNI `ALTER TABLE ... ALTER COLUMN ... SET DATA TYPE
+BIGINT` - widening lossless, tidak ada DROP/data loss. Contoh (batch kedua,
+lengkap):
+
+```sql
+-- AlterTable
+ALTER TABLE "giliran_kasir" ALTER COLUMN "modalAwal" SET DATA TYPE BIGINT,
+ALTER COLUMN "modalAkhirDihitung" SET DATA TYPE BIGINT,
+ALTER COLUMN "modalAkhirSistem" SET DATA TYPE BIGINT;
+
+-- AlterTable
+ALTER TABLE "promo" ALTER COLUMN "maximumDiscount" SET DATA TYPE BIGINT;
+
+-- AlterTable
+ALTER TABLE "versi_resep" ALTER COLUMN "snapshotBiaya" SET DATA TYPE BIGINT;
+```
+
+### 6. Penerapan lewat `psql` + `prisma migrate resolve --applied` (ketiga migrasi)
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -f prisma/schema/migrations/20260726084007_migrasi_uang_int_ke_bigint/migration.sql
+ALTER TABLE  (x24)
+$ npx prisma migrate resolve --applied 20260726084007_migrasi_uang_int_ke_bigint
+Migration 20260726084007_migrasi_uang_int_ke_bigint marked as applied.
+
+$ psql -U icat -h localhost -d altora_resto_dev -f prisma/schema/migrations/20260726084323_migrasi_uang_int_ke_bigint_lanjutan/migration.sql
+ALTER TABLE  (x3)
+$ npx prisma migrate resolve --applied 20260726084323_migrasi_uang_int_ke_bigint_lanjutan
+Migration 20260726084323_migrasi_uang_int_ke_bigint_lanjutan marked as applied.
+
+$ psql -U icat -h localhost -d altora_resto_dev -f prisma/schema/migrations/20260726085206_migrasi_uang_int_ke_bigint_ambang_opname/migration.sql
+ALTER TABLE
+$ npx prisma migrate resolve --applied 20260726085206_migrasi_uang_int_ke_bigint_ambang_opname
+Migration 20260726085206_migrasi_uang_int_ke_bigint_ambang_opname marked as applied.
+
+$ npx prisma migrate status --schema prisma/schema/schema.prisma
+7 migrations found in prisma/migrations
+Database schema is up to date!
+```
+
+### 7. Test overflow database-integration BARU (`uang-bigint-overflow.test.ts`)
+
+```
+$ node node_modules/.pnpm/tsx@4.23.1/node_modules/tsx/dist/cli.mjs \
+    packages/test-support/src/database-integration/uang-bigint-overflow.test.ts
+OK: database-integration ADR-034 (migrasi uang Int->BigInt, int4 overflow = error bukan wraparound) lulus.
+```
+
+Membuktikan NYATA (bukan hanya diklaim): (1) tabel int4 buang-pakai
+membuktikan ulang fakta bagian 1 di dalam test otomatis; (2) nilai
+2.200.000.000 (> `INT4_MAX`) yang GAGAL disisipkan ke tabel kontrol int4
+(SAVEPOINT+ROLLBACK, `out of range`) BERHASIL disisipkan + dibaca kembali
+EXACT di `rm_penjualan_harian.totalPenjualan` dan `pelanggan.saldoTokoCache`
+(kolom asli yang sudah dimigrasi ke `BigInt`); (3) aritmetika `BigInt`
+melewati `INT4_MAX` sukses tanpa error; (4) kontrol negatif -
+`keanggotaan.poinAktif` (SENGAJA dikecualikan dari migrasi karena poin
+loyalitas bukan rupiah) TETAP `Int` dan tetap menolak nilai yang sama -
+membuktikan pengecualian yang didokumentasikan konsisten dengan perilaku DB
+nyata.
+
+### 8. Perbaikan 4 assertion arsitektur yang menegaskan tipe `Int` lama secara tekstual
+
+Diperbaiki menjadi `BigInt` di: `keanggotaan-ledger-constraints.test.ts`
+(`Pelanggan.saldoTokoCache`), `pembayaran-alokasi-metode-constraints.test.ts`
+(`AlokasiPembayaran.jumlah`), `persediaan-ledger-reservasi-constraints.test.ts`
+(`MutasiStok.hargaPerolehan`, `BatchStok.hargaPerolehan`,
+`CatatanWaste.nilaiKerugian` - 3 assertion di file yang sama),
+`resep-versi-produksi-constraints.test.ts` (`VersiResep.snapshotBiaya`).
+
+### 9. Seluruh test (28 file: 6 database-integration + 22 architecture) - SEBELUM redeploy
+
+```
+PASS=28 FAIL=0 TOTAL=28
+```
+
+Naik dari 27 file (5 database-integration + 22 architecture) sebelum batch
+ini karena 1 file test baru (`uang-bigint-overflow.test.ts`) ditambahkan -
+tidak ada file yang hilang/dihapus, murni penambahan.
+
+### 10. Redeploy dari database KOSONG (drop+create) - 6 migrasi dari nol
+
+```
+$ psql -U icat -h localhost -d postgres -c "DROP DATABASE IF EXISTS altora_resto_dev;"
+DROP DATABASE
+$ psql -U icat -h localhost -d postgres -c "CREATE DATABASE altora_resto_dev;"
+CREATE DATABASE
+$ npx prisma migrate deploy --schema prisma/schema/schema.prisma
+7 migrations found in prisma/migrations
+Applying migration `20260725154045_baseline_correction_loop`
+Applying migration `20260725154310_harden_manual_invariants`
+Applying migration `20260726084007_migrasi_uang_int_ke_bigint`
+Applying migration `20260726084323_migrasi_uang_int_ke_bigint_lanjutan`
+Applying migration `20260726085206_migrasi_uang_int_ke_bigint_ambang_opname`
+Applying migration `20260726090000_redesign_ledger_reversal_membalik_pattern`
+Applying migration `20260726100000_actor_tenant_outlet_scoped`
+All migrations have been successfully applied.
+```
+
+Spot-check struktur kolom setelah redeploy (identik dengan yang diterapkan
+di batch pertama):
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -c "\d pesanan" | grep -E "subtotal|totalDiskon|totalPajak|totalServiceCharge|totalAkhir"
+ subtotal           | bigint | | not null | 0
+ totalDiskon        | bigint | | not null | 0
+ totalPajak         | bigint | | not null | 0
+ totalServiceCharge | bigint | | not null | 0
+ totalAkhir         | bigint | | not null | 0
+```
+
+### 11. Seluruh test diulang TERHADAP database yang baru di-redeploy
+
+```
+PASS=28 FAIL=0 TOTAL=28
+$ psql -U icat -h localhost -d altora_resto_dev -c "SELECT count(*) FROM pesanan;"
+ count
+-------
+     0
+```
+
+**LULUS 28/28 kedua kalinya dari kondisi database kosong total** -
+membuktikan kedua migrasi baru reproducible dari nol, tidak bergantung pada
+state database yang sudah "dipanaskan" manual sebelumnya. Tabel tetap
+kosong (0 baris) - konsisten dengan bagian 2, tidak ada data domain nyata
+yang berisiko di lingkungan dev ini.
+
+### 12. Checklist penutupan `ALT-DEF-046` / `INV-047`
+
+| Item checklist | Status | Bukti |
+|---|---|---|
+| Fakta perilaku int4 diverifikasi nyata (bukan diasumsikan) | LULUS | Bagian 1 |
+| Audit lengkap 52 field/28 model (termasuk audit ulang setelah temuan gap) | LULUS | Bagian 3, ADR-034 Keputusan 1 |
+| Migrasi resmi lulus, termasuk dari database kosong | LULUS | Bagian 6, 10 |
+| Test overflow database-integration nyata lulus | LULUS | Bagian 7 |
+| Test arsitektur diperbarui dan lulus, TANPA regresi | LULUS (28/28) | Bagian 9, 11 |
+| Traceability diperbarui | LULUS | `INVARIAN-BELUM-DITEGAKKAN.md` INV-047 (kategori A, DITUTUP) |
+| Sanity-check skala nyata (bukan hipotetis) | LULUS | ADR-034 Keputusan 4 |
+| Bukti command aktual tersedia | LULUS | Dokumen ini |
+
+**Kesimpulan: `ALT-DEF-046` DITUTUP lewat `INV-047`.** Ceiling overflow uang
+rupiah dinaikkan ~9 orde besaran (dari ~2,1 miliar ke ~9,2×10^18) - dicatat
+sebagai "praktis tidak lagi terjangkau", bukan "tidak mungkin overflow secara
+absolut" (`BigInt`/`int8` secara teoretis tetap punya ceiling-nya sendiri).
+
 ## Format entri rilis (dipakai mulai rilis pertama yang sesungguhnya)
 
 ```

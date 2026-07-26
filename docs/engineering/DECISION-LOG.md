@@ -58,6 +58,16 @@ Setiap ADR diberi status `DIUSULKAN`, `DITERIMA`, `DIGANTI` (superseded), atau
 - **Konsekuensi:** Kalkulasi diskon persen harus membulatkan ke Int secara eksplisit
   dan konsisten (aturan pembulatan didokumentasikan terpisah saat implementasi
   `packages/promo`/`packages/pembayaran`).
+- **CATATAN (2026-07-26): SEBAGIAN DIAMANDEMEN oleh ADR-034.** Keputusan inti
+  "uang rupiah bulat, bukan Decimal/Float" TETAP BENAR dan tidak dicabut.
+  Yang diamandemen HANYA bagian tipe penyimpanan: seluruh field uang rupiah
+  dipindah dari Prisma `Int` (Postgres `int4`, ceiling ~2,1 miliar) ke
+  `BigInt` (Postgres `int8`, ceiling ~9,2×10^18) karena field AGREGAT/
+  kumulatif (total penjualan harian per outlet, saldo toko kumulatif, dst)
+  bisa realistis mendekati ceiling `int4` pada skala bisnis multi-outlet
+  besar. Lihat ADR-034 untuk audit lengkap, rasional, dan bukti verifikasi.
+  Baris ADR-005 ini dipertahankan apa adanya sebagai jejak sejarah keputusan
+  awal, sesuai konvensi log ini.
 
 ## ADR-006: Tidak ada hard-delete pada data finansial, stok, dan audit
 
@@ -3113,3 +3123,232 @@ statis - dicatat sebagai `ALT-DEF-045` di `DEFECT-LEDGER.md` dan sebagai
 baris kategori C baru `INV-045`/`INV-046` di
 `INVARIAN-BELUM-DITEGAKKAN.md`, menunggu batch implementasi handler/
 service-layer terpisah (di luar scope batch schema-only ini).
+
+## ADR-034: Migrasi seluruh field uang rupiah dari `Int` ke `BigInt` (amandemen ADR-005, ALT-DEF-046)
+
+**Konteks.** ADR-005 (halaman ini, di atas) memutuskan uang disimpan sebagai
+`Int` rupiah bulat murni untuk menghindari galat floating-point - keputusan
+itu TETAP BENAR dan TIDAK dicabut ("rupiah bulat, bukan Decimal/Float"
+masih berlaku). Yang TIDAK dipertimbangkan ADR-005 saat itu adalah JANGKAUAN
+`Int` (Postgres `int4`, signed 32-bit, maksimum 2.147.483.647): field
+uang PER-TRANSAKSI (harga satuan item, nominal diskon satu baris) hampir
+tidak mungkin mendekati batas itu, tapi field AGREGAT/KUMULATIF (total
+penjualan harian per outlet, saldo toko kumulatif pelanggan, estimasi total
+purchase order) genuinely bisa mendekatinya begitu skala bisnis tenant
+membesar (lihat perhitungan skala di Keputusan 4 di bawah).
+
+**Klarifikasi fakta PENTING sebelum keputusan (Keputusan 0).** Batch ini
+awalnya berangkat dari premis "Postgres `int4` overflow diam-diam wraparound
+ke nilai negatif tanpa error" - premis itu **SALAH** dan sengaja diverifikasi
+langsung dengan probe nyata sebelum menulis satu baris kode migrasi pun (supaya
+justifikasi ADR ini tidak berdiri di atas asumsi keliru):
+
+```sql
+CREATE TABLE _probe_int4_overflow (n int4);
+INSERT INTO _probe_int4_overflow VALUES (2147483647);
+UPDATE _probe_int4_overflow SET n = n + 1;      -- ERROR:  integer out of range
+INSERT INTO _probe_int4_overflow VALUES (2200000000);  -- ERROR:  integer out of range
+```
+
+**Temuan faktual: Postgres `int4` MENOLAK (raise error keras) nilai/aritmetika
+di luar jangkauan -2.147.483.648..2.147.483.647, baik lewat literal INSERT
+maupun aritmetika UPDATE - BUKAN silent wraparound.** Ini mengubah framing
+risiko: bahaya `Int` untuk field agregat bukan "korupsi data diam-diam
+menjadi angka negatif yang salah", melainkan **kegagalan keras (hard
+failure)** pada operasi bisnis normal (tutup kasir, rekap penjualan harian,
+update saldo toko) begitu satu baris agregat melewati ceiling - downtime/error
+pada command yang seharusnya sukses, bukan data yang diam-diam salah. Kedua
+risiko itu sama-sama harus dicegah, tapi framing yang benar penting untuk
+prioritisasi dan pesan error yang akan ditulis nanti di lapisan aplikasi.
+Bukti lengkap (termasuk output psql asli) ada di `RELEASE-EVIDENCE.md`.
+
+**Keputusan 1 - Audit lapangan (Step 1), dua putaran.** Putaran pertama
+memakai grep kata kunci nama field (`harga*`, `subtotal`, `diskon*`,
+`pajak*`, `*biayaLayanan*`/`serviceCharge`, `total*`, `*refund*`,
+`saldoToko*`, `hpp`/`hargaPokok`/`hargaPerolehan`, `nilaiPersediaan`,
+`penjualan*`, `pengeluaran`, `hutang*`, `jumlah` (diperiksa manual satu-satu
+karena ambigu - banyak `jumlah` adalah KUANTITAS stok/produksi yang sudah
+`Decimal`, bukan uang)) dan menemukan 46 field lintas ~24 model. Putaran
+KEDUA dipicu bukan oleh grep tambahan melainkan oleh **kegagalan 3 test
+arsitektur** (`keanggotaan-ledger-constraints.test.ts`,
+`pembayaran-alokasi-metode-constraints.test.ts`,
+`persediaan-ledger-reservasi-constraints.test.ts`) yang menegaskan bunyi
+literal tipe `Int` lama - kegagalan itu diharapkan (test itu memang perlu
+diperbarui ke `BigInt`), tapi memicu pemeriksaan ulang menyeluruh yang
+menemukan **5 field TERLEWAT** oleh kata kunci putaran pertama:
+`VersiResep.snapshotBiaya` (HPP snapshot - kata "biaya" generik tidak ada di
+daftar kata kunci awal), `GiliranKasir.modalAwal`/`modalAkhirDihitung`/
+`modalAkhirSistem` (modal kas fisik shift kasir, rupiah - kata "modal" tidak
+ada di daftar), dan `Promo.maximumDiscount` (dikomentari eksplisit "Batas
+potongan dalam rupiah" di schema, tapi nama field tidak memuat kata kunci
+uang generik apa pun).
+
+Putaran KETIGA ditemukan saat memperbarui dokumen ERD `docs/database/*.md`
+(Step "dokumentasi" batch ini, BUKAN test lagi) - saat menyalin komentar
+`"rupiah"` dari `schema.prisma` ke diagram Mermaid, satu field lagi
+ditemukan TERLEWAT kedua putaran sebelumnya:
+`PengaturanPersediaanOutlet.ambangSelisihOpname` (ambang selisih stok opname
+dalam rupiah yang memicu status `MENUNGGU_PERSETUJUAN`, ALT-PSD-017 -
+komentar schema-nya eksplisit menyebut "rupiah bulat (ADR-005)" tapi nama
+field mengandung kata "ambang"/"Selisih", tidak ada di kata kunci grep
+awal). **Total akhir: 52 field lintas 28 model.** Seluruh 3 field yang
+terlewat (ditemukan lintas 3 putaran berbeda: regresi test test arsitektur
+untuk 5 field, lalu cross-check dokumen ERD untuk 1 field lagi) dicatat
+sebagai `ALT-DEF-046` di `DEFECT-LEDGER.md` - pelajaran prosesnya: audit
+berbasis kata kunci nama field TIDAK CUKUP sendirian sebagai satu-satunya
+metode, harus dikombinasikan DENGAN (1) pembacaan komentar schema
+baris-per-baris, (2) regresi test arsitektur sebagai jaring pengaman, DAN
+(3) cross-check dokumen ERD yang sudah ada - kombinasi ketiganya yang
+akhirnya menangkap seluruh 52 field, bukan satu metode saja.
+
+**Tabel audit lengkap (ringkas per model, field per baris):**
+
+| Model | Field | Klasifikasi | Risiko ceiling |
+|---|---|---|---|
+| BatasIzin | maksimumDiskonNominal, maksimumRefund | Per-transaksi (batas) | Rendah |
+| VarianMenu | hargaTambahan | Per-transaksi | Rendah |
+| ModifierOpsi | hargaTambahan | Per-transaksi | Rendah |
+| HargaItemOutlet | harga | Per-transaksi | Rendah |
+| VersiResep | snapshotBiaya | Per-transaksi (HPP snapshot) | Rendah |
+| MutasiStok | hargaPerolehan | Per-transaksi | Rendah |
+| BatchStok | hargaPerolehan | Per-transaksi | Rendah |
+| CatatanWaste | nilaiKerugian | Per-transaksi | Rendah |
+| PurchaseOrder | totalEstimasi | **Agregat** (per PO) | Sedang |
+| PurchaseOrderBaris | hargaSatuan | Per-transaksi | Rendah |
+| PenerimaanBarangBaris | hargaSatuanAktual | Per-transaksi | Rendah |
+| ItemPesanan | hargaSatuan, hargaDasarSnapshot, hargaVarianSnapshot, hargaModifierSnapshot, diskonSnapshot, pajakSnapshot, serviceChargeSnapshot, totalBarisSnapshot | Per-transaksi (per baris item) | Rendah |
+| ItemPesananModifier | hargaTambahan, hargaSnapshot, totalSnapshot | Per-transaksi | Rendah |
+| TransaksiKasir | jumlah | Per-transaksi (kas masuk/keluar) | Rendah |
+| GiliranKasir | modalAwal, modalAkhirDihitung, modalAkhirSistem | Per-transaksi (modal shift) | Rendah |
+| Pembayaran | jumlah, totalDiterima, kembalian | Per-transaksi | Rendah-Sedang |
+| AlokasiPembayaran | jumlah | Per-transaksi | Rendah |
+| PembayaranMetodeBaris | jumlah | Per-transaksi | Rendah |
+| KoreksiPembayaran | jumlahSebelum, jumlahSesudah | Per-transaksi | Rendah |
+| PembayaranRefund | jumlah | Per-transaksi | Rendah |
+| Promo | maximumDiscount | Per-transaksi (batas) | Rendah |
+| PromoReward | nilaiNominal, hargaPaket | Per-transaksi | Rendah |
+| PromoPemakaianBaris | nilaiDiskon | Per-transaksi | Rendah |
+| LedgerSaldoToko | jumlah | Per-baris ledger (SUM = agregat) | Sedang |
+| BiayaOperasional | jumlah | Per-transaksi | Rendah |
+| Pesanan | subtotal, totalDiskon, totalPajak, totalServiceCharge, totalAkhir | **Agregat** (per pesanan) | Rendah-Sedang |
+| Pelanggan | saldoTokoCache | **Agregat kumulatif** (cache SUM lifetime) | **Tinggi** |
+| RekapKasHarian | totalPenjualan, totalRefund, totalDiskon, selisihKas | **Agregat harian per outlet** | **Tinggi** |
+| RmPenjualanHarian | totalPenjualan, totalDiskon, totalRefund | **Agregat harian per outlet** | **Tinggi** |
+| RmPenjualanItemHarian | totalPenjualan | **Agregat harian** | Sedang |
+| RmKinerjaKaryawanHarian | totalPenjualanDitangani | **Agregat harian per karyawan** | Sedang |
+| PengaturanPersediaanOutlet | ambangSelisihOpname | Per-transaksi (ambang/threshold) | Rendah |
+
+Ringkasan: 52 field, 28 model (termasuk `PengaturanPersediaanOutlet.ambangSelisihOpname`
+yang ditemukan di putaran audit ketiga), 34 field per-transaksi (risiko rendah)
+vs 18 field agregat/kumulatif (risiko sedang-tinggi) - lihat `RmPenjualanHarian`/
+`RekapKasHarian`/`Pelanggan.saldoTokoCache` sebagai kandidat risiko tertinggi.
+
+**Field yang SENGAJA DIKECUALIKAN (bukan uang, walau nama/pola mirip
+ledger uang):** `PoinRiwayat.jumlah` dan `Keanggotaan.poinAktif`/
+`poinKumulatif`/`TierKeanggotaan.minPoinKumulatif` adalah **POIN loyalitas**
+(unit terpisah dari rupiah, dikonfirmasi lewat `JenisPoinRiwayat` enum dan
+`kadaluarsaPada` - poin tidak identik nilai tukar rupiah 1:1 kecuali
+didefinisikan terpisah di layer aplikasi); `LedgerStempel.jumlah` dan
+`HadiahStempel.jumlahStempelDibutuhkan` adalah **jumlah STEMPEL** (punch
+card fisik/digital, bukan rupiah). Ketiganya BERBEDA dari `LedgerSaldoToko`
+yang komentarnya eksplisit menyebut "Rupiah bulat (ADR-005)" - `LedgerSaldoToko`
+DIMIGRASI, poin/stempel TIDAK. Test `uang-bigint-overflow.test.ts` memuat
+kontrol negatif eksplisit yang membuktikan `Keanggotaan.poinAktif` TETAP
+`Int` dan tetap menolak nilai di luar jangkauan int4, supaya pengecualian
+ini dinyatakan sengaja dan tidak diam-diam menjadi celah. Field ambigu
+lain, `TargetKinerja.targetNilai`, dibiarkan `Decimal(10,2)` apa adanya -
+tidak dikonfirmasi murni rupiah (bisa berupa target non-uang seperti jumlah
+pesanan) dan sudah aman dari ceiling `Int` karena tipe `Decimal`.
+
+**Keputusan 2 - `BigInt` seragam untuk SEMUA 52 field, bukan migrasi
+surgical hanya field agregat.** Instruksi eksplisit hanya mewajibkan field
+AGREGAT dimigrasi; opsi (b) migrasi surgical (hanya 18 field agregat/
+kumulatif di atas) dipertimbangkan tapi DITOLAK karena akan menghasilkan DUA
+konvensi tipe uang berdampingan di schema yang sama (`Int` untuk
+per-transaksi, `BigInt` untuk agregat) - beban kognitif permanen bagi
+developer masa depan yang harus mengingat mana yang mana per field, DAN
+rawan salah sewaktu sebuah field per-transaksi "naik level" menjadi bagian
+agregat baru (mis. field baru yang men-SUM beberapa `ItemPesanan.hargaSatuan`)
+tanpa disadari perlu tipe lebih besar. Opsi (a) - **BigInt seragam, "uang
+adalah BigInt, titik"** - dipilih karena: (1) satu aturan, tidak ada
+percabangan yang perlu diingat; (2) migrasi widening `int4`→`int8` selalu
+lossless (tidak ada nilai `int4` valid yang tidak muat di `int8`), jadi
+biaya penerapan hampir nol; (3) instruksi Step 3 (serialisasi uang sebagai
+string di API) SUDAH mewajibkan setiap konsumen memperlakukan SEMUA field
+uang secara seragam sebagai string tidak peduli agregat atau bukan, jadi
+tidak ada API-level benefit dari mempertahankan sebagian sebagai `Int`
+number-native.
+
+**Keputusan 3 - `BigInt`, bukan `Decimal(20,0)`.** Postgres `int8`
+(`BigInt` Prisma) presisi, tidak ada floating point, maksimum
+~9,2×10^18 - jauh lebih dari cukup untuk rupiah bahkan skala ekonomi
+nasional. Tipe JS native `bigint` (bukan wrapper `decimal.js` yang dipakai
+tipe `Decimal` Prisma) berarti lebih sedikit permukaan kesalahan aritmetika
+(operator native `+`/`-`/`*` bekerja langsung, bukan lewat method call
+`.plus()`/`.minus()` yang mudah lupa dipakai konsisten). Tidak ditemukan
+alasan konkret `Decimal(20,0)` lebih unggul untuk domain ini (tidak ada
+kebutuhan pecahan desimal untuk rupiah - ADR-005 sudah menetapkan itu).
+
+**Keputusan 4 - Sanity-check skala nyata (bukan hipotetis).** Instruksi
+meminta pengecekan terhadap "asumsi dataset performance-test dari dokumen
+scaffold master (10 tenant, 500rb pesanan, dst)" - **dokumen semacam itu
+TIDAK DITEMUKAN** di `docs/` repo ini setelah grep menyeluruh (`grep -rniE
+"[0-9][0-9,.]* (tenant|outlet|pesanan|order|transaksi)" docs/` tidak
+menghasilkan dokumen scaffold performa dengan angka skala eksplisit) -
+dicatat jujur di sini alih-alih berpura-pura menemukannya. Sanity-check
+karena itu dilakukan langsung dari asumsi bisnis wajar: `RmPenjualanHarian`
+adalah agregat PER-OUTLET PER-HARI (bukan per-tenant) - satu outlet ramai
+volume tinggi (mis. food court/kafetaria korporat/restoran cepat saji
+lokasi flagship) yang memproses ~4.200-10.500 transaksi pada satu hari
+puncak dengan rata-rata Rp200rb-500rb per transaksi SUDAH cukup untuk
+`totalPenjualan` harian outlet itu mendekati atau melewati 2,1 miliar rupiah
+- ini SKALA REALISTIS untuk satu lokasi ramai pada hari puncak (bukan
+skenario ekstrem), apalagi mengingat platform ini multi-tenant dan
+beberapa tenant bisa jadi jaringan besar. Kesimpulan: risiko ceiling `Int`
+untuk field agregat harian/kumulatif BUKAN risiko teoretis murni, dicatat
+sebagai bagian `ALT-DEF-046`.
+
+**Keputusan 5 - Migrasi dijalankan 3 batch kecil (bukan satu, karena field
+tambahan ditemukan SETELAH batch-batch sebelumnya diterapkan+diresolve).**
+Batch pertama (`20260726084007_migrasi_uang_int_ke_bigint`, 46 field/24
+tabel), batch kedua (`20260726084323_migrasi_uang_int_ke_bigint_lanjutan`, 5
+field tambahan/3 tabel: `versi_resep.snapshotBiaya`,
+`giliran_kasir.modalAwal/modalAkhirDihitung/modalAkhirSistem`,
+`promo.maximumDiscount`), dan batch ketiga
+(`20260726085206_migrasi_uang_int_ke_bigint_ambang_opname`, 1 field/1 tabel:
+`pengaturan_persediaan_outlet.ambangSelisihOpname`, ditemukan saat
+memperbarui dokumen ERD) - ketiganya dibuat dengan cara yang SAMA seperti
+ADR-031/032/033 (`prisma migrate dev --create-only` diblokir
+non-interaktif di lingkungan ini): `prisma migrate diff
+--from-schema-datasource --to-schema-datamodel --script` menghasilkan SQL
+`ALTER COLUMN ... SET DATA TYPE BIGINT` murni (widening lossless, DIKONFIRMASI
+seluruh tabel target 0 baris sebelum migrasi lewat `SELECT count(*)`),
+diterapkan lewat `psql`, dicatat resmi lewat `prisma migrate resolve
+--applied`. Diverifikasi: `prisma migrate status` melaporkan "up to date",
+dan redeploy dari `DROP DATABASE`+`CREATE DATABASE` kosong menerapkan
+seluruh 7 migrasi berurutan tanpa error - lihat `RELEASE-EVIDENCE.md`.
+
+**Keputusan 6 - Test overflow nyata ditulis
+(`uang-bigint-overflow.test.ts`)** membuktikan TIGA hal lewat Postgres
+sungguhan: (a) fakta `int4` MENOLAK overflow (bukan wraparound) lewat tabel
+buang-pakai; (b) nilai 2.200.000.000 (> `INT4_MAX`) yang GAGAL di tabel
+kontrol int4 BERHASIL disisipkan + dibaca kembali EXACT di
+`rm_penjualan_harian.totalPenjualan` dan `pelanggan.saldoTokoCache` (kolom
+asli yang sudah dimigrasi); (c) kontrol negatif bahwa
+`keanggotaan.poinAktif` (SENGAJA dikecualikan, lihat Keputusan 1) TETAP
+`Int` dan tetap menolak nilai itu - membuktikan pengecualian yang
+didokumentasikan konsisten dengan perilaku database nyata, bukan celah
+yang terlewat.
+
+**Status API/serialisasi.** Lihat `docs/api/API-CONTRACT.md` bagian "Uang
+sebagai string di JSON" - kontrak ini didokumentasikan di batch ini TAPI
+TIDAK ADA kode handler API yang ditulis (belum ada handler API sama sekali
+di repo ini), murni dokumentasi kontrak untuk diikuti batch implementasi
+API mendatang.
+
+**Hubungan dengan ADR-005.** ADR-005 TIDAK dihapus/direvisi teksnya -
+keputusan intinya ("rupiah bulat, bukan Decimal/Float") tetap berlaku penuh.
+ADR-034 ini murni MENGAMANDEMEN bagian "disimpan sebagai `Int`" menjadi
+"disimpan sebagai `BigInt`" untuk field yang teridentifikasi di atas -
+keduanya dipertahankan di log ini untuk jejak sejarah keputusan sesuai
+konvensi ADR/DECISION-LOG proyek ini.

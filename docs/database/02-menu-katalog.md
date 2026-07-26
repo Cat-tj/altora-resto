@@ -34,7 +34,7 @@ erDiagram
         string id PK
         string itemMenuId FK
         string nama "mis. Kecil/Sedang/Besar"
-        int hargaTambahan "rupiah, bisa 0"
+        bigint hargaTambahan "rupiah, bisa 0"
         string status "AKTIF|NONAKTIF"
     }
     MODIFIER_GRUP {
@@ -62,7 +62,7 @@ erDiagram
         string id PK
         string itemMenuId FK
         string outletId FK
-        int harga "rupiah"
+        bigint harga "rupiah"
         datetime berlakuSejak
     }
 ```

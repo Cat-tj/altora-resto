@@ -69,7 +69,7 @@ erDiagram
         decimal jumlahHasil "yield satu batch"
         string satuanHasilId FK
         decimal penyusutanPersen "susut wajar produksi"
-        int snapshotBiaya "HPP rupiah saat diaktifkan, nullable"
+        bigint snapshotBiaya "HPP rupiah saat diaktifkan, nullable"
         string status "DRAF|AKTIF|NONAKTIF|ARSIP"
         datetime createdAt
     }
@@ -135,10 +135,13 @@ erDiagram
 Catatan:
 
 - `KOMPONEN_RESEP.jumlah` (dan seluruh kolom kuantitas bahan di domain ini)
-  memakai `Decimal` (bukan Int) karena satuan bahan baku (gram/ml) butuh presisi
-  pecahan - berbeda dari nilai uang yang wajib `Int` (ADR-005). Satu-satunya
-  kolom `Int` di domain ini adalah `VERSI_RESEP.snapshotBiaya`, yang memang uang
-  rupiah.
+  memakai `Decimal` (bukan Int/BigInt) karena satuan bahan baku (gram/ml)
+  butuh presisi pecahan - berbeda dari nilai uang. Satu-satunya kolom uang di
+  domain ini adalah `VERSI_RESEP.snapshotBiaya`, yang bertipe `BigInt` sejak
+  ADR-034 (mengamandemen ADR-005 - awalnya `Int`, field ini sempat terlewat
+  dari audit awal batch ADR-034 karena nama field tidak memuat kata kunci
+  uang generik, ditemukan lewat regresi test arsitektur, lihat ADR-034
+  Keputusan 1).
 - **ALT-DEF-007 / ADR-022 Keputusan 4 - `RESEP_BAHAN` DIHAPUS.** Model lama
   `RESEP_BAHAN(resepId, bahanId, jumlah, satuanId)` sudah tidak ada di
   `schema.prisma`. Penggantinya `KOMPONEN_RESEP` menggantung pada

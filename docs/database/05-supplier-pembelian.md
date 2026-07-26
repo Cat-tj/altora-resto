@@ -26,7 +26,7 @@ erDiagram
         string supplierId FK
         string nomorPo UK
         string status "DRAFT|DIAJUKAN|DISETUJUI|DIKIRIM_SUPPLIER|DITERIMA_SEBAGIAN|DITERIMA_PENUH|DIBATALKAN"
-        int totalEstimasi "rupiah"
+        bigint totalEstimasi "rupiah"
         string dibuatOlehId FK
         datetime createdAt
     }
@@ -35,7 +35,7 @@ erDiagram
         string purchaseOrderId FK
         string bahanId FK
         decimal jumlahDipesan
-        int hargaSatuan "rupiah"
+        bigint hargaSatuan "rupiah"
     }
     PENERIMAAN_BARANG {
         string id PK
@@ -50,7 +50,7 @@ erDiagram
         string penerimaanBarangId FK
         string bahanId FK
         decimal jumlahDiterima
-        int hargaSatuanAktual "rupiah"
+        bigint hargaSatuanAktual "rupiah"
     }
     RETUR_PEMBELIAN {
         string id PK

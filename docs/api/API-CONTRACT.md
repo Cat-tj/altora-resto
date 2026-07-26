@@ -15,8 +15,11 @@ adalah rancangan kontrak, bukan API yang sudah berjalan. Lihat
 - Semua endpoint tenant-scoped mewajibkan resolusi tenant (lewat subdomain/slug atau
   klaim token) - tidak ada query yang boleh melewati filter `tenantId`/`outletId`
   (lihat `docs/arsitektur/ARSITEKTUR-SISTEM.md` bagian 3).
-- Uang selalu dalam **rupiah, integer**, tidak ada desimal di response JSON (mis.
-  `"totalAkhir": 125000`, bukan `125000.00`).
+- Uang selalu dalam **rupiah bulat, dikirim sebagai STRING** di JSON (mis.
+  `"totalAkhir": "125000"`, BUKAN `125000` sebagai JSON number dan BUKAN
+  `"125000.00"` dengan desimal) - lihat bagian 1a di bawah untuk kontrak
+  lengkap dan alasannya (ADR-034, `prisma/schema/schema.prisma` field uang
+  bertipe `BigInt`).
 - Waktu dalam ISO-8601 UTC (mis. `"createdAt": "2026-07-24T09:30:00Z"`).
 - ID entitas berupa string ULID (mis. `"01J9Z8Q5F5J1K3ZP9E1QK3F0YV"`).
 - Paginasi list: query `?halaman=1&ukuran=20`, response membawa `meta.totalData`,
@@ -37,6 +40,86 @@ adalah rancangan kontrak, bukan API yang sudah berjalan. Lihat
   terautentikasi, `403` tidak punya permission (lihat
   `docs/keamanan/PERMISSION-MATRIX.md`), `404` tidak ditemukan, `409` konflik state
   (mis. transisi status tidak valid), `422` bisnis-rule gagal, `500` galat server.
+
+## 1a. Serialisasi uang sebagai string (ADR-034, `Int`→`BigInt`)
+
+Sejak ADR-034 (`docs/engineering/DECISION-LOG.md`), seluruh field uang rupiah
+di database bertipe Prisma `BigInt` (Postgres `int8`), BUKAN `Int` lagi.
+Ini WAJIB tercermin di kontrak JSON API dengan aturan berikut - **belum ada
+handler API sungguhan di repo ini (batch ADR-034 murni schema+migrasi+
+dokumentasi kontrak), jadi bagian ini adalah kontrak yang WAJIB diikuti
+batch implementasi handler mendatang, bukan kode yang sudah berjalan.**
+
+**(a) Konvensi serialisasi - setiap field uang di SETIAP body request/response
+JSON adalah STRING, bukan JSON number.**
+
+```json
+{
+  "id": "01J9Z8Q5F5J1K3ZP9E1QK3F0YV",
+  "totalAkhir": "15000000",
+  "subtotal": "14500000",
+  "totalDiskon": "0",
+  "saldoTokoCache": "9223372036854775000"
+}
+```
+
+BUKAN `"totalAkhir": 15000000` (JSON number). Alasan: (1) `BigInt` JS TIDAK
+BISA diserialisasi native oleh `JSON.stringify` - `JSON.stringify({ n: 15000000n })`
+melempar `TypeError: Do not know how to serialize a BigInt` tanpa penanganan
+eksplisit; (2) sekalipun ditangani, JS `number` kehilangan presisi eksak di
+atas `Number.MAX_SAFE_INTEGER` (2^53 - 1 = 9.007.199.254.740.991) - nilai
+`BigInt` yang secara teknis valid (ceiling `int8` ~9,2×10^18) bisa melebihi
+itu, sehingga JSON number BUKAN representasi yang aman untuk seluruh
+jangkauan `BigInt`, walau dalam praktiknya rupiah sejauh ini jauh di bawah
+batas itu - aturan string dipilih supaya kontraknya benar SECARA UMUM,
+bukan "kebetulan aman untuk sekarang".
+
+**(b) Kewajiban lapisan API (batch implementasi mendatang, BELUM ada kode
+saat ini):**
+- **Response (server → klien):** setiap field `BigInt` dari Prisma Client
+  WAJIB di-`.toString()` eksplisit sebelum masuk body JSON. Prisma Client
+  mengembalikan `BigInt` NATIVE (tipe JS `bigint`) untuk kolom `BigInt` -
+  TIDAK otomatis menjadi string. Serializer/response-mapper bersama (lokasi
+  disepakati saat implementasi, kemungkinan `packages/api-shared` atau
+  setara) harus menangani konversi ini secara SERAGAM di satu tempat, bukan
+  di setiap handler secara ad-hoc, supaya tidak ada field uang yang lolos
+  tanpa `.toString()`.
+- **Request (klien → server):** setiap field uang yang diterima sebagai
+  string di body request WAJIB di-`BigInt(...)` parse eksplisit sebelum
+  dipakai di query Prisma (`BigInt("15000000")` bukan
+  `Number("15000000")`). Validasi Zod untuk field uang harus memakai skema
+  yang menerima STRING numerik (mis. regex `/^-?\d+$/` atau
+  `z.string().regex(...)`), BUKAN `z.number()`.
+- Field uang yang TIDAK dimigrasi (poin loyalitas `PoinRiwayat.jumlah`,
+  jumlah stempel `LedgerStempel.jumlah`/`HadiahStempel.jumlahStempelDibutuhkan`
+  - lihat ADR-034 Keputusan 1 untuk daftar lengkap pengecualian yang
+  disengaja) TETAP `Int` dan boleh dikirim sebagai JSON number biasa karena
+  bukan rupiah dan berada jauh di bawah ceiling `int4` (jumlah poin/stempel
+  realistis tidak pernah mendekati 2,1 miliar).
+
+**(c) Formatting tampilan - MURNI di sisi klien, tidak pernah string
+concatenation di server.** UI memformat nilai rupiah untuk ditampilkan ke
+pengguna memakai `Intl.NumberFormat('id-ID', { style: 'currency', currency:
+'IDR', maximumFractionDigits: 0 })` (atau setara di platform mobile) atas
+nilai `BigInt`/string yang diterima dari API, MENGHASILKAN string seperti
+`"Rp15.000.000"` HANYA untuk tampilan - nilai yang dikirim balik ke API
+(mis. saat submit form) tetap format kontrak string numerik mentah
+(`"15000000"`), bukan string yang sudah mengandung `"Rp"`/pemisah ribuan.
+Server TIDAK PERNAH melakukan formatting tampilan (concatenation `"Rp" +
+angka` atau sejenisnya) - itu murni tanggung jawab presentasi klien, server
+hanya mengirim angka mentah sebagai string kontrak di atas.
+
+**(d) Tidak ada kalkulasi uang dengan floating point** di lapisan mana pun
+(server, klien, maupun test) - konsisten dengan ADR-005 asli. Kalkulasi
+server-side memakai aritmetika `BigInt` native (`+`, `-`, `*`, `/` dengan
+pembulatan eksplisit karena `BigInt` division di JS truncate, bukan round -
+aturan pembulatan spesifik didokumentasikan terpisah saat implementasi
+`packages/promo`/`packages/pembayaran`, tidak berubah dari catatan ADR-005).
+Klien TIDAK melakukan kalkulasi uang sendiri untuk keputusan bisnis (mis.
+total akhir yang menentukan jumlah tagihan) - klien hanya menampilkan nilai
+yang sudah dihitung server; kalkulasi klien-side (jika ada, mis. preview UI
+sebelum submit) harus memakai `BigInt` JS native juga, tidak pernah
+`number`/floating point.
 
 ## 2. Autentikasi & Sesi (`packages/autentikasi`)
 
@@ -135,8 +218,8 @@ Contoh response `GET /api/v1/item-menu/{itemMenuId}`:
   "deskripsi": "Nasi goreng dengan telur mata sapi dan ayam suwir",
   "status": "AKTIF",
   "varian": [
-    { "id": "01J9...V1", "nama": "Porsi Biasa", "hargaTambahan": 0 },
-    { "id": "01J9...V2", "nama": "Porsi Jumbo", "hargaTambahan": 8000 }
+    { "id": "01J9...V1", "nama": "Porsi Biasa", "hargaTambahan": "0" },
+    { "id": "01J9...V2", "nama": "Porsi Jumbo", "hargaTambahan": "8000" }
   ],
   "modifierGrup": [
     { "id": "01J9...MG1", "nama": "Level Pedas", "wajibPilih": true, "minPilihan": 1, "maxPilihan": 1 }

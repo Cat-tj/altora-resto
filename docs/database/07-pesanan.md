@@ -26,11 +26,11 @@ erDiagram
         string kanal "KASIR|PELAYAN|QR_PELANGGAN"
         string nomorPesanan UK "unik per outlet per hari"
         string status "DRAF|DIKIRIM|MENUNGGU_PERSETUJUAN|DITERIMA|DITOLAK|MENUNGGU_PEMBAYARAN|DIKONFIRMASI|DIKIRIM_KE_DAPUR|SEDANG_DISIAPKAN|SIAP|DISAJIKAN|SELESAI|DIBATALKAN|DIRETUR"
-        int subtotal "rupiah"
-        int totalDiskon "rupiah"
-        int totalPajak "rupiah"
-        int totalServiceCharge "rupiah"
-        int totalAkhir "rupiah"
+        bigint subtotal "rupiah"
+        bigint totalDiskon "rupiah"
+        bigint totalPajak "rupiah"
+        bigint totalServiceCharge "rupiah"
+        bigint totalAkhir "rupiah"
         string dibuatOlehId FK
         datetime createdAt
         datetime dibatalkanPada "nullable"
@@ -41,29 +41,29 @@ erDiagram
         string itemMenuId FK
         string varianMenuId FK "nullable"
         int kuantitas
-        int hargaSatuan "rupiah, snapshot saat pemesanan (legacy - lihat kolom *Snapshot di bawah)"
+        bigint hargaSatuan "rupiah, snapshot saat pemesanan (legacy - lihat kolom *Snapshot di bawah)"
         string catatan "nullable, mis. tanpa es"
         string status "DRAF|DITERIMA|DIKIRIM_KE_DAPUR|DITAHAN|SEDANG_DISIAPKAN|SIAP|DISAJIKAN|DIBATALKAN|DIRETUR"
         string namaItemSnapshot "ALT-DEF-016, diisi sekali, tidak pernah diperbarui"
         string namaVarianSnapshot "nullable, ALT-DEF-016"
-        int hargaDasarSnapshot "rupiah, ALT-DEF-016"
-        int hargaVarianSnapshot "rupiah, default 0, ALT-DEF-016"
-        int hargaModifierSnapshot "rupiah, sum(ItemPesananModifier.totalSnapshot), ALT-DEF-016"
-        int diskonSnapshot "rupiah, default 0, ALT-DEF-016"
-        int pajakSnapshot "rupiah, default 0, ALT-DEF-016"
-        int serviceChargeSnapshot "rupiah, default 0, ALT-DEF-016"
-        int totalBarisSnapshot "rupiah, ALT-DEF-016"
+        bigint hargaDasarSnapshot "rupiah, ALT-DEF-016"
+        bigint hargaVarianSnapshot "rupiah, default 0, ALT-DEF-016"
+        bigint hargaModifierSnapshot "rupiah, sum(ItemPesananModifier.totalSnapshot), ALT-DEF-016"
+        bigint diskonSnapshot "rupiah, default 0, ALT-DEF-016"
+        bigint pajakSnapshot "rupiah, default 0, ALT-DEF-016"
+        bigint serviceChargeSnapshot "rupiah, default 0, ALT-DEF-016"
+        bigint totalBarisSnapshot "rupiah, ALT-DEF-016"
         string resepVersiId "nullable, forward-ref TANPA FK ke VersiResep (belum ada model, scope ALT-DEF-008/007), ALT-DEF-016"
     }
     ITEM_PESANAN_MODIFIER {
         string id PK
         string itemPesananId FK
         string modifierOpsiId FK
-        int hargaTambahan "rupiah, snapshot (legacy - lihat kolom *Snapshot di bawah)"
+        bigint hargaTambahan "rupiah, snapshot (legacy - lihat kolom *Snapshot di bawah)"
         string namaModifierSnapshot "ALT-DEF-016"
-        int hargaSnapshot "rupiah, ALT-DEF-016"
+        bigint hargaSnapshot "rupiah, ALT-DEF-016"
         int jumlah "default 1, kuantitas modifier ini (mis. extra cheese x2), ALT-DEF-016"
-        int totalSnapshot "rupiah, hargaSnapshot * jumlah, ALT-DEF-016"
+        bigint totalSnapshot "rupiah, hargaSnapshot * jumlah, ALT-DEF-016"
     }
     PESANAN_RIWAYAT_STATUS {
         string id PK

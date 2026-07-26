@@ -4,7 +4,7 @@ ERD dipecah per domain agar mudah dibaca. Semua entitas mengikuti aturan umum (l
 
 - ID memakai **ULID** (kolom `id String @id`).
 - Setiap tabel transaksional/tenant-scoped membawa `tenantId` dan (jika relevan) `outletId`.
-- Uang disimpan sebagai **Int** dalam rupiah (bukan Decimal/Float), no floating point.
+- Uang disimpan sebagai **BigInt** dalam rupiah (bukan Decimal/Float), no floating point (ADR-034, mengamandemen ADR-005 yang semula `Int` - dipindah ke `BigInt` karena field agregat/kumulatif seperti total penjualan harian per outlet dan saldo toko kumulatif berisiko realistis mendekati ceiling `Int`/int4 ~2,1 miliar pada skala bisnis multi-outlet besar; ceiling `BigInt`/int8 ~9,2×10^18). Field POIN loyalitas (`PoinRiwayat.jumlah`, `Keanggotaan.poinAktif`/`poinKumulatif`) dan jumlah STEMPEL (`LedgerStempel.jumlah`) TETAP `Int` karena bukan rupiah - lihat ADR-034 untuk daftar lengkap.
 - Timestamp disimpan **UTC** (`createdAt`, `updatedAt`, dan timestamp event spesifik seperti `paidAt`, `voidedAt`).
 - **Tidak ada hard-delete** pada data finansial, stok, dan audit - penghapusan dimodelkan lewat kolom status (`status`, `dibatalkanPada`, `membalikMutasiId`, dsb), bukan `DELETE` fisik. Pola reversal ledger (`MutasiStok`/`PoinRiwayat`/`LedgerStempel`/`LedgerSaldoToko`) memakai `membalikMutasiId` di baris PEMBALIK menunjuk mundur ke baris asal (ADR-032) - baris asal tidak pernah di-UPDATE.
 

@@ -97,7 +97,7 @@ erDiagram
         string lokasiSumberId FK "nullable"
         string lokasiTujuanId FK "nullable"
         string batchStokId FK "nullable, hasil alokasi FEFO/FIFO"
-        int hargaPerolehan "nullable, rupiah bulat (ADR-005)"
+        bigint hargaPerolehan "nullable, rupiah bulat (ADR-005)"
         string alasan "WAJIB (ADR-032) - justifikasi setiap baris"
         string catatan "nullable"
         string membalikMutasiId FK "nullable @unique, ADR-032: di baris PEMBALIK, menunjuk MUNDUR ke baris asal"
@@ -113,7 +113,7 @@ erDiagram
         datetime tanggalProduksi "nullable"
         datetime tanggalKedaluwarsa "nullable, kunci urut FEFO"
         decimal kuantitasAwal
-        int hargaPerolehan "rupiah bulat (ADR-005)"
+        bigint hargaPerolehan "rupiah bulat (ADR-005)"
         string lokasiStokId FK "nullable"
         string batchProduksiId FK "nullable @unique per tenant - SEAM ke domain produksi"
         string status "TERSEDIA|HABIS|KEDALUWARSA|DIBUANG"
@@ -196,7 +196,7 @@ erDiagram
         string alasanWasteId FK "WAJIB - bukan teks bebas (ALT-PSD-014)"
         decimal jumlah
         string satuanId FK
-        int nilaiKerugian "nullable, rupiah bulat"
+        bigint nilaiKerugian "nullable, rupiah bulat"
         string catatan "nullable, MELENGKAPI alasan berkode"
         string mutasiStokId FK "WAJIB @unique - jejak ledger"
         string dicatatOlehId FK
@@ -223,7 +223,7 @@ erDiagram
         int kedaluwarsaReservasiMenit "nullable"
         string metodeAlokasiBatch "FEFO|FIFO, default FEFO"
         boolean izinkanStokNegatif "default false"
-        int ambangSelisihOpname "nullable, rupiah bulat"
+        bigint ambangSelisihOpname "nullable, rupiah bulat"
     }
     STOK_OPNAME {
         string id PK

@@ -18,10 +18,10 @@ erDiagram
         string outletId FK
         string giliranKasirId FK "nullable, bisa merangkum >1 giliran"
         date tanggal
-        int totalPenjualan "rupiah"
-        int totalRefund "rupiah"
-        int totalDiskon "rupiah"
-        int selisihKas "rupiah, modalAkhirDihitung - modalAkhirSistem"
+        bigint totalPenjualan "rupiah"
+        bigint totalRefund "rupiah"
+        bigint totalDiskon "rupiah"
+        bigint selisihKas "rupiah, modalAkhirDihitung - modalAkhirSistem"
         string status "DRAF|DIVERIFIKASI"
         string diverifikasiOlehId FK "nullable"
     }
@@ -30,7 +30,7 @@ erDiagram
         string tenantId FK
         string outletId FK
         string kategoriBiayaId FK
-        int jumlah "rupiah"
+        bigint jumlah "rupiah"
         string keterangan
         string status "DIAJUKAN|DISETUJUI|DIBAYAR|DIBATALKAN"
         string dicatatOlehId FK

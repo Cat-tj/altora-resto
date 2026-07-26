@@ -26,9 +26,9 @@ erDiagram
         string tenantId FK
         string outletId FK
         string penggunaId FK
-        int modalAwal "rupiah"
-        int modalAkhirDihitung "rupiah, nullable sampai ditutup"
-        int modalAkhirSistem "rupiah, dihitung sistem"
+        bigint modalAwal "rupiah"
+        bigint modalAkhirDihitung "rupiah, nullable sampai ditutup"
+        bigint modalAkhirSistem "rupiah, dihitung sistem"
         string status "DIBUKA|DITUTUP_MENUNGGU_VERIFIKASI|DITUTUP_SELESAI"
         datetime dibukaPada
         datetime ditutupPada "nullable"
@@ -38,7 +38,7 @@ erDiagram
         string giliranKasirId FK
         string pesananId FK
         string jenis "PENJUALAN|REFUND|KOREKSI"
-        int jumlah "rupiah"
+        bigint jumlah "rupiah"
         datetime createdAt
     }
     METODE_BAYAR {
@@ -52,9 +52,9 @@ erDiagram
         string id PK
         string tenantId FK
         string outletId FK
-        int jumlah "rupiah, total peristiwa pembayaran ini"
-        int totalDiterima "rupiah, uang fisik diserahkan (alur TUNAI)"
-        int kembalian "rupiah"
+        bigint jumlah "rupiah, total peristiwa pembayaran ini"
+        bigint totalDiterima "rupiah, uang fisik diserahkan (alur TUNAI)"
+        bigint kembalian "rupiah"
         string status "DRAF|MENUNGGU|MENUNGGU_KONFIRMASI|DIBAYAR|GAGAL|DIBATALKAN|DIKOREKSI|DIKEMBALIKAN_SEBAGIAN|DIKEMBALIKAN"
         string dikonfirmasiOlehId FK "nullable, kasir/supervisor yang mengonfirmasi"
         datetime createdAt
@@ -65,7 +65,7 @@ erDiagram
         string tenantId FK
         string pembayaranId FK
         string pesananId FK
-        int jumlah "rupiah, bagian pembayaran ini yg diterapkan ke pesanan tsb"
+        bigint jumlah "rupiah, bagian pembayaran ini yg diterapkan ke pesanan tsb"
         datetime createdAt
     }
     PEMBAYARAN_METODE_BARIS {
@@ -73,15 +73,15 @@ erDiagram
         string tenantId FK
         string pembayaranId FK
         string metodeBayarId FK
-        int jumlah "rupiah, mekanisme pembayaran CAMPURAN"
+        bigint jumlah "rupiah, mekanisme pembayaran CAMPURAN"
     }
     KOREKSI_PEMBAYARAN {
         string id PK
         string tenantId FK
         string pembayaranId FK
         string alasan
-        int jumlahSebelum "rupiah"
-        int jumlahSesudah "rupiah"
+        bigint jumlahSebelum "rupiah"
+        bigint jumlahSesudah "rupiah"
         string dikoreksiOlehId FK
         datetime createdAt
     }
@@ -105,7 +105,7 @@ erDiagram
         string id PK
         string tenantId FK
         string pembayaranId FK
-        int jumlah "rupiah"
+        bigint jumlah "rupiah"
         string alasan
         string disetujuiOlehId FK
         datetime createdAt
