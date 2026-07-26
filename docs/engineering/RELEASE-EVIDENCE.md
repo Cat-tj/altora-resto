@@ -4644,3 +4644,69 @@ strategi artifact, batasan branch-protection.
 `docs/engineering/CORRECTION-LOOP-STATUS.md`: catatan superseded ditambahkan
 di kepala dokumen (dokumen itu membekukan snapshot 2026-07-25, sebelum deep
 correction loop - rewrite penuh didorong ke batch FINAL, bukan batch ini).
+
+## Pass verifikasi konsolidasi final deep-correction-loop (2026-07-27)
+
+Batch penutup - menjalankan ULANG suite validasi penuh satu kali terakhir,
+memverifikasi status setiap defect langsung dari `DEFECT-LEDGER.md`, dan
+menulis ulang `CORRECTION-LOOP-STATUS.md` sepenuhnya (lihat dokumen itu
+untuk laporan lengkap). Tidak ada perubahan schema pada batch ini -
+verifikasi murni.
+
+1. `npx prisma format --schema=prisma/schema/schema.prisma` - tidak ada diff
+   (`git diff --stat prisma/schema/schema.prisma` kosong setelah dijalankan).
+2. `npx prisma validate` - "The schema at prisma/schema/schema.prisma is
+   valid".
+3. `npx prisma generate` - berhasil.
+4. `npx tsc --noEmit -p packages/test-support` - exit 0, bersih.
+5. `bash scripts/test-architecture.sh` - **22/22 file lulus**.
+6. `bash scripts/test-database-integration.sh` - **17/17 file lulus**
+   terhadap `altora_resto_dev` (dijalankan lewat `tsx`, bukan
+   `node --experimental-strip-types` - Node v25.5.0 di environment ini
+   tidak me-resolve impor lintas-file `./x.js` -> `./x.ts` tanpa loader;
+   `scripts/test-database-integration.sh` sudah memakai
+   `./node_modules/.bin/tsx` sejak batch CI, jadi ini bukan regresi baru).
+7. `npx depcruise --config .dependency-cruiser.cjs --output-type err
+   packages apps` - exit 0, "29 dependency violations (0 errors, 0
+   warnings)" (info-level orphan notice saja).
+8. **Fresh-database redeploy penuh, dijalankan ulang satu kali terakhir**:
+   `DROP DATABASE altora_resto_dev` + `CREATE DATABASE altora_resto_dev` +
+   `npx prisma migrate deploy` dari KOSONG -> "All migrations have been
+   successfully applied." (15 migrasi). Suite penuh dijalankan ULANG setelah
+   redeploy: **22 architecture + 17 database-integration = 39/39 lulus**,
+   IDENTIK dengan hasil sebelum redeploy.
+9. `npx prisma migrate diff --from-schema-datasource=prisma/schema/schema.prisma
+   --to-schema-datamodel=prisma/schema/schema.prisma --script` - output
+   persis `-- This is an empty migration.` - NOL drift.
+10. Hitungan final (diverifikasi langsung, bukan diperkirakan):
+    - Model: **135** (`grep -c "^model "`). Enum: **75** (`grep -c "^enum "`).
+    - Migrasi resmi: **15** (`ls prisma/schema/migrations` minus
+      `migration_lock.toml`).
+    - File test: 22 architecture + 17 database-integration = **39**
+      (plus 1 file helper bersama `_pg-helper.ts`, bukan test tersendiri).
+    - Query `pg_catalog`/`information_schema` langsung terhadap
+      `altora_resto_dev` setelah redeploy penuh: **136 tabel** (`pg_tables`),
+      **32 trigger bisnis** ber-prefix `trg_*` (`pg_trigger`, termasuk 3
+      `CONSTRAINT TRIGGER ... DEFERRABLE`), **12 fungsi** PL/pgSQL
+      (`pg_proc`, schema `public`), **4 CHECK constraint** bernama
+      (`pg_constraint` `contype='c'`), **389 foreign key** + **136 primary
+      key** constraint (`pg_constraint` `contype='f'`/`'p'`), **284 index**
+      total di schema `public` (`pg_indexes`), **273** di antaranya unique.
+
+**Defect accounting final** (lihat `CORRECTION-LOOP-STATUS.md` bagian 2
+untuk breakdown lengkap): 56 baris total, cross-tab status x severity
+dihitung ulang langsung dari `DEFECT-LEDGER.md` (awk/grep, bukan disalin dari
+ringkasan lama). **25 defect KRITIS+TINGGI masih terbuka** (11/11 KRITIS,
+14/17 TINGGI) - Definition-of-Done "tidak ada KRITIS/TINGGI terbuka" TIDAK
+terpenuhi, dinyatakan eksplisit, bukan dibulatkan.
+
+Dokumen yang diperbarui batch ini: `CORRECTION-LOOP-STATUS.md` (rewrite
+penuh), `RISK-REGISTER.md` (RISK-016 s.d. RISK-019 baru: residual
+concurrency-race risk di 7 domain belum teraudit, gap ESLint ALT-DEF-056,
+CI belum diverifikasi eksekusi nyata, caveat generalisasi Postgres
+lintas-environment), `RELEASE-EVIDENCE.md` (entri ini).
+
+**Correction loop TIDAK dinyatakan selesai** - lihat
+`CORRECTION-LOOP-STATUS.md` bagian 8 untuk pernyataan penutup lengkap dan
+daftar prasyarat sebelum codebase ini bisa mendukung pengembangan
+fitur/handler nyata.
