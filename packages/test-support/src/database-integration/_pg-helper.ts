@@ -318,6 +318,45 @@ export async function createPesananFixture(
   };
 }
 
+/** Fixture gabungan Pesanan+ItemPesanan (createPesananFixture) + gudang/satuan/bahan
+ * SATU tenant/outlet yang sama - dipakai test siklus hidup stok (ADR-037:
+ * reservasi -> konsumsi -> waste) di
+ * `siklus-hidup-stok-invariants.test.ts`, di mana ReservasiStok butuh
+ * itemPesananId (dari Pesanan) DAN bahanId/gudangId (dari domain persediaan)
+ * yang konsisten satu tenant/outlet - `createBaseFixtures`/`createPesananFixture`
+ * sendiri-sendiri membuat tenant BERBEDA sehingga tidak bisa dipakai langsung. */
+export interface ReservasiFixture extends PesananFixture {
+  gudangId: string;
+  satuanId: string;
+  bahanId: string;
+}
+
+export async function createReservasiFixture(
+  client: pg.PoolClient,
+  opts: { status?: string; jumlahItem?: number; kuantitasPerItem?: number } = {},
+): Promise<ReservasiFixture> {
+  const pesanan = await createPesananFixture(client, opts);
+  const gudangId = fixtureId("gudang");
+  const satuanId = fixtureId("satuan");
+  const bahanId = fixtureId("bahan");
+
+  await client.query(
+    `INSERT INTO gudang (id, "tenantId", "outletId", nama, status) VALUES ($1, $2, $3, $4, 'AKTIF')`,
+    [gudangId, pesanan.tenantId, pesanan.outletId, `Gudang ${gudangId}`],
+  );
+  await client.query(
+    `INSERT INTO satuan (id, "tenantId", nama, simbol) VALUES ($1, $2, 'Kilogram', 'kg')`,
+    [satuanId, pesanan.tenantId],
+  );
+  await client.query(
+    `INSERT INTO bahan (id, "tenantId", nama, "kodeSku", "satuanDasarId", jenis, "stokMinimum", status)
+     VALUES ($1, $2, $3, $4, $5, 'BAHAN_BAKU', 0, 'AKTIF')`,
+    [bahanId, pesanan.tenantId, `Bahan ${bahanId}`, bahanId.slice(0, 10), satuanId],
+  );
+
+  return { ...pesanan, gudangId, satuanId, bahanId };
+}
+
 export async function createBaseFixtures(client: pg.PoolClient): Promise<Fixtures> {
   const tenantId = fixtureId("tenant");
   const outletId = fixtureId("outlet");
