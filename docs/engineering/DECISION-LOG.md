@@ -4263,3 +4263,129 @@ transaksi handler yang belum ada), kebijakan dead-letter konkret (ambang
 `attemptCount`). Publisher/consumer/relay-worker nyata TETAP tidak
 diimplementasikan - scope batch ini murni schema+migrasi+dokumentasi+test
 integrasi struktural, sama seperti seluruh batch platform sejak ADR-016.
+
+## ADR-040: Redesain target `Notification` - `lingkupTarget` eksplisit, `peranId`, promosi `outletId` menjadi composite-FK (menutup deferral ADR-033 Keputusan 4)
+
+**Status:** DITERIMA
+
+**Konteks.** ADR-033 Keputusan 4 secara eksplisit menyisakan gap: perbaikan
+`Notification.penggunaId` -> `keanggotaanTenantId` pada batch itu HANYA
+memperbaiki validasi actor (kolom yang ada menjamin merujuk keanggotaan yang
+sah), BUKAN redesain targeting yang sebenarnya (siapa yang SEHARUSNYA
+menerima notifikasi broadcast). Instruksi batch ini eksplisit: "Jangan
+gunakan kombinasi longgar tenantId/outletId/penggunaId global - gunakan
+target keanggotaanTenantId/keanggotaanOutletId opsional/peranId opsional -
+bila broadcast, simpan aturan target EKSPLISIT, jangan hanya memakai
+penggunaId = NULL - query pembaca harus tenant/outlet-scoped - tambahkan
+test pengguna tenant lain tidak dapat membaca notifikasi."
+
+**Keputusan 1 - kolom targeting: `keanggotaanTenantId` (tetap), `outletId`
+(dipromosikan dari informational-only menjadi composite-FK), `peranId`
+(baru).** Instruksi menyebut nama field "keanggotaanOutletId" untuk kasus
+"semua orang dengan akses ke outlet ini" - setelah dianalisis, nama itu
+secara semantik SALAH untuk kasus ini: satu baris `KeanggotaanOutlet` hanya
+mewakili SATU membership SATU orang (FK ke satu baris spesifik), bukan
+"semua orang yang punya akses". Targeting "OUTLET"/"PERAN_DI_OUTLET" adalah
+tentang identitas OUTLET itu sendiri, bukan satu membership tertentu.
+`Notification` sudah membawa `outletId` sejak ADR-016 (informational-only,
+pola sama seperti `AuditLog.outletId`) - dipromosikan menjadi composite-FK
+tervalidasi `(tenantId, outletId) -> Outlet(tenantId, id)`, BUKAN menambah
+kolom kedua yang membawa informasi identik (itu akan redundan, bertentangan
+dengan pola composite-FK lain di skema ini yang selalu reuse kolom identitas
+yang sudah ada - lihat ALT-DEF-010/ADR-013). `peranId` baru, composite-FK
+`(tenantId, peranId) -> Peran(tenantId, id)` - membutuhkan `@@unique([tenantId,
+id])` baru di `Peran` (sebelumnya hanya `@@unique([tenantId, kode])`).
+
+**Keputusan 2 - `lingkupTarget` enum WAJIB (bukan nullable), menutup "jangan
+hanya memakai penggunaId = NULL".** Enum `LingkupTargetNotifikasi`
+(`PENGGUNA_SPESIFIK`/`OUTLET`/`PERAN_DI_TENANT`/`PERAN_DI_OUTLET`/
+`SELURUH_TENANT`) mendeklarasikan niat targeting SECARA EKSPLISIT setiap
+baris - tidak ada default, setiap penulis baris harus secara sadar memilih
+satu nilai. NULL-ness `keanggotaanTenantId`/`outletId`/`peranId` menjadi
+KONSEKUENSI TERVERIFIKASI dari `lingkupTarget` yang dipilih (lewat CHECK
+constraint di Keputusan 3), bukan kebetulan/default diam-diam seperti
+sebelumnya (tiga kolom NULL sekaligus dulu berarti "broadcast", sekarang
+"broadcast" hanya bisa dicapai lewat `lingkupTarget = SELURUH_TENANT` yang
+eksplisit).
+
+**Keputusan 3 - matriks kombinasi, ditegakkan CHECK constraint (bukan hanya
+app-level).** Prisma DSL tidak punya cara menyatakan CHECK constraint
+multi-kolom - ditulis tangan di migrasi (pola yang sama seperti trigger
+partial-mutability ADR-039), diverifikasi lewat `\d notification` nyata dan
+test database-integration (kombinasi valid diterima, tidak valid ditolak).
+
+| `lingkupTarget` | `keanggotaanTenantId` | `outletId` | `peranId` | Arti |
+|---|---|---|---|---|
+| `PENGGUNA_SPESIFIK` | wajib ada | wajib null | wajib null | satu keanggotaan tenant spesifik |
+| `OUTLET` | wajib null | wajib ada | wajib null | semua orang dengan akses ke outlet ini |
+| `PERAN_DI_TENANT` | wajib null | wajib null | wajib ada | semua pemegang peran ini di seluruh tenant |
+| `PERAN_DI_OUTLET` | wajib null | wajib ada | wajib ada | semua pemegang peran ini DI outlet ini |
+| `SELURUH_TENANT` | wajib null | wajib null | wajib null | broadcast tanpa filter apa pun |
+
+Kombinasi `keanggotaanTenantId` + `peranId` sekaligus TIDAK PERNAH valid
+(kontradiktif - satu orang spesifik tidak butuh filter peran, tidak ada
+baris matriks untuk kombinasi itu) - ditolak CHECK constraint karena tidak
+cocok baris matriks mana pun. Kombinasi `outletId` + `peranId` sekaligus
+(tanpa `keanggotaanTenantId`) VALID dan bermakna (`PERAN_DI_OUTLET`, mis.
+"semua Kasir di Outlet X").
+
+**Keputusan 4 - kontrak query pembaca EKSPLISIT (kategori C, app-level,
+tidak bisa ditegakkan constraint).** Ditulis penuh di
+`docs/api/API-CONTRACT.md` bagian 17.2.1 karena belum ada kode handler yang
+menjalankannya (batch ini schema+migrasi+dokumentasi+test saja, sama
+seperti seluruh batch platform sejak ADR-016) - tapi predikat inilah
+satu-satunya hal yang mencegah kebocoran lintas tenant begitu handler mulai
+ditulis, jadi ditulis SEKARANG:
+
+```sql
+SELECT * FROM notification
+WHERE "tenantId" = :callerTenantId
+  AND (
+    ("lingkupTarget" = 'PENGGUNA_SPESIFIK' AND "keanggotaanTenantId" = :callerKeanggotaanTenantId)
+    OR ("lingkupTarget" = 'OUTLET'          AND "outletId" = ANY(:callerOutletIds))
+    OR ("lingkupTarget" = 'PERAN_DI_TENANT' AND "peranId" = ANY(:callerRoleIds))
+    OR ("lingkupTarget" = 'PERAN_DI_OUTLET' AND "peranId" = ANY(:callerRoleIds) AND "outletId" = ANY(:callerOutletIds))
+    OR ("lingkupTarget" = 'SELURUH_TENANT')
+  )
+```
+
+Guard `tenantId = :callerTenantId` di level TERLUAR adalah bagian PALING
+kritis: baris `SELURUH_TENANT` tidak punya SATU PUN kolom penyaring lain
+(ketiganya NULL per CHECK constraint) - `tenantId` adalah SATU-SATUNYA
+pembeda broadcast tenant A dari broadcast tenant B. Predikat yang lupa
+memasang guard ini akan membocorkan broadcast SEMUA tenant ke SETIAP
+caller.
+
+**Verifikasi nyata - kasus adversarial.** Test baru
+`notification-target-lintas-tenant-invariants.test.ts` membuat DUA tenant
+independen (A, B), masing-masing dengan `Peran` ber-`kode` IDENTIK
+("KASIR") untuk membuktikan kemiripan nama peran lintas tenant tidak pernah
+membingungkan predikat, dan masing-masing punya notifikasi
+`SELURUH_TENANT`. Predikat "rentan" yang SENGAJA menghapus guard
+`tenantId = :callerTenantId` di level terluar TERBUKTI membocorkan
+notifikasi broadcast tenant B ke caller tenant A; predikat lengkap (dengan
+guard) TERBUKTI TIDAK membocorkannya - caller A menerima TEPAT 5 notifikasi
+miliknya sendiri (satu per `lingkupTarget`), caller B menerima TEPAT 2
+miliknya sendiri, simetris dan tidak ada kebocoran ke arah mana pun. Test
+tambahan membuktikan CHECK constraint menerima kelima kombinasi valid dan
+menolak lima kombinasi tidak valid (kontradiktif/salah lingkup).
+
+**Migrasi + redeploy nyata.** Migrasi
+`20260726170000_redesain_target_notifikasi` dihasilkan
+`prisma migrate diff --from-schema-datasource --to-schema-datamodel` untuk
+bagian AlterEnum/AlterTable/CreateIndex/AddForeignKey, CHECK constraint
+ditulis tangan, diterapkan ke `altora_resto_dev` via `psql` lalu
+`prisma migrate resolve --applied` (tabel `notification` 0 baris, aman
+tanpa backfill). Diverifikasi `\d notification` (kolom baru, FK baru, CHECK
+constraint terpasang) dan `\d peran` (`@@unique([tenantId, id])` baru).
+Redeploy fresh-database (`DROP DATABASE` + `CREATE DATABASE` +
+`prisma migrate deploy` dari kosong, 14 migrasi, struktur identik) + re-run
+SELURUH test (22 architecture + 13 database-integration, termasuk file
+baru) + `tsc --noEmit -p packages/test-support` (exit 0) - lihat
+`RELEASE-EVIDENCE.md` bagian ADR-040 untuk transkrip lengkap.
+
+**Yang TETAP di luar cakupan batch ini (app-level, kategori C):** kode
+handler/endpoint `GET /api/v1/notifikasi` dan `POST
+/api/v1/notifikasi/{id}/read` yang benar-benar menjalankan predikat di
+Keputusan 4 - scope batch ini murni schema+migrasi+dokumentasi+test
+integrasi struktural, sama seperti seluruh batch platform sejak ADR-016.

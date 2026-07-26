@@ -3932,3 +3932,207 @@ tekstual). Sub-gap model platform (`UndanganTenant`/`BackupJob`/
 `AntrianCetak`) TETAP terbuka sepenuhnya, di luar scope batch ini. `ALT-DEF-050`
 (baru) DITUTUP dalam batch yang sama ia ditemukan (koreksi ringkasan angka
 `INVARIAN-BELUM-DITEGAKKAN.md`).
+
+## Batch ADR-040: Redesain target `Notification` (menutup deferral ADR-033 Keputusan 4)
+
+### 1. Migrasi diterapkan ke `altora_resto_dev`
+
+Alur: `prisma migrate diff --from-schema-datasource --to-schema-datamodel`
+untuk bagian AlterEnum/AlterTable/CreateIndex/AddForeignKey -> tinjau
+manual -> CHECK constraint ditulis tangan (tidak bisa dihasilkan Prisma
+DSL) -> psql -> `prisma migrate resolve --applied`.
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -f prisma/schema/migrations/20260726170000_redesain_target_notifikasi/migration.sql
+CREATE TYPE
+ALTER TABLE
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+
+$ npx prisma migrate resolve --applied 20260726170000_redesain_target_notifikasi --schema=prisma/schema/schema.prisma
+Migration 20260726170000_redesain_target_notifikasi marked as applied.
+
+$ npx prisma migrate diff --from-schema-datasource prisma/schema/schema.prisma --to-schema-datamodel prisma/schema/schema.prisma --script
+-- This is an empty migration.
+```
+
+Diff kosong mengonfirmasi schema.prisma dan database `altora_resto_dev`
+persis sinkron setelah migrasi diterapkan.
+
+### 2. Verifikasi struktur nyata (`\d notification`, `\d peran`)
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -c "\d notification"
+                                   Table "public.notification"
+       Column        |              Type              | Collation | Nullable |      Default
+---------------------+--------------------------------+-----------+----------+-------------------
+ id                  | text                           |           | not null |
+ tenantId            | text                           |           | not null |
+ outletId            | text                           |           |          |
+ tipe                | "TipeNotifikasi"               |           | not null |
+ judul               | text                           |           | not null |
+ pesan               | text                           |           | not null |
+ data                | jsonb                          |           |          |
+ dibacaPada          | timestamp(3) without time zone |           |          |
+ createdAt           | timestamp(3) without time zone |           | not null | CURRENT_TIMESTAMP
+ keanggotaanTenantId | text                           |           |          |
+ lingkupTarget       | "LingkupTargetNotifikasi"      |           | not null |
+ peranId             | text                           |           |          |
+Indexes:
+    "notification_pkey" PRIMARY KEY, btree (id)
+    "notification_keanggotaanTenantId_dibacaPada_idx" btree ("keanggotaanTenantId", "dibacaPada")
+    "notification_tenantId_lingkupTarget_idx" btree ("tenantId", "lingkupTarget")
+    "notification_tenantId_outletId_peranId_idx" btree ("tenantId", "outletId", "peranId")
+Check constraints:
+    "notification_lingkup_target_kombinasi_check" CHECK (five-clause OR matching the ADR-040 combination matrix)
+Foreign-key constraints:
+    "notification_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES tenant(id) ...
+    "notification_tenantId_keanggotaanTenantId_fkey" FOREIGN KEY ("tenantId", "keanggotaanTenantId") REFERENCES keanggotaan_tenant("tenantId", id) ...
+    "notification_tenantId_outletId_fkey" FOREIGN KEY ("tenantId", "outletId") REFERENCES outlet("tenantId", id) ...
+    "notification_tenantId_peranId_fkey" FOREIGN KEY ("tenantId", "peranId") REFERENCES peran("tenantId", id) ...
+
+$ psql -U icat -h localhost -d altora_resto_dev -c "\d peran" | grep -A2 Indexes
+Indexes:
+    "peran_pkey" PRIMARY KEY, btree (id)
+    "peran_tenantId_id_key" UNIQUE, btree ("tenantId", id)
+```
+
+### 3. Test baru database-integration (`notification-target-lintas-tenant-invariants.test.ts`)
+
+```
+$ ./packages/test-support/node_modules/.bin/tsx packages/test-support/src/database-integration/notification-target-lintas-tenant-invariants.test.ts
+OK: database-integration ADR-040 (redesain target notifikasi - CHECK constraint kombinasi + predikat query tenant-safe + kasus adversarial lintas tenant) lulus.
+```
+
+Tiga fungsi test dijalankan di dalam file ini (semua PASS):
+
+1. `testKombinasiValidDiterimaSemuaLingkup` - kelima kombinasi valid matriks
+   ADR-040 (`PENGGUNA_SPESIFIK`, `OUTLET`, `PERAN_DI_TENANT`,
+   `PERAN_DI_OUTLET`, `SELURUH_TENANT`) berhasil di-INSERT.
+2. `testKombinasiTidakValidDitolak` - lima kombinasi TIDAK valid (kontradiktif
+   atau salah lingkup) SEMUA ditolak CHECK constraint
+   `notification_lingkup_target_kombinasi_check`: `PENGGUNA_SPESIFIK` dengan
+   `peranId` terisi, `OUTLET` dengan `keanggotaanTenantId` terisi,
+   `PERAN_DI_TENANT` dengan `outletId` terisi, `SELURUH_TENANT` dengan
+   `outletId` terisi, `PENGGUNA_SPESIFIK` tanpa `keanggotaanTenantId`.
+3. `testAdversarialLintasTenant` - **kasus adversarial nyata**: dua tenant
+   independen (A, B) masing-masing dengan `Peran` ber-`kode` IDENTIK
+   ("KASIR") dan notifikasi `SELURUH_TENANT` masing-masing.
+   - Predikat "rentan" (SENGAJA menghapus guard `tenantId = :callerTenantId`
+     di level terluar, sisanya identik predikat kontrak) dipanggil sebagai
+     caller A: **TERBUKTI** mengembalikan `notifB_broadcast` (notifikasi
+     `SELURUH_TENANT` milik tenant B) - bukti konkret kenapa guard ini
+     penting, bukan asumsi teoretis.
+   - Predikat lengkap (kontrak `API-CONTRACT.md` 17.2.1, dengan guard)
+     dipanggil sebagai caller A: mengembalikan TEPAT 5 notifikasi milik A
+     sendiri (satu per `lingkupTarget`), TIDAK SATU PUN milik B - termasuk
+     TIDAK bocor lewat `peranId`/`outletId` meski kode peran A dan B sama
+     ("KASIR").
+   - Simetri: predikat lengkap dipanggil sebagai caller B mengembalikan
+     TEPAT 2 notifikasi milik B (`SELURUH_TENANT` + `PERAN_DI_TENANT`),
+     TIDAK SATU PUN milik A.
+
+### 4. Regresi architecture test (`idempotency-outbox-notification-constraints.test.ts`)
+
+```
+$ node --experimental-strip-types packages/test-support/src/architecture/idempotency-outbox-notification-constraints.test.ts
+OK: seluruh assertion arsitektur ALT-DEF-017 lulus.
+```
+
+Assertion baru ditambahkan untuk `peranId`, `lingkupTarget`, relasi `outlet`/
+`peran`, index `(tenantId, outletId, peranId)`, dan enum
+`LingkupTargetNotifikasi` (lima varian) - semua lulus tanpa mengubah
+assertion lama (padding kolom Prisma-format tidak berubah karena
+`keanggotaanTenantId` tetap kolom terpanjang).
+
+### 5. Fixture yang diperbaiki (proaktif, sebelum `tsc` dijalankan)
+
+- `packages/test-support/src/architecture/prisma-client-shape-platform-infra.test.ts`:
+  `contohNotification` ditambah `outletId: null`/`peranId: null`/
+  `lingkupTarget: "PENGGUNA_SPESIFIK"`; tiga fixture BARU ditambahkan
+  (`contohNotificationBroadcastOutlet`, `contohNotificationBroadcastPeranDiOutlet`,
+  `contohNotificationSeluruhTenant`) membuktikan seluruh nilai
+  `lingkupTarget` type-check terhadap `Prisma.NotificationUncheckedCreateInput`
+  yang digenerate nyata, bukan cuma `PENGGUNA_SPESIFIK`.
+- `packages/test-support/src/database-integration/actor-keanggotaan-tenant-outlet-invariants.test.ts`:
+  raw INSERT ke `notification` di `testNotificationKeanggotaanLintasTenantDitolak`
+  ditambah kolom `lingkupTarget` (`'PENGGUNA_SPESIFIK'`) - tanpa ini INSERT
+  akan gagal NOT NULL violation SEBELUM mencapai assertion FK yang
+  sebenarnya diuji fungsi ini.
+
+### 6. Full test suite (sebelum redeploy)
+
+```
+architecture: 22 passed, 0 failed
+database-integration: 13 passed, 0 failed
+tsc --noEmit -p packages/test-support: exit 0
+```
+
+Naik dari 34 file (22 architecture + 12 database-integration) sebelum
+batch ini menjadi 35 file (22 architecture + 13 database-integration) -
+satu file database-integration baru
+(`notification-target-lintas-tenant-invariants.test.ts`).
+
+### 7. Redeploy fresh-database
+
+```
+$ psql -U icat -h localhost -d postgres -c "DROP DATABASE IF EXISTS altora_resto_dev;"
+DROP DATABASE
+$ psql -U icat -h localhost -d postgres -c "CREATE DATABASE altora_resto_dev;"
+CREATE DATABASE
+$ npx prisma migrate deploy --schema=prisma/schema/schema.prisma
+... 14 migrations applied (baseline_correction_loop ... redesain_target_notifikasi) ...
+All migrations have been successfully applied.
+
+$ npx prisma migrate diff --from-schema-datasource prisma/schema/schema.prisma --to-schema-datamodel prisma/schema/schema.prisma --script
+-- This is an empty migration.
+
+$ npx prisma migrate status --schema=prisma/schema/schema.prisma
+14 migrations found in prisma/migrations
+Database schema is up to date!
+```
+
+Seluruh 35 file test (22 architecture + 13 database-integration) dijalankan
+ulang terhadap database fresh - SEMUA lulus lagi:
+
+```
+architecture fresh: 22 passed, 0 failed
+database-integration fresh: 13 passed, 0 failed
+tsc --noEmit -p packages/test-support (fresh): exit 0
+```
+
+**Before/after batch ini:** SEBELUM = 34 file (22 architecture + 12
+database-integration), 34/34 passed. SESUDAH = 35 file (22 architecture +
+13 database-integration), 35/35 passed - baik sebelum maupun sesudah
+fresh-database redeploy.
+
+### 8. Traceability
+
+`INVARIAN-BELUM-DITEGAKKAN.md`: baris baru `INV-060` (kategori A - CHECK
+constraint kombinasi `lingkupTarget`), `INV-061` (kategori C - kontrak
+predikat query pembaca tenant/outlet/peran-scoped). Hitungan ulang NYATA
+dari tabel (`awk`/`grep -c` langsung): kategori A=23, B=3, C=18, D=6, E=13,
+total=63 baris (naik dari 61 sebelum batch ini).
+
+`DECISION-LOG.md`: ADR-040 baru - matriks kombinasi targeting lengkap,
+rasional `outletId` dipromosikan (bukan kolom baru `keanggotaanOutletId`
+seperti disebut instruksi asli), desain `lingkupTarget` enum wajib, dan
+predikat query pembaca persis.
+
+`API-CONTRACT.md`: bagian 17.2.1 baru - predikat SQL lengkap + rasional
+kenapa guard `tenantId` di level terluar kritis, dengan referensi ke test
+adversarial sebagai bukti.
+
+`docs/database/15-platform-infra.md`: ERD `NOTIFICATION` diperbarui (kolom
+baru + FK baru + CHECK constraint), matriks kombinasi, dan rasional
+`outletId` vs `keanggotaanOutletId`.
+
+Tidak ada defect baru dicatat di `DEFECT-LEDGER.md` pada batch ini - seluruh
+gap yang ditemukan (nama field instruksi asli vs desain yang benar secara
+semantik) diselesaikan LANGSUNG dalam desain batch ini sendiri (didokumentasikan
+sebagai keputusan desain di ADR-040), bukan defect terbuka yang menunggu
+batch lain.

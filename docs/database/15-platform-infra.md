@@ -62,15 +62,17 @@ erDiagram
     NOTIFICATION {
         string id PK
         string tenantId FK
-        string outletId "nullable"
-        string keanggotaanTenantId FK "nullable, -> KEANGGOTAAN_TENANT, composite (tenantId, keanggotaanTenantId) - ADR-033 (sebelumnya penggunaId -> Pengguna langsung); lihat catatan targeting di bawah"
+        string outletId FK "nullable, -> OUTLET, composite (tenantId, outletId) - ADR-040 (dipromosikan dari informational-only); wajib diisi HANYA saat lingkupTarget IN (OUTLET, PERAN_DI_OUTLET)"
+        string keanggotaanTenantId FK "nullable, -> KEANGGOTAAN_TENANT, composite (tenantId, keanggotaanTenantId) - ADR-033/040; wajib diisi HANYA saat lingkupTarget = PENGGUNA_SPESIFIK"
+        string peranId FK "nullable, -> PERAN, composite (tenantId, peranId) - ADR-040; wajib diisi HANYA saat lingkupTarget IN (PERAN_DI_TENANT, PERAN_DI_OUTLET)"
+        string lingkupTarget "ADR-040: PENGGUNA_SPESIFIK|OUTLET|PERAN_DI_TENANT|PERAN_DI_OUTLET|SELURUH_TENANT - WAJIB diisi, deklarasi eksplisit niat targeting, lihat matriks kombinasi di bawah"
         string tipe "PESANAN_QR_MASUK|PESANAN_BERUBAH|PESANAN_SIAP|..."
         string judul
         string pesan
         json data "nullable - payload deep-link, mis. {orderId: ...}"
         datetime dibacaPada "nullable"
         datetime createdAt
-        note "@@index([keanggotaanTenantId, dibacaPada]) - query unread"
+        note "@@index([keanggotaanTenantId, dibacaPada]); @@index([tenantId, outletId, peranId]); @@index([tenantId, lingkupTarget]); CHECK notification_lingkup_target_kombinasi_check (ADR-040)"
     }
 ```
 
@@ -285,27 +287,48 @@ eksternal apa pun (lihat ADR-016 Keputusan 4). Klien membaca baris ini lewat
 polling atau realtime (`GET /api/v1/notifikasi`), dan menandainya dibaca
 (`POST /api/v1/notifikasi/{id}/read` mengisi `dibacaPada`).
 
-**Targeting saat `keanggotaanTenantId` NULL:** notifikasi broadcast (mis.
-`STOK_KRITIS` untuk siapa pun berperan GUDANG di suatu outlet) tidak
-mereferensikan satu `KeanggotaanTenant` tertentu. Pass ini SENGAJA tidak
-menambah model `NotificationTarget` (many-to-many ke penerima) - lihat
-ADR-016 Keputusan 5 untuk trade-off lengkapnya. Ketika
-`keanggotaanTenantId IS NULL`, menentukan siapa yang berhak melihat baris
-ini adalah tanggung jawab service-layer (filter `outletId` + peran pemanggil
-saat query), bukan dijamin skema.
+**ADR-040 - redesain targeting lengkap (menutup deferral ADR-033 Keputusan
+4).** `penggunaId` (FK langsung ke `Pengguna`) sudah berpindah ke
+`keanggotaanTenantId` (composite-FK ke `KeanggotaanTenant`) sejak ADR-033 -
+itu HANYA memperbaiki VALIDASI ACTOR. Batch ini menambah targeting yang
+SEBENARNYA: `outletId` (dipromosikan dari informational-only menjadi
+composite-FK tervalidasi ke `Outlet`), `peranId` (composite-FK baru ke
+`Peran`), dan `lingkupTarget` (enum wajib yang mendeklarasikan niat
+targeting secara eksplisit, DITEGAKKAN CHECK constraint
+`notification_lingkup_target_kombinasi_check`).
 
-**ADR-033 - `penggunaId` -> `keanggotaanTenantId` (perbaikan TRIVIAL,
-BUKAN redesain targeting).** Field ini berpindah dari FK langsung ke
-`Pengguna` (identitas global) menjadi composite-FK ke `KeanggotaanTenant`
-(`(tenantId, keanggotaanTenantId) -> KeanggotaanTenant(tenantId, id)`) -
-penerapan pola yang sama seperti seluruh field aktor lain di batch ADR-033,
-karena `Notification` sudah membawa `tenantId` sendiri. Ini HANYA
-memperbaiki VALIDASI ACTOR (kolom yang ada sekarang menjamin merujuk
-keanggotaan yang sah untuk tenant ini) - redesain TARGETING yang lebih
-dalam (`keanggotaanOutletId` untuk notifikasi outlet-scoped, `peranId`
-untuk broadcast-per-peran, model `NotificationTarget` terpisah) TETAP
-di luar cakupan batch ini, dicadangkan untuk batch "perbaiki notification
-targeting" terpisah (lihat ADR-016 dan ADR-033 di
-`docs/engineering/DECISION-LOG.md`).
+**Matriks kombinasi valid** (baris di luar tabel ini DITOLAK level database):
+
+| `lingkupTarget` | `keanggotaanTenantId` | `outletId` | `peranId` | Arti |
+|---|---|---|---|---|
+| `PENGGUNA_SPESIFIK` | wajib ada | wajib null | wajib null | satu keanggotaan tenant spesifik |
+| `OUTLET` | wajib null | wajib ada | wajib null | semua orang dengan akses ke outlet ini |
+| `PERAN_DI_TENANT` | wajib null | wajib null | wajib ada | semua pemegang peran ini di seluruh tenant |
+| `PERAN_DI_OUTLET` | wajib null | wajib ada | wajib ada | semua pemegang peran ini DI outlet ini |
+| `SELURUH_TENANT` | wajib null | wajib null | wajib null | broadcast tanpa filter apa pun |
+
+`keanggotaanTenantId` + `peranId` sekaligus TIDAK PERNAH valid (kontradiktif
+- satu orang spesifik tidak butuh filter peran); tidak ada baris matriks
+untuk kombinasi itu.
+
+**Kenapa `keanggotaanOutletId` (nama yang disebut instruksi asli) menjadi
+`outletId` yang dipromosikan, bukan kolom baru:** targeting "OUTLET"/
+"PERAN_DI_OUTLET" berarti "SIAPA PUN yang punya akses ke outlet ini", yaitu
+identitas OUTLET itu sendiri - satu baris `KeanggotaanOutlet` hanya mewakili
+SATU membership SATU orang, tidak bisa berarti "semua". `Notification`
+sudah membawa `outletId` sejak ADR-016 (informational-only, pola sama
+seperti `AuditLog.outletId`) - dipromosikan menjadi composite-FK tervalidasi
+`(tenantId, outletId) -> Outlet(tenantId, id)` alih-alih menambah kolom
+kedua yang membawa informasi identik (redundan, bertentangan dengan pola
+composite-FK lain di skema ini yang selalu reuse kolom identitas yang
+sudah ada - lihat ALT-DEF-010/ADR-013).
+
+**Kontrak query pembaca (tenant/outlet-scoped) - lihat
+`docs/api/API-CONTRACT.md` bagian 17.2.1 untuk predikat SQL lengkap dan
+rasional kenapa guard `tenantId = :callerTenantId` di level terluar adalah
+bagian paling kritis dari kontrak ini** (dibuktikan lewat kasus adversarial
+nyata di `packages/test-support/src/database-integration/notification-target-lintas-tenant-invariants.test.ts`).
+Ini murni kontrak APLIKASI (kategori C) - tidak ada constraint database yang
+bisa memaksa bentuk klausa `WHERE` sebuah `SELECT`.
 
 Kembali ke [README.md](./README.md) untuk indeks ERD domain lain.

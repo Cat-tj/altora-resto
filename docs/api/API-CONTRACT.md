@@ -1046,8 +1046,70 @@ dokumen ini (bukan duplikat dari pass sebelumnya).
 
 | Metode | Path | Deskripsi |
 |---|---|---|
-| GET | `/api/v1/notifikasi` | Daftar `Notification` milik pengguna yang sedang login (join implisit penggunaId = pengguna aktif ATAU broadcast sesuai `outletId`+peran, lihat catatan targeting `penggunaId` nullable di `docs/database/15-platform-infra.md`), diurutkan terbaru dulu, filter opsional `?belumDibaca=true` (`dibacaPada IS NULL`). |
-| POST | `/api/v1/notifikasi/{id}/read` | Tandai satu `Notification` sebagai dibaca (`dibacaPada = now()`). Idempotent secara alami - memanggil ulang pada notifikasi yang sudah dibaca tidak mengubah apa pun selain kemungkinan `dibacaPada` (kebijakan: pertahankan waktu baca PERTAMA, jangan timpa dengan `now()` pada panggilan kedua). |
+| GET | `/api/v1/notifikasi` | Daftar `Notification` yang boleh dibaca caller yang sedang login - **WAJIB memakai predikat query tenant/outlet-scoped persis di bagian 17.2.1 di bawah** (ADR-040), diurutkan terbaru dulu, filter opsional `?belumDibaca=true` (`dibacaPada IS NULL`). |
+| POST | `/api/v1/notifikasi/{id}/read` | Tandai satu `Notification` sebagai dibaca (`dibacaPada = now()`). Idempotent secara alami - memanggil ulang pada notifikasi yang sudah dibaca tidak mengubah apa pun selain kemungkinan `dibacaPada` (kebijakan: pertahankan waktu baca PERTAMA, jangan timpa dengan `now()` pada panggilan kedua). Handler WAJIB memverifikasi baris yang di-update lolos predikat 17.2.1 yang SAMA sebelum UPDATE (bukan hanya `WHERE id = :id`) - kalau tidak, endpoint ini sendiri menjadi celah baca lintas-tenant (caller bisa menandai/mengintip keberadaan notifikasi tenant lain lewat 404 vs 200). |
+
+#### 17.2.1 Kontrak WAJIB: predikat query pembaca tenant/outlet-scoped (ADR-040)
+
+**Status: KONTRAK DOKUMENTASI SAJA - belum ada kode handler yang menjalankan
+predikat ini** (lihat batas cakupan di bagian 18). Ditulis di sini SEKARANG
+(bukan ditunda sampai handler ada) karena predikat inilah satu-satunya hal
+yang mencegah kebocoran notifikasi lintas tenant begitu handler mulai
+ditulis - lihat `docs/engineering/DECISION-LOG.md` ADR-040 untuk rasional
+lengkap dan matriks kombinasi `lingkupTarget` <-> field targeting, dan
+`packages/test-support/src/database-integration/notification-target-lintas-tenant-invariants.test.ts`
+untuk bukti eksekusi nyata predikat ini (termasuk kasus adversarial).
+
+Setiap query "daftar notifikasi milik caller" (GET `/api/v1/notifikasi`
+maupun UPDATE `dibacaPada` di POST `/read`) **WAJIB** memakai bentuk berikut,
+dengan konteks caller yang HARUS sudah diresolusi SEBELUM query berjalan:
+
+- `:callerTenantId` - tenant aktif caller saat request ini (dari sesi/token).
+- `:callerKeanggotaanTenantId` - `KeanggotaanTenant.id` caller UNTUK tenant
+  di atas (satu Pengguna = banyak baris di tenant berbeda, lihat ADR-013).
+- `:callerOutletIds` - ARRAY seluruh `outletId` dari `KeanggotaanOutlet`
+  AKTIF caller di tenant ini (caller bisa punya akses ke lebih dari satu
+  outlet - lihat `KaryawanOutlet`/`KeanggotaanOutlet`).
+- `:callerRoleIds` - ARRAY seluruh `Peran.id` yang caller pegang di tenant
+  ini (lewat `KeanggotaanPeran.keanggotaanTenantId = :callerKeanggotaanTenantId`).
+
+```sql
+SELECT * FROM notification
+WHERE "tenantId" = :callerTenantId                                    -- (1) GUARD WAJIB PALING LUAR
+  AND (
+    ("lingkupTarget" = 'PENGGUNA_SPESIFIK' AND "keanggotaanTenantId" = :callerKeanggotaanTenantId)
+    OR ("lingkupTarget" = 'OUTLET'          AND "outletId" = ANY(:callerOutletIds))
+    OR ("lingkupTarget" = 'PERAN_DI_TENANT' AND "peranId" = ANY(:callerRoleIds))
+    OR ("lingkupTarget" = 'PERAN_DI_OUTLET' AND "peranId" = ANY(:callerRoleIds) AND "outletId" = ANY(:callerOutletIds))
+    OR ("lingkupTarget" = 'SELURUH_TENANT')                            -- (2) lihat catatan bahaya di bawah
+  )
+ORDER BY "createdAt" DESC
+```
+
+**Kenapa guard (1) `tenantId = :callerTenantId` di level TERLUAR adalah
+bagian PALING kritis dari predikat ini, BUKAN detail kosmetik:** baris
+`lingkupTarget = 'SELURUH_TENANT'` (2) TIDAK PUNYA satu pun kolom penyaring
+lain (`keanggotaanTenantId`/`outletId`/`peranId` semuanya NULL per CHECK
+constraint `notification_lingkup_target_kombinasi_check`) - `tenantId` adalah
+**SATU-SATUNYA** kolom yang membedakan broadcast tenant A dari broadcast
+tenant B. Predikat yang lupa memasang guard (1) (mis. hanya menyalin klausa
+OR di dalam kurung tanpa AND terluar) akan mengembalikan broadcast
+`SELURUH_TENANT` milik **SEMUA** tenant ke **SETIAP** caller - dibuktikan
+nyata lewat kasus adversarial di test file di atas (predikat "rentan" yang
+sengaja menghapus guard ini terbukti membocorkan notifikasi broadcast tenant
+lain; predikat lengkap di atas terbukti tidak). Ini BUKAN risiko teoretis -
+ini SATU-SATUNYA baris kode yang berdiri di antara desain ini dan kebocoran
+lintas-tenant nyata begitu handler ditulis.
+
+**Kenapa TIDAK CUKUP mengandalkan FK/CHECK constraint saja tanpa predikat
+ini benar:** composite-FK (`(tenantId, outletId)` -> `Outlet`, `(tenantId,
+peranId)` -> `Peran`, dst.) dan CHECK constraint kombinasi menjamin *baris
+`Notification` itu sendiri* konsisten (kolom targeting-nya benar-benar milik
+tenant yang sama) - **tapi keduanya sama sekali tidak bisa memaksa bentuk
+klausa `WHERE` sebuah `SELECT`**. Kontrak predikat ini karena itu murni
+kategori app-level (kategori C, lihat `INVARIAN-BELUM-DITEGAKKAN.md`
+INV-060) - satu-satunya pertahanan adalah kode handler benar-benar menyalin
+bentuk di atas persis, tidak menyederhanakannya.
 
 ### 17.3 Transactional outbox (`ALT-PLT-019`)
 
