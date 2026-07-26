@@ -4505,3 +4505,219 @@ nol (fresh-database redeploy, lihat `RELEASE-EVIDENCE.md`).
 ketiga gap `ALT-DEF-051/052/053` (butuh desain locking/trigger yang matang,
 didorong ke batch mendatang); CI setup (batch terpisah berikutnya, di luar
 scope eksplisit batch ini).
+
+## ADR-042: Tegakkan kuota promo, ketersediaan stok, dan alokasi pembayaran lewat lock - menutup ALT-DEF-051/052/053
+
+**Status:** DITERIMA
+
+**Konteks.** Batch ADR-041 (audit konsolidasi konkurensi) menemukan dan
+membuktikan NYATA (lewat dua koneksi `pg` fisik overlap, bukan hipotesis)
+tiga race genuine yang sengaja didorong ke batch mendatang: `ALT-DEF-051`
+(`Promo.usageQuota` tidak ditegakkan sama sekali), `ALT-DEF-052`
+(`ReservasiStok` tidak divalidasi terhadap saldo tersedia saat INSERT), dan
+`ALT-DEF-053` (`SUM(AlokasiPembayaran)` lintas `Pembayaran` berbeda tidak
+dibandingkan `Pesanan.totalAkhir`). Batch ini adalah batch implementasi itu -
+tiga trigger `BEFORE INSERT` baru, satu migrasi, plus test yang membuktikan
+race yang SAMA PERSIS kini ditolak.
+
+**Keputusan 0 - satu migrasi untuk ketiganya.** Ketiga fix dibundel jadi SATU
+migrasi resmi (`20260726180000_tegakkan_kuota_promo_ketersediaan_stok_alokasi_pembayaran`)
+alih-alih tiga migrasi terpisah - ketiganya adalah unit kerja yang kohesif
+("menutup gap konkurensi yang ditemukan audit ADR-041"), tidak ada
+dependensi berurutan di antara mereka, dan membundelnya menghindari tiga
+siklus diff→psql→resolve-applied yang identik triviallly untuk perubahan yang
+konseptual satu paket. `prisma migrate diff --from-schema-datasource
+--to-schema-datamodel` KOSONG untuk ketiganya (tidak ada perubahan
+kolom/tabel - murni trigger SQL manual, sama seperti bagian trigger-only di
+migrasi ADR-037/038 sebelumnya) - diterapkan langsung via `psql`, di-resolve
+`--applied`.
+
+**Pola race-safety yang SAMA di ketiga trigger** (precedent langsung:
+`cek_stok_bahan_negatif` ADR-037 dan `promo_pemakaian_cek_batas_penerapan`
+ADR-038, keduanya trigger `BEFORE INSERT/UPDATE` yang membaca kebijakan
+lintas-tabel SAAT TULIS): setiap trigger melakukan `SELECT ... FOR UPDATE`
+pada baris PARENT yang relevan TERLEBIH DAHULU, baru menghitung SUM dan
+membandingkannya ke batas. Karena row-lock Postgres dari `FOR UPDATE`
+dipegang sampai transaksi COMMIT/ROLLBACK, transaksi konkuren kedua yang
+mencoba mengunci baris PARENT YANG SAMA WAJIB menunggu - ia baru mulai
+menghitung SUM setelah transaksi pertama selesai, sehingga ia melihat hasil
+akhir yang benar (termasuk baris yang baru saja di-commit transaksi
+pertama), bukan snapshot basi. Ini PERSIS pola check-then-act yang aman
+karena "check" dan "act" (baca SUM dan tolak/lanjutkan INSERT) terjadi di
+DALAM SATU trigger/SATU transaksi, diserialkan oleh lock eksplisit pada
+parent - bukan check-then-act app-level naif (yang dibuktikan RACY oleh test
+lama ADR-041) yang membaca lalu bertindak lintas DUA statement terpisah
+tanpa lock apa pun di antaranya.
+
+**Keputusan 1 - Fix ALT-DEF-051 (kuota promo): SUM(jumlahPenerapan), BUKAN
+COUNT(*) baris.** `Promo.usageQuota` diinterpretasikan sebagai kuota TOTAL
+PENERAPAN (bukan kuota jumlah pesanan/baris `PromoPemakaian`) - konsisten
+dengan makna `jumlahPenerapan` sebagai "berapa kali promo ini efektif
+berlaku" (ADR-038): promo repeatable yang terpicu 3x dalam SATU pesanan
+(`jumlahPenerapan=3`) mengonsumsi 3 dari kuota total, bukan 1. Trigger
+`trg_promo_pemakaian_cek_kuota_total` (`BEFORE INSERT OR UPDATE` pada
+`promo_pemakaian`) karena itu membandingkan `SUM("jumlahPenerapan")` lintas
+SELURUH `PromoPemakaian` untuk `promoId` yang sama terhadap `usageQuota`
+(NULL = tak terbatas), bukan `COUNT(*)`.
+
+Lock target: baris `Promo` itu sendiri (`(tenantId, id)`, unique existing) -
+SELALU tepat SATU baris per promo, sehingga menguncinya menyerialkan SEMUA
+transaksi konkuren yang menyentuh `PromoPemakaian` untuk PROMO yang SAMA,
+dari PESANAN mana pun. Ini beda dari trigger ADR-038
+(`trg_promo_pemakaian_cek_batas_penerapan`) yang TIDAK perlu mengunci apa pun
+karena batasnya PER-PESANAN, sudah diserialkan secara alami oleh unique
+index `(pesananId, promoId)` - kuota TOTAL lintas-pesanan butuh lock
+eksplisit pada parent (`Promo`) karena tidak ada unique index natural yang
+menyerialkannya.
+
+**Keputusan 2 - Fix ALT-DEF-052 (ketersediaan stok): resolusi gudang via
+outlet, keterbatasan jujur didokumentasikan.** Trigger
+`trg_reservasi_stok_cek_ketersediaan` (`BEFORE INSERT` pada `reservasi_stok`)
+mengunci baris `StokBahan` AGREGAT (`lokasiStokId IS NULL`) untuk pasangan
+(gudangId, bahanId) yang relevan, memakai unique key
+`(gudangId, bahanId, lokasiStokId)` dari ALT-DEF-008/migrasi
+`20260726140000` - ini adalah lock target yang TEPAT karena mengunci baris
+ini menyerialkan dua `ReservasiStok` konkuren untuk ITEM PESANAN BERBEDA
+yang berebut BAHAN YANG SAMA di GUDANG YANG SAMA (kasus yang TIDAK disentuh
+unique index `reservasi_stok_itemPesananId_key`, ADR-037, yang hanya
+mencegah dua reservasi untuk ITEM yang SAMA).
+
+Masalahnya: `ReservasiStok` TIDAK PERNAH punya kolom `gudangId` sendiri
+(hanya `outletId` + `bahanId`) - ini gap struktural yang sudah ada sejak
+ADR-037, bukan diciptakan batch ini. Trigger me-resolve ke SATU `Gudang`
+milik `outletId` tsb (`ORDER BY id LIMIT 1`), mengasumsikan
+satu-gudang-per-outlet - asumsi yang berlaku di SELURUH fixture/skenario
+produk hari ini. Bila suatu outlet berkembang jadi multi-gudang, resolusi
+ini AMBIGU (memilih salah satu gudang secara arbitrer) - perbaikan sejatinya
+adalah menambah kolom `ReservasiStok.gudangId` sendiri, perubahan skema
+TERPISAH di luar scope batch ini. Konsisten dengan itu, SUM baris
+`ReservasiStok` AKTIF LAIN sengaja diagregasi per `(tenantId, bahanId)` TANPA
+penyaringan tambahan per-gudang (baris lain juga tidak membawa gudangId) -
+arah yang KONSERVATIF (mungkin menjumlahkan reservasi dari gudang lain untuk
+bahan yang sama bila outlet multi-gudang, bisa menolak berlebihan) tapi AMAN
+(tidak pernah meloloskan over-reservasi).
+
+Baris `StokBahan` yang TIDAK ADA sama sekali (banyak fixture/test database-
+integration lama tidak pernah menginisialisasi cache `StokBahan`, lihat
+`siklus-hidup-stok-invariants.test.ts`) TIDAK ditolak trigger ini - saldo
+TAK DIKETAHUI diperlakukan berbeda dari saldo NEGATIF; trigger hanya
+menolak ketika ADA baris `StokBahan` yang bisa dibandingkan dan
+perbandingannya gagal. Keputusan ini WAJIB (bukan opsional) supaya fixture
+lama yang tidak menyertakan `StokBahan` tetap lolos - diverifikasi langsung
+lewat re-run `siklus-hidup-stok-invariants.test.ts` (tetap lulus tanpa
+modifikasi apa pun).
+
+**Keputusan 3 - Fix ALT-DEF-053 (batas alokasi pembayaran): SEMUA status
+Pembayaran ikut dihitung KECUALI terminal-negatif, TERMASUK DRAF.** Trigger
+`trg_alokasi_pembayaran_cek_batas_pesanan` (`BEFORE INSERT` pada
+`alokasi_pembayaran`) mengunci baris `Pesanan` yang relevan
+(`SELECT ... FOR UPDATE`, komplementer - BUKAN pengganti - `version`/
+ADR-035: lock eksplisit menyerialkan akses ke agregat SUM, `version` tetap
+menjaga integritas UPDATE langsung ke baris `Pesanan` itu sendiri, dua
+mekanisme berbeda tujuan), lalu membandingkan `SUM(jumlah)` alokasi LAIN
+untuk `pesananId` yang sama + baris baru terhadap `Pesanan.totalAkhir`.
+
+Keputusan status mana yang dihitung: SEMUA status `Pembayaran` IKUT DIHITUNG
+KECUALI status terminal-negatif (`GAGAL`, `DIBATALKAN`, `DIKEMBALIKAN`) yang
+berarti uangnya tidak lagi/tidak pernah benar-benar mengklaim tagihan ini.
+Ini SENGAJA LEBIH LUAS dari sekadar "hanya `DIBAYAR` + `MENUNGGU_KONFIRMASI`"
+yang tadinya disebut sebagai opsi di instruksi batch ini - alasannya
+konkret, bukan preferensi: race ASLI yang dibuktikan
+`konkurensi-dua-koneksi-lanjutan.test.ts` (test lama #6, ALT-DEF-053)
+terjadi PERSIS pada momen INSERT dua baris `AlokasiPembayaran` untuk dua
+`Pembayaran` yang MASIH BERSTATUS `DRAF`, SEBELUM salah satu pun mencapai
+status `DIBAYAR`. Membatasi hitungan hanya ke `DIBAYAR`/
+`MENUNGGU_KONFIRMASI` tidak akan menutup race itu SAMA SEKALI - trigger baru
+akan diam saja saat kedua alokasi `DRAF` itu di-INSERT (karena tidak ada
+yang "dihitung" pada saat itu), gagal menangkap race yang sama persis yang
+jadi motivasi perbaikan ini. Rasional tambahan: baris `AlokasiPembayaran`
+MASIH BERSTATUS `DRAF` pun sudah merepresentasikan KLAIM/NIAT
+mengalokasikan sejumlah rupiah ke pesanan ini - unique constraint
+`(pembayaranId, pesananId)` sudah menegaskan baris ini adalah SATU alokasi
+yang berarti, bukan draft kosong.
+
+`DIKEMBALIKAN_SEBAGIAN` (refund parsial) SENGAJA TETAP DIHITUNG PENUH (bukan
+dikurangi proporsional) - granularitas "berapa dari alokasi ini yang sudah
+direfund" tidak ada di skema hari ini. Menghitung penuh adalah arah AMAN
+(bisa menolak realokasi yang sebenarnya valid setelah refund sebagian, tapi
+TIDAK PERNAH meloloskan over-alokasi) - didokumentasikan sebagai
+keterbatasan jujur, follow-on terpisah (lihat "Defect baru" di bawah).
+
+**Keputusan 4 - test lama ADR-041 diubah IN-PLACE, bukan diduplikasi ke file
+baru.** Tiga skenario "GAP NYATA" (test #4/#5/#6) di
+`konkurensi-dua-koneksi-lanjutan.test.ts` (yang SEBELUMNYA membuktikan
+kedua sisi race berhasil commit) diubah IN-PLACE menjadi skenario "FIXED"
+yang membuktikan sisi KEDUA kini ditolak - dipilih dibanding menulis file
+test BARU terpisah karena: (a) skenario repro-nya PERSIS SAMA (fixture
+identik, urutan operasi identik), hanya assertion akhir yang berbalik dari
+"harus berhasil" menjadi "harus ditolak", sehingga diff before/after test
+ini sendiri adalah bukti paling langsung bahwa perilaku berubah; (b)
+menghindari duplikasi logic fixture yang sama di dua tempat.
+
+**PERUBAHAN POLA KONEKSI YANG WAJIB** (bukan kosmetik): ketiga test lama
+memakai `Promise.all([insA, insB])` SEBELUM commit apa pun - pola ini benar
+untuk MEMBUKTIKAN race (tidak ada yang menyerialkan, keduanya lolos
+bersamaan), tapi setelah fix terpasang, pola ini akan DEADLOCK (insB
+menunggu lock yang dipegang transaksi A, sementara test menunggu KEDUA
+promise selesai sebelum memanggil commit A sama sekali - self-inflicted
+deadlock, BUKAN deadlock Postgres). Ketiga test diubah ke pola
+overlap-lalu-commit yang SUDAH ada presedennya di skenario #3 (reversal
+ledger concurrent) di file yang sama: A meng-INSERT dan BERHASIL (belum
+commit), B meng-INSERT sebagai promise TANPA di-await (akan blok pada lock),
+jeda singkat untuk memastikan B benar-benar dalam status menunggu, BARU
+commit A, baru await promise B (yang sekarang ditolak trigger dengan pesan
+eksplisit).
+
+**Dampak fixture yang harus diperbaiki:** `atomik-pembayaran-pesanan-
+invariants.test.ts` (ADR-036, tiga fungsi test) meng-INSERT
+`AlokasiPembayaran` jumlah=20000 terhadap `Pesanan` dengan `totalAkhir`
+default fixture (0, tidak pernah di-set eksplisit) - dengan trigger baru,
+INSERT itu langsung ditolak SEBELUM sempat menguji invariant konsistensi
+status yang jadi fokus asli test tersebut. Diperbaiki dengan menambah
+`UPDATE pesanan SET "totalAkhir" = 20000` tepat setelah `createPesananFixture`
+di ketiga tempat - fixture lain (`promo-pemakaian-penerapan-invariants.test.ts`,
+`siklus-hidup-stok-invariants.test.ts`) diverifikasi TIDAK terpengaruh
+(tidak pernah mencoba over-alokasi/over-reservasi/over-kuota dalam skenario
+mereka sendiri).
+
+**Verifikasi.** Migrasi diterapkan ke `altora_resto_dev` via psql (`CREATE
+FUNCTION`/`CREATE TRIGGER` x3, tidak ada error), `prisma migrate resolve
+--applied`, `prisma migrate diff --from-schema-datasource
+--to-schema-datamodel` tetap kosong (tidak ada drift). Full suite 39 file
+(22 architecture + 17 database-integration) 39/39 lulus, `tsc --noEmit -p
+packages/test-support` exit 0. Redeploy fresh-database (`migrate deploy`
+dari database kosong, `prisma migrate diff` antara `altora_resto_dev` dan
+database fresh KOSONG - struktur identik) - 39/39 lulus lagi. Lihat
+RELEASE-EVIDENCE.md bagian ADR-042 untuk transcript lengkap before/after
+setiap race.
+
+**Dampak test suite:** 0 file baru (39 tetap 39) - tiga fungsi test DIUBAH
+in-place di `konkurensi-dua-koneksi-lanjutan.test.ts`, tiga fixture
+diperbaiki di `atomik-pembayaran-pesanan-invariants.test.ts`, satu file
+inventaris trigger (`inventaris-trigger-constraint-lengkap.test.ts`)
+diperluas dari 29 ke 32 trigger terdaftar.
+
+**Dampak dokumentasi:** `INVARIAN-BELUM-DITEGAKKAN.md` - `INV-062`/
+`INV-063`/`INV-064` DIPINDAH dari kategori C ke kategori A (kategori A
+23 -> 26, kategori C 21 -> 18, total TETAP 66 - murni perpindahan kategori,
+bukan baris baru). `DEFECT-LEDGER.md` - `ALT-DEF-051`/`052`/`053` DITUTUP
+(status `DITUTUP`, checklist closure penuh terpenuhi).
+
+**Defect baru ditemukan (dicatat, TIDAK ditutup batch ini):** keterbatasan
+"refund parsial (`DIKEMBALIKAN_SEBAGIAN`) dihitung penuh, bukan proporsional"
+pada Keputusan 3 di atas BUKAN bug baru yang diperkenalkan batch ini (arahnya
+konservatif/aman), tapi dicatat sebagai catatan follow-on untuk batch
+implementasi command-handler pembayaran mendatang (bukan defect terpisah -
+tidak ada regresi yang terjadi, murni granularitas yang belum ada skemanya).
+Demikian juga keterbatasan "satu-gudang-per-outlet" pada Keputusan 2 -
+BUKAN gap baru (sudah ada sejak `ReservasiStok` tidak pernah punya
+`gudangId`, ADR-037), hanya sekarang lebih terlihat karena trigger baru
+bergantung padanya.
+
+**Yang TETAP di luar cakupan batch ini:** kode command-handler service-layer
+untuk promo/reservasi/pembayaran (INV-023, INV-015 sisi baca-lalu-tulis,
+INV-019/020 sisi per-`Pembayaran` tunggal - semuanya TETAP kategori C,
+trigger DB di batch ini adalah defense-in-depth, bukan pengganti disiplin
+transaksi aplikasi); kolom `ReservasiStok.gudangId` sendiri (perubahan
+skema terpisah); granularitas refund-parsial pada alokasi pembayaran; CI
+setup (batch terpisah, tetap di luar scope eksplisit).

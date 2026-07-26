@@ -4268,3 +4268,150 @@ keputusan sadar untuk TIDAK memperbaiki tiga gap konkurensi pada batch ini.
 `docs/engineering/AUDIT-CONCURRENCY-COVERAGE.md` (baru): checklist ✅/⚠️/❌
 lengkap per kategori (Migrasi, Tenant, Concurrency, Ledger, State machine)
 terhadap seluruh daftar skenario correction-loop asli.
+
+## ADR-042: Tegakkan kuota promo, ketersediaan stok, dan alokasi pembayaran lewat lock - bukti nyata
+
+Batch ini implementasi fix untuk ketiga gap yang ditemukan/dibuktikan pada
+ADR-041 (`ALT-DEF-051`/`052`/`053`) - satu migrasi baru berisi tiga trigger
+`BEFORE INSERT`, tiga fungsi test lama diubah in-place untuk membuktikan
+race yang SAMA kini ditolak (bukan file test baru).
+
+### 1. Migrasi diterapkan (diff kosong, murni trigger SQL manual)
+
+```
+$ npx prisma migrate diff --from-schema-datasource prisma/schema/schema.prisma --to-schema-datamodel prisma/schema/schema.prisma --script
+-- This is an empty migration.
+
+$ psql -U icat -h localhost -d altora_resto_dev -f prisma/schema/migrations/20260726180000_tegakkan_kuota_promo_ketersediaan_stok_alokasi_pembayaran/migration.sql
+CREATE FUNCTION
+CREATE TRIGGER
+CREATE FUNCTION
+CREATE TRIGGER
+CREATE FUNCTION
+CREATE TRIGGER
+
+$ npx prisma migrate resolve --applied 20260726180000_tegakkan_kuota_promo_ketersediaan_stok_alokasi_pembayaran
+Migration 20260726180000_tegakkan_kuota_promo_ketersediaan_stok_alokasi_pembayaran marked as applied.
+
+$ npx prisma migrate status
+15 migrations found in prisma/migrations
+Database schema is up to date!
+```
+
+Tidak ada perubahan kolom/tabel (`schema.prisma` tidak berubah struktural,
+hanya komentar dokumentasi ditambahkan dekat `Promo.usageQuota`/
+`ReservasiStok`/`AlokasiPembayaran`) - migrasi ini murni tiga trigger SQL
+manual, mengikuti pola trigger-only precedent ADR-037/038.
+
+### 2. BEFORE (ADR-041, dicatat di bagian atas dokumen ini - TIDAK diubah): race berhasil, bug
+
+Lihat bagian "ADR-041: Batch konsolidasi audit cakupan konkurensi - bukti
+nyata" di atas untuk transcript ASLI (sebelum fix ini) - test #4/#5/#6
+`konkurensi-dua-koneksi-lanjutan.test.ts` waktu itu MEMBUKTIKAN kedua sisi
+race berhasil commit:
+
+```
+-> (4) GAP NYATA (ALT-DEF-051): dua PromoPemakaian pesanan berbeda pada promo usageQuota=1 KEDUANYA berhasil commit (kuota over-consumed 2/1) - TIDAK ADA proteksi DB sama sekali.
+-> (5) GAP NYATA (ALT-DEF-052): dua ReservasiStok item berbeda mengklaim unit stok terakhir yang SAMA, KEDUANYA berhasil commit (over-reserved 2 dari stok fisik 1) - TIDAK ADA proteksi DB saat INSERT reservasi.
+-> (6) GAP NYATA (ALT-DEF-053): dua Pembayaran berbeda ke SATU Pesanan, total alokasi (40000) MELEBIHI totalAkhir (20000) - KEDUANYA tetap berhasil DIBAYAR, tidak ada proteksi jumlah.
+```
+
+### 3. AFTER (batch ini): race yang SAMA kini ditolak
+
+Fungsi test #4/#5/#6 diubah IN-PLACE (fixture/repro identik, assertion
+dibalik) ke pola overlap-lalu-commit (menghindari deadlock self-inflicted
+yang akan terjadi bila tetap memakai `Promise.all` naif terhadap trigger
+yang sekarang mengunci baris parent):
+
+```
+$ node_modules/.bin/tsx src/database-integration/konkurensi-dua-koneksi-lanjutan.test.ts
+  -> (1) Dua konfirmasi Pembayaran bersamaan pada baris SAMA: version conflict TERDETEKSI (dua koneksi pg nyata) - PROTEKSI SUDAH ADA.
+  -> (2) Dua posting StokOpname bersamaan pada baris SAMA: version conflict TERDETEKSI (dua koneksi pg nyata) - PROTEKSI SUDAH ADA.
+  -> (3) Dua reversal ledger CONCURRENT (bukan sekuensial) ke baris asal SAMA: unique index membalikMutasiId TETAP menolak yang kalah - PROTEKSI SUDAH ADA.
+  -> (4) FIXED (ALT-DEF-051): dua PromoPemakaian pesanan berbeda pada promo usageQuota=1 - koneksi KEDUA DITOLAK trg_promo_pemakaian_cek_kuota_total (kuota tetap 1/1).
+  -> (5) FIXED (ALT-DEF-052): dua ReservasiStok item berbeda mengklaim unit stok terakhir yang SAMA - koneksi KEDUA DITOLAK trg_reservasi_stok_cek_ketersediaan (direservasi tetap 1/1).
+  -> (6) FIXED (ALT-DEF-053): dua Pembayaran berbeda ke SATU Pesanan - koneksi KEDUA DITOLAK trg_alokasi_pembayaran_cek_batas_pesanan (total alokasi tetap 20000, sama dengan totalAkhir).
+OK: database-integration ADR-041/ADR-042 (konsolidasi audit konkurensi - 3 proteksi terverifikasi ulang lewat dua-koneksi nyata + 3 race ALT-DEF-051/052/053 kini DITOLAK trigger DB) lulus.
+
+$ node_modules/.bin/tsx src/database-integration/inventaris-trigger-constraint-lengkap.test.ts
+  -> Seluruh 32 trigger bisnis buatan-tangan TERVERIFIKASI ada.
+  -> Seluruh 4 CHECK constraint bernama TERVERIFIKASI ada.
+  -> Seluruh 14 index unique/partial bisnis-kritis TERVERIFIKASI ada.
+OK: database-integration ADR-041/ADR-042 (inventaris konsolidasi 32 trigger + 4 CHECK constraint + 14 index bisnis-kritis - tripwire regresi tunggal) lulus.
+
+$ node_modules/.bin/tsx src/database-integration/atomik-pembayaran-pesanan-invariants.test.ts
+OK: database-integration ADR-036 sub-problem A (pengaman deferred-constraint-trigger konsistensi pembayaran-pesanan) lulus.
+```
+
+Trigger count naik dari 29 (ADR-041) ke 32 (tiga baru:
+`trg_promo_pemakaian_cek_kuota_total`, `trg_reservasi_stok_cek_ketersediaan`,
+`trg_alokasi_pembayaran_cek_batas_pesanan`).
+
+Catatan `atomik-pembayaran-pesanan-invariants.test.ts` (ADR-036): tiga
+fixture di file ini meng-INSERT `AlokasiPembayaran` jumlah=20000 terhadap
+`Pesanan.totalAkhir` DEFAULT (0) - dengan trigger baru ini akan DITOLAK
+sebelum sempat menguji invariant aslinya. Diperbaiki dengan menambah
+`UPDATE pesanan SET "totalAkhir" = 20000` eksplisit di ketiga fixture -
+file ini lulus lagi setelah perbaikan (dikonfirmasi di atas).
+
+### 4. Full test suite (39 file, sebelum redeploy)
+
+```
+$ for f in src/database-integration/*.test.ts src/architecture/*.test.ts; do node_modules/.bin/tsx "$f"; done
+architecture: 22 passed, 0 failed
+database-integration: 17 passed, 0 failed
+tsc --noEmit -p packages/test-support: exit 0
+```
+
+Tetap 39 file (0 baru, 0 dihapus) - tiga fungsi test diubah in-place di satu
+file yang sudah ada, tiga fixture diperbaiki di file lain yang sudah ada.
+
+### 5. Redeploy fresh-database
+
+```
+$ createdb altora_resto_dev_fresh
+$ DATABASE_URL="postgresql://icat@localhost:5432/altora_resto_dev_fresh?schema=public" npx prisma migrate deploy --schema prisma/schema/schema.prisma
+... 15 migrations applied (baseline_correction_loop ... tegakkan_kuota_promo_ketersediaan_stok_alokasi_pembayaran) ...
+All migrations have been successfully applied.
+
+$ npx prisma migrate diff --from-url "postgresql://icat@localhost:5432/altora_resto_dev?schema=public" --to-url "postgresql://icat@localhost:5432/altora_resto_dev_fresh?schema=public" --script
+-- This is an empty migration.
+```
+
+Struktur `altora_resto_dev` (dev database yang sudah berjalan lama, migrasi
+diterapkan inkremental) dan `altora_resto_dev_fresh` (dari kosong, `migrate
+deploy` sekali jalan seluruh 15 migrasi) IDENTIK - dikonfirmasi diff kosong.
+
+Seluruh 39 file test dijalankan ulang terhadap database fresh (`DATABASE_URL`
+diarahkan ke `altora_resto_dev_fresh`) - SEMUA lulus lagi:
+
+```
+$ DATABASE_URL="postgresql://icat@localhost:5432/altora_resto_dev_fresh?schema=public" (for f in .../*.test.ts; do npx tsx "$f"; done)
+PASS=39 FAIL=0
+```
+
+`altora_resto_dev_fresh` di-drop setelah verifikasi (`dropdb
+altora_resto_dev_fresh`) - `altora_resto_dev` (database dev persisten) TIDAK
+disentuh oleh langkah redeploy ini.
+
+**Before/after batch ini:** SEBELUM = 39 file, 39/39 passed (dengan test
+#4/#5/#6 MEMBUKTIKAN race, bukan mencegahnya). SESUDAH = tetap 39 file,
+39/39 passed (dengan test #4/#5/#6 kini MEMBUKTIKAN race yang SAMA
+DITOLAK) - baik terhadap `altora_resto_dev` yang sudah lama berjalan maupun
+terhadap database fresh yang baru saja di-deploy dari nol.
+
+### 6. Traceability
+
+`INVARIAN-BELUM-DITEGAKKAN.md`: `INV-062`/`INV-063`/`INV-064` DIPINDAH dari
+kategori C ke kategori A (kategori A 23 -> 26, kategori C 21 -> 18, total
+TETAP 66 - murni perpindahan, bukan baris baru).
+
+`DEFECT-LEDGER.md`: `ALT-DEF-051`/`052`/`053` DITUTUP - checklist penutupan
+penuh (migrasi diterapkan, trigger terpasang, test membuktikan race
+ORIGINAL kini ditolak, typecheck bersih, fixture terdampak diperbaiki,
+traceability diperbarui, bukti tersedia di dokumen ini).
+
+`DECISION-LOG.md`: ADR-042 baru - desain lengkap ketiga trigger, keputusan
+row-vs-sum untuk kuota promo, keputusan status Pembayaran mana yang dihitung
+untuk batas alokasi, keterbatasan jujur (resolusi gudang via outlet,
+refund-parsial dihitung penuh).
