@@ -1,5 +1,25 @@
 # Correction Loop Status - Altora Resto
 
+> **CATATAN SUPERSEDED (2026-07-26, batch CI/ADR-043):** Dokumen ini
+> membekukan snapshot per **2026-07-25** (42 defect, sebelum fase DEEP
+> CORRECTION LOOP/ADR-030 dst dimulai). Sejak itu ledger sudah berkembang
+> sampai `ALT-DEF-056` dan `DECISION-LOG.md` sampai ADR-043, dengan Postgres
+> nyata, 15 migrasi resmi, dan (baru batch ini) pipeline CI GitHub Actions -
+> jauh melampaui apa yang tertulis di bagian 1-17 di bawah (mis. bagian 2
+> masih menyatakan "NOL defect DITUTUP", padahal kini banyak `DITUTUP` lewat
+> batch ADR-042/ADR-043). **Jangan jadikan angka/status di bawah sebagai
+> sumber kebenaran current** - lihat `DEFECT-LEDGER.md`/`DECISION-LOG.md`
+> langsung untuk status terkini. Rewrite penuh dokumen ini SENGAJA
+> didorong ke batch FINAL (setelah batch CI ini), bukan dikerjakan di sini -
+> di luar scope batch CI (yang murni menambahkan `.github/workflows/ci.yml`
+> + script package.json minimal, bukan penulisan ulang dokumen status).
+> Bagian CI spesifik: dokumen ini TIDAK PERNAH menyebut CI (diverifikasi via
+> `grep -n "CI\|GitHub Actions" CORRECTION-LOOP-STATUS.md` sebelum batch ini
+> hanya menemukan satu penyebutan tak terkait di bagian 17/Blocker) - CI
+> sepenuhnya konsep BARU yang diperkenalkan batch ADR-043, tidak ada bagian
+> lama yang perlu dikoreksi soal ini, hanya perlu docs baru (lihat
+> `RELEASE-EVIDENCE.md` bagian ADR-043 dan `.github/workflows/ci.yml`).
+
 Status dokumen: **LAPORAN STATUS, BUKAN LAPORAN PENYELESAIAN.**
 
 Dokumen ini adalah laporan penutup dari batch verifikasi konsolidasi akhir

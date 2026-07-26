@@ -4721,3 +4721,221 @@ trigger DB di batch ini adalah defense-in-depth, bukan pengganti disiplin
 transaksi aplikasi); kolom `ReservasiStok.gudangId` sendiri (perubahan
 skema terpisah); granularitas refund-parsial pada alokasi pembayaran; CI
 setup (batch terpisah, tetap di luar scope eksplisit).
+
+## ADR-043: Pipeline CI GitHub Actions - job list, keputusan pengelompokan concurrency/security, realita lint/typecheck, batas branch-protection
+
+**Status:** DITERIMA
+
+**Konteks.** Batch sebelumnya (ADR-030 s.d. ADR-042) membangun seluruh deep
+correction loop - 15 migrasi resmi, trigger/CHECK/index bisnis-kritis
+lengkap, 22 file test arsitektur, 17 file test database-integration - tapi
+SELURUHNYA diverifikasi MANUAL, satu per satu, lewat perintah lokal terhadap
+`altora_resto_dev` (database dev persisten). Tidak ada satu pun mekanisme
+otomatis yang menjalankan ulang verifikasi ini terhadap perubahan baru di
+masa depan. Batch ini menambahkan `.github/workflows/ci.yml` - PERTAMA
+KALINYA repo ini punya pipeline CI - yang menjalankan job-job berikut pada
+`push`/`pull_request` ke `main`:
+
+`lint`, `typecheck`, `dependency-check`, `prisma-format-check`,
+`prisma-validate`, `migration-from-empty`, `migration-invariant-verification`,
+`architecture-tests`, `database-integration-tests`, `concurrency-tests`,
+`security-tests`, plus `coverage-placeholder` (bukan diminta eksplisit di
+daftar 11 job, ditambahkan untuk memenuhi poin artifact "Coverage" secara
+jujur).
+
+**Environment CI vs environment eksekusi lokal batch ini - PENTING.**
+GitHub-hosted runner (Ubuntu, `actions/checkout`+`pnpm/action-setup`+
+`actions/setup-node`) adalah environment yang SAMA SEKALI BERBEDA dari
+environment eksekusi batch correction-loop lokal: (a) `pnpm` TIDAK tersedia
+lokal (`corepack` juga tidak ada) - setiap perintah `turbo run <script>`
+gagal lokal dengan "Unable to find package manager binary", SEMENTARA di CI
+`pnpm/action-setup` akan menginstal `pnpm@9.12.0` (cocok field
+`packageManager` root `package.json`) sungguhan; (b) tidak ada
+`pnpm-lock.yaml` yang di-commit ke repo ini sampai batch ini (tidak bisa
+dibuat lokal karena `pnpm` tidak berfungsi) - workflow memakai
+`pnpm install --no-frozen-lockfile` (resolve fresh setiap run, BUKAN
+reproducible pin) sebagai konsekuensi jujur, bukan cita-cita jangka panjang -
+commit `pnpm-lock.yaml` didorong ke batch mendatang yang punya akses `pnpm`
+lokal yang berfungsi; (c) setiap job yang butuh Postgres menyalakan
+container `services: postgres:16` KOSONG miliknya SENDIRI (bukan
+`altora_resto_dev`) - job DB manapun WAJIB menjalankan `prisma migrate
+deploy` sendiri di awal, karena state Postgres TIDAK diwariskan antar job
+(setiap job = runner+container terpisah).
+
+**Keputusan 1 - `migration-invariant-verification` memakai test yang SUDAH
+ADA, bukan test baru (poin 3 instruksi).** Diperiksa dulu: apakah ada file
+test yang sudah melakukan sapuan "daftar semua constraint/trigger yang
+diharapkan lalu bandingkan dengan pg_catalog"? YA -
+`packages/test-support/src/database-integration/inventaris-trigger-constraint-lengkap.test.ts`
+(ditambahkan batch ADR-041, dikonfirmasi lewat `AUDIT-CONCURRENCY-COVERAGE.md`
+baris "Semua index/trigger/check tersedia") PERSIS tripwire regresi tunggal
+yang diminta - mendaftar LENGKAP 32 trigger + 4 CHECK constraint bernama + 14
+index unique/partial bisnis-kritis (diekstrak `grep` atas seluruh
+`prisma/schema/migrations/*.sql`), memverifikasi SETIAP SATU ada di
+`pg_catalog`, DAN memverifikasi jumlah trigger `trg_*` PERSIS 32 (bukan
+subset - kalau ada trigger baru lupa didaftarkan, test gagal). Job CI ini
+karena itu HANYA menjalankan test yang sudah ada (`pnpm run
+test:migration-invariants`) plus dump `pg_constraint`/`pg_trigger` mentah
+sebagai artifact tambahan - tidak menulis test baru yang duplikatif.
+
+**Keputusan 2 - runner script baru untuk architecture-tests/
+database-integration-tests (poin 4/5 instruksi), opsi (b) dipilih.** 22 file
+`architecture/*.test.ts` dan 17 file `database-integration/*.test.ts` adalah
+skrip Node/`tsx` POLOS (bukan suite vitest), tidak ada satu perintah runner
+bawaan untuk "jalankan semuanya". Dibanding menulis loop shell inline
+berulang di YAML (opsi a, akan terduplikasi di 4 job berbeda: architecture-
+tests, database-integration-tests, concurrency-tests, security-tests, dan
+migration-invariant-verification), dipilih opsi (b): dua skrip shell baru
+(`scripts/test-architecture.sh`, `scripts/test-database-integration.sh`)
+plus 5 script `package.json` baru root (`test:architecture`,
+`test:database-integration`, `test:concurrency`, `test:security`,
+`test:migration-invariants`) - SATU perintah per konsep, dipakai IDENTIK oleh
+CI maupun developer lokal. `scripts/test-database-integration.sh` menerima
+argumen opsional pola egrep untuk memfilter nama file - inilah mekanisme
+yang dipakai job `concurrency-tests`/`security-tests`/
+`migration-invariant-verification` untuk menjalankan SUBSET file yang sama
+secara logis (lihat Keputusan 3). Diverifikasi lokal NYATA (bukan hanya
+ditulis): kelimanya dijalankan lewat `npm run` terhadap database throwaway
+`altora_resto_ci_test` yang di-drop+create+`prisma migrate deploy` dari nol
+persis meniru apa yang job `migration-from-empty` akan lakukan di CI - semua
+22 file arsitektur DAN semua 17 file database-integration lulus.
+
+**Keputusan 3 - concurrency-tests/security-tests: pengelompokan LOGIS, bukan
+restrukturisasi fisik (poin 6/7 instruksi), opsi (b) dipilih.** Di repo ini,
+test race dua-koneksi (`konkurensi-dua-koneksi-lanjutan.test.ts`,
+`optimistic-locking-version-invariants.test.ts`) dan test tenant-isolation
+(`actor-keanggotaan-tenant-outlet-invariants.test.ts`,
+`notification-target-lintas-tenant-invariants.test.ts`) hidup DI DALAM
+`database-integration/` yang flat, bukan di subfolder terpisah
+(`database-integration/concurrency/`, `database-integration/security/`).
+Opsi (a) - memindahkan file secara fisik - ditolak: (1) SEMUA file di
+`database-integration/` mengimpor `_pg-helper.ts` dengan path relatif yang
+sama (`./`_pg-helper.js`); memindahkan sebagian ke subfolder BUTUH mengubah
+import itu di setiap file yang dipindah, murni risiko regresi mekanis tanpa
+menambah cakupan test apa pun; (2) beberapa file (mis.
+`optimistic-locking-version-invariants.test.ts`) SECARA SAH tergolong DUA
+kategori sekaligus (proof dua-koneksi PENUH pada `Pesanan`, TAPI juga bagian
+dari audit trigger/constraint umum) - direktori fisik memaksa satu file
+punya SATU lokasi "benar", padahal realitasnya tumpang-tindih; (3)
+`database-integration-tests` (job utama, menjalankan SEMUA 17 file) SUDAH
+mencakup kedua subset ini sepenuhnya - job `concurrency-tests`/
+`security-tests` terpisah murni untuk SINYAL CI yang lebih granular ("apakah
+race konkurensi spesifik lulus, terlepas dari 15 file lain?"), bukan cakupan
+baru. Karena itu opsi (b) dipilih: job terpisah yang menjalankan SUBSET file
+YANG SAMA lewat filter nama file (`scripts/test-database-integration.sh
+'pola-egrep'`), didokumentasikan eksplisit di komentar YAML sebagai
+pengelompokan logis - bukan diam-diam diklaim sebagai direktori terpisah.
+
+**Keputusan 4 - `lint` dan realita eslint (poin 8 instruksi) - DIJALANKAN
+NYATA, DITEMUKAN RUSAK, DIDOKUMENTASIKAN JUJUR, TIDAK DIPERBAIKI (di luar
+scope).** `turbo run lint` TIDAK BISA dijalankan lokal sama sekali (`pnpm`
+binary tidak ada di environment eksekusi ini) - tapi diverifikasi LEBIH
+LANGSUNG: `npx eslint . --max-warnings=0` dijalankan langsung di
+`packages/test-support` (script `lint` paket itu persis sama dengan 29
+paket bisnis lain) menghasilkan kegagalan NYATA:
+`ESLint couldn't find an eslint.config.(js|mjs|cjs) file`. Dikonfirmasi lebih
+lanjut: `eslint` BUKAN devDependency di package.json manapun (root maupun 30
+paket) dan TIDAK ADA satu pun file `eslint.config.*`/`.eslintrc.*` di seluruh
+repo. Ini BUKAN no-op yang tak berarti - ini kegagalan keras yang akan
+memblokir job `lint` untuk SETIAP paket, SETIAP PR, tanpa terkecuali, begitu
+`pnpm install` (yang TIDAK akan menginstal eslint sama sekali, karena bukan
+dependency) dijalankan lalu `pnpm run lint` mencoba memanggil binary yang
+tidak ada. Dicatat sebagai `ALT-DEF-056` (SEDANG, deferred - menyiapkan
+eslint config+devDependency untuk 30 paket adalah pekerjaan tooling
+aplikasi, DI LUAR SCOPE "konfigurasi CI + script package.json minimal" batch
+ini). Job `lint` TETAP DIPASANG di `ci.yml` (menjalankan `pnpm run lint`
+sungguhan) - SENGAJA supaya statusnya JUJUR (merah = gap tooling nyata),
+TIDAK dijadikan gate wajib (tidak ada job lain yang `needs: lint`).
+
+**Keputusan 5 - `typecheck` DIVERIFIKASI berarti (bukan no-op) (poin 9
+instruksi).** `tsc --noEmit -p packages/test-support` (satu-satunya paket
+dengan kode TS sungguhan - ke-29 paket bisnis lain + `apps/desktop` hanya
+berisi stub `export {};`) dijalankan langsung: exit 0, nol error. Ini
+BUKAN no-op tanpa arti - ini benar-benar mengecek 22+17 file test-support
+TypeScript nyata (termasuk 5 file `prisma-client-shape-*.test.ts` yang
+memverifikasi bentuk `Prisma.*CreateInput` cocok schema). `turbo run
+typecheck` SENDIRI (orkestrasi lintas-30-paket lewat `pnpm`) tidak bisa
+diverifikasi lokal (lihat batasan pnpm di atas) - tapi proxy paling dekat
+yang bisa diverifikasi (menjalankan `tsc` langsung pada satu-satunya paket
+berisi logika nyata) SUDAH dilakukan dan lulus bersih.
+
+**Keputusan 6 - Node 22 dipakai di CI, bukan Node 20 (mismatch dengan
+`engines.node` root).** File `ci.yml` memakai Node 22 karena job
+`architecture-tests` menjalankan `node --experimental-strip-types` (flag
+yang baru ada mulai Node >=22.6) - root `package.json` masih menulis
+`"engines": {"node": ">=20.0.0"}`. Mismatch ini DICATAT JUJUR di komentar
+`ci.yml`, TIDAK diperbaiki di batch ini (mengubah `engines.node` root
+menyentuh ekspektasi tooling paket lain yang di luar scope batch CI murni -
+bukan schema, tapi tetap bukan "konfigurasi CI + script package.json
+minimal").
+
+**Keputusan 7 - `dependency-check` DITEMUKAN RUSAK, DIPERBAIKI (bukan
+sekadar dicatat) - lihat `ALT-DEF-054`/`ALT-DEF-055`.** BERBEDA dari
+Keputusan 4 (`lint`, dibiarkan rusak, di luar scope) - `depcheck` diperbaiki
+LANGSUNG di batch ini, karena keduanya adalah bug config SEPELE (satu baris
+dihapus, tiga baris regex diubah bentuk) di file `.dependency-cruiser.cjs`
+yang secara eksplisit termasuk file yang HARUS "dijalankan untuk real dulu,
+konfirmasi jalan sebelum dipasang ke CI" (instruksi batch ini poin 10) -
+memasang job CI untuk tool yang PASTI 100% gagal karena bug konfigurasinya
+sendiri (bukan pelanggaran boundary nyata) dinilai tidak berguna dibanding
+memperbaiki bug config sepele yang sama sekali tidak menyentuh semantik
+aturan boundary itu sendiri (lihat detail teknis di `ALT-DEF-054`/
+`ALT-DEF-055`). Diverifikasi lokal: `npx depcruise --config
+.dependency-cruiser.cjs --output-type err packages apps` exit 0 setelah
+perbaikan, "29 dependency violations (0 errors, 0 warnings)" (hanya
+info-level orphan notice untuk 29 file `src/index.ts` stub - wajar, belum
+ada kode yang saling impor).
+
+**Keputusan 8 - Artifact "Coverage" adalah catatan jujur, bukan laporan
+palsu (poin 11 instruksi).** Tidak ada tool code-coverage terpasang di mana
+pun (tidak ada kode aplikasi untuk diukur - lihat Keputusan 5). Job
+`coverage-placeholder` menulis `COVERAGE-NOTE.txt` yang menjelaskan KENAPA
+belum ada laporan coverage berarti, di-upload sebagai artifact - dipilih
+dibanding menjalankan `vitest run --coverage` di `packages/test-support`
+(yang akan menghasilkan angka MENYESATKAN: coverage test-support ATAS
+DIRINYA SENDIRI, bisa terlihat "100%" padahal nol logika bisnis tercakup).
+
+**Batas branch-protection (poin 12 instruksi) - TIDAK BISA dilakukan lewat
+commit ke `ci.yml`.** `migration-from-empty` dan `migration-invariant-
+verification` sudah saling `needs:` secara berurutan DI DALAM satu workflow
+run (kalau migrasi dasar gagal, verifikasi invariant otomatis tidak
+berjalan) - tapi FILE YAML INI TIDAK BISA memaksa "PR tidak boleh di-merge
+kalau job ini gagal" pada level repository. Itu butuh konfigurasi terpisah
+di GitHub UI (repo Settings > Branches > Branch protection rules > "Require
+status checks to pass before merging", pilih job `migration-from-empty`/
+`migration-invariant-verification` sebagai status check wajib) - tindakan
+konfigurasi yang TIDAK BISA dilakukan lewat commit apa pun ke repo ini.
+Didokumentasikan di komentar `ci.yml` dan di sini secara eksplisit sebagai
+batasan JUJUR, bukan diklaim seolah sudah terpasang.
+
+**Yang diverifikasi lokal sebagai proxy vs yang GENUINELY UNVERIFIED (butuh
+GitHub Actions run sungguhan)** - lihat `docs/engineering/RELEASE-EVIDENCE.md`
+bagian ADR-043 untuk tabel lengkap. Ringkas: SEMUA perintah individual
+(`prisma migrate deploy` dari database kosong, seluruh 22 file arsitektur,
+seluruh 17 file database-integration, subset concurrency/security,
+`depcruise`, `tsc --noEmit -p packages/test-support`, `prisma format`/
+`validate`/`diff`) sudah dijalankan NYATA secara lokal dan lulus - TAPI
+orkestrasi penuh lewat `pnpm`+`turbo`+`actions/*`+`services: postgres:16`
+container GitHub Actions yang SEBENARNYA (termasuk apakah `pnpm/action-setup`
+berhasil membaca `packageManager` field, apakah health-check Postgres
+service berfungsi seperti diharapkan, apakah `pnpm install
+--no-frozen-lockfile` berhasil resolve semua dependency dari registry publik
+tanpa error versi) TETAP belum diverifikasi end-to-end sampai workflow ini
+benar-benar berjalan di GitHub Actions.
+
+**Defect baru ditemukan dan diperbaiki batch ini:** `ALT-DEF-054`
+(`reporterOptions.err` invalid di `.dependency-cruiser.cjs`, DITUTUP),
+`ALT-DEF-055` (`safe-regex` false-positive pada pola `(/.*)?$`, DITUTUP).
+**Defect baru ditemukan, TIDAK diperbaiki (deferred, di luar scope):**
+`ALT-DEF-056` (`eslint` tidak pernah benar-benar disiapkan di 30 paket,
+job `lint` CI dipastikan gagal sampai diperbaiki di batch aplikasi
+mendatang).
+
+**Yang TETAP di luar cakupan batch ini:** perbaikan `ALT-DEF-056` (eslint
+config+devDependency sungguhan); commit `pnpm-lock.yaml` (butuh `pnpm`
+lokal yang berfungsi, tidak tersedia di environment eksekusi batch ini);
+konfigurasi branch-protection GitHub (butuh akses UI/API repo, bukan commit
+file); implementasi kode aplikasi apa pun (tetap di luar scope seluruh
+correction loop sampai saat ini); rewrite penuh
+`docs/engineering/CORRECTION-LOOP-STATUS.md` (didorong ke batch FINAL,
+lihat catatan superseded yang ditambahkan di kepala dokumen itu batch ini).

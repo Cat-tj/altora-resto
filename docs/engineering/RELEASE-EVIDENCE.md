@@ -4415,3 +4415,232 @@ traceability diperbarui, bukti tersedia di dokumen ini).
 row-vs-sum untuk kuota promo, keputusan status Pembayaran mana yang dihitung
 untuk batas alokasi, keterbatasan jujur (resolusi gudang via outlet,
 refund-parsial dihitung penuh).
+
+## ADR-043: Pipeline CI GitHub Actions - bukti verifikasi lokal vs UNVERIFIED
+
+Batch ini menambahkan `.github/workflows/ci.yml` (PERTAMA KALINYA repo ini
+punya CI) plus dua skrip runner (`scripts/test-architecture.sh`,
+`scripts/test-database-integration.sh`) dan lima script `package.json` root
+baru. Environment eksekusi batch ini (lihat CLAUDE.md/instruksi batch) TIDAK
+BISA menjalankan GitHub Actions sungguhan - bagian di bawah membedakan
+SECARA EKSPLISIT apa yang diverifikasi NYATA secara lokal (sebagai proxy
+terbaik yang tersedia) vs apa yang tetap UNVERIFIED sampai workflow ini
+benar-benar berjalan di GitHub Actions.
+
+### 1. `.dependency-cruiser.cjs` - DUA bug config ditemukan dan diperbaiki
+
+Sebelum perbaikan:
+```
+$ npx depcruise --config .dependency-cruiser.cjs --output-type err packages apps
+ERROR: The supplied configuration is not valid: data/options/reporterOptions must NOT have additional properties.
+```
+(`ALT-DEF-054` - kunci `reporterOptions.err` tidak valid pada schema
+dependency-cruiser 16.x, dihapus.)
+
+Setelah perbaikan #1, sebelum perbaikan #2:
+```
+$ npx depcruise --config .dependency-cruiser.cjs --output-type err packages apps
+ERROR: rule {"name":"ui-tidak-boleh-impor-paket-bisnis",...} has an unsafe regular expression. Bailing out.
+```
+(`ALT-DEF-055` - bentuk `(/.*)?$` ditandai unsafe oleh `safe-regex`,
+dikonfirmasi lewat `node -e 'require("safe-regex")("^@altora/(kasir)(/.*)?$", {limit:10000})'` -> `false`
+walau bukan ReDoS nyata untuk pola literal-alternation ini. Diganti bentuk
+alternasi setara `($|/.*)` -> `safe-regex(...)` -> `true`.)
+
+Setelah KEDUA perbaikan:
+```
+$ npx depcruise --config .dependency-cruiser.cjs --output-type err packages apps
+  info no-orphans: packages/ui/src/index.ts
+  ... (29 baris info no-orphans, satu per package.src/index.ts stub) ...
+x 29 dependency violations (0 errors, 0 warnings). 77 modules, 90 dependencies cruised.
+$ echo $?
+0
+```
+STATUS: **DIVERIFIKASI LULUS secara lokal** (dependency-cruiser 16.10.4,
+versi yang sama akan ter-install `pnpm install` di CI karena devDependency
+`^16.4.0`).
+
+### 2. `prisma format` / `prisma validate` / `prisma migrate diff`
+
+```
+$ npx prisma format --schema prisma/schema/schema.prisma
+Formatted prisma/schema/schema.prisma in 88ms
+$ git diff --stat prisma/schema/schema.prisma
+(kosong - nol perubahan, schema sudah terformat rapi)
+
+$ npx prisma validate --schema prisma/schema/schema.prisma
+The schema at prisma/schema/schema.prisma is valid
+```
+STATUS: **DIVERIFIKASI LULUS secara lokal.**
+
+### 3. `migration-from-empty` - database throwaway `altora_resto_ci_test`
+
+```
+$ psql -U icat -h localhost -d postgres -c "CREATE DATABASE altora_resto_ci_test"
+CREATE DATABASE
+$ DATABASE_URL="postgresql://icat@localhost:5432/altora_resto_ci_test?schema=public" \
+  npx prisma migrate deploy --schema prisma/schema/schema.prisma
+15 migrations found in prisma/migrations
+Applying migration `20260725154045_baseline_correction_loop`
+... (14 migrasi lain) ...
+All migrations have been successfully applied.
+
+$ npx prisma migrate status --schema prisma/schema/schema.prisma
+Database schema is up to date!
+
+$ npx prisma migrate diff --from-schema-datasource prisma/schema/schema.prisma \
+    --to-schema-datamodel prisma/schema/schema.prisma --script
+-- This is an empty migration.
+```
+Database throwaway di-drop setelah verifikasi (`DROP DATABASE
+altora_resto_ci_test`) - `altora_resto_dev` TIDAK disentuh.
+
+STATUS: **DIVERIFIKASI LULUS secara lokal** - seluruh 15 migrasi resmi
+berlaku bersih dari database KOSONG, nol drift terhadap `schema.prisma`
+setelahnya. Ini adalah proxy PALING DEKAT yang bisa diverifikasi untuk job
+CI `migration-from-empty` (satu-satunya perbedaan dari CI sungguhan: Postgres
+16 Homebrew lokal vs container `postgres:16` Docker resmi di GitHub Actions
+- keduanya Postgres 16, perbedaan distribusi seharusnya tidak relevan untuk
+DDL murni).
+
+### 4. `migration-invariant-verification` - tripwire trigger/CHECK/index
+
+```
+$ npm run test:migration-invariants
+== src/database-integration/inventaris-trigger-constraint-lengkap.test.ts
+  -> Seluruh 32 trigger bisnis buatan-tangan TERVERIFIKASI ada.
+  -> Seluruh 4 CHECK constraint bernama TERVERIFIKASI ada.
+  -> Seluruh 14 index unique/partial bisnis-kritis TERVERIFIKASI ada.
+OK: database-integration ADR-041/ADR-042 (inventaris konsolidasi 32 trigger + 4 CHECK constraint + 14 index bisnis-kritis - tripwire regresi tunggal) lulus.
+```
+Dump artifact contoh (`pg_constraint`/`pg_trigger` mentah, terhadap
+`altora_resto_ci_test` yang sudah dimigrasi penuh dari nol):
+```
+$ psql ... -c "SELECT conname, contype, conrelid::regclass FROM pg_constraint WHERE connamespace = 'public'::regnamespace ORDER BY conname;" | wc -l
+536
+$ psql ... -c "SELECT tgname, tgrelid::regclass FROM pg_trigger WHERE NOT tgisinternal ORDER BY tgname;" | wc -l
+36
+```
+STATUS: **DIVERIFIKASI LULUS secara lokal**, terhadap database yang baru
+saja dimigrasi dari nol (bukan `altora_resto_dev` yang sudah lama berjalan).
+
+### 5. `architecture-tests` - 22 file, `test:architecture`
+
+```
+$ npm run test:architecture
+== packages/test-support/src/architecture/dapur-kds-multi-stasiun.test.ts
+OK: ...
+... (22 file, semua "OK: ...") ...
+test:architecture - 22 file lulus.
+```
+STATUS: **DIVERIFIKASI LULUS secara lokal** - seluruh 22 file, exit 0.
+
+### 6. `database-integration-tests` / `concurrency-tests` / `security-tests`
+   / semua terhadap database throwaway yang baru dimigrasi dari nol
+
+```
+$ DATABASE_URL="postgresql://icat@localhost:5432/altora_resto_ci_test?schema=public" \
+  npm run test:database-integration
+== src/database-integration/actor-keanggotaan-tenant-outlet-invariants.test.ts
+OK: ...
+... (17 file, semua "OK: ...", termasuk konkurensi-dua-koneksi-lanjutan.test.ts
+     6 skenario dan migrasi-idempoten-dan-drift.test.ts) ...
+test:database-integration - 17 file lulus (pola: '.').
+
+$ npm run test:concurrency
+test:database-integration - 2 file lulus (pola: 'konkurensi-dua-koneksi-lanjutan|optimistic-locking-version-invariants').
+
+$ npm run test:security
+test:database-integration - 2 file lulus (pola: 'actor-keanggotaan-tenant-outlet-invariants|notification-target-lintas-tenant-invariants').
+```
+Catatan tooling: `tsx` tidak ter-install sebagai binary top-level di
+environment eksekusi batch ini (`node_modules/.bin/tsx` root tidak ada,
+`npx tsx` gagal fetch awal karena resolusi npm/pnpm campur-aduk di
+`node_modules` lokal) - tapi `packages/test-support/node_modules/.bin/tsx`
+SUDAH ada (devDependency paket itu sendiri, terinstal batch sebelumnya) -
+`scripts/test-database-integration.sh` sengaja `cd packages/test-support`
+lalu memanggil `./node_modules/.bin/tsx` langsung, BUKAN bergantung pada
+`npx`/binary top-level, persis supaya konsisten baik lokal maupun di CI
+(`pnpm install` akan mengisi `packages/test-support/node_modules/.bin/tsx`
+dengan cara yang sama).
+
+STATUS: **DIVERIFIKASI LULUS secara lokal** untuk ketiga variasi (full set,
+subset concurrency, subset security), terhadap database throwaway yang baru
+dimigrasi dari nol.
+
+### 7. `typecheck` - realita, bukan no-op
+
+```
+$ cd packages/test-support && npx tsc --noEmit
+$ echo $?
+0
+```
+`turbo run typecheck` (orkestrasi 30 paket lewat `pnpm`) TIDAK BISA
+dijalankan lokal (`pnpm`/`corepack` tidak ada di environment eksekusi ini -
+`npx turbo run typecheck --filter=@altora/test-support` gagal dengan
+"Unable to find package manager binary"). Proxy yang diverifikasi: `tsc
+--noEmit` LANGSUNG pada `packages/test-support` (satu-satunya paket dengan
+kode TS sungguhan - 29 paket bisnis lain + `apps/desktop` hanya `export {};`)
+- exit 0, nol error, terhadap 22+17 file test-support NYATA.
+
+STATUS: **`tsc` langsung: DIVERIFIKASI LULUS.** **`turbo run typecheck` via
+`pnpm` sungguhan: UNVERIFIED**, butuh GitHub Actions run.
+
+### 8. `lint` - realita, DITEMUKAN RUSAK (ALT-DEF-056, deferred)
+
+```
+$ cd packages/test-support && npx eslint . --max-warnings=0
+npm warn exec The following package was not found and will be installed: eslint@10.8.0
+Oops! Something went wrong! :(
+ESLint: 10.8.0
+ESLint couldn't find an eslint.config.(js|mjs|cjs) file.
+```
+Dikonfirmasi lebih lanjut: `eslint` bukan devDependency di package.json
+manapun (root maupun 30 paket workspace), dan tidak ada satu pun
+`eslint.config.*`/`.eslintrc.*` di seluruh repo (`find . -maxdepth 2 -iname
+".eslintrc*" -o -iname "eslint.config*"` -> kosong).
+
+STATUS: **DIVERIFIKASI GAGAL secara lokal, NYATA (bukan no-op)** - job
+`lint` di `ci.yml` DIPASTIKAN merah sampai `ALT-DEF-056` diperbaiki di batch
+aplikasi mendatang (di luar scope batch ini). Job tetap dipasang di YAML
+untuk kejujuran status, tidak dijadikan gate wajib.
+
+### 9. UNVERIFIED - butuh GitHub Actions run sungguhan
+
+Daftar jujur apa yang TIDAK bisa diverifikasi di environment eksekusi batch
+ini, walau setiap perintah individual di dalamnya sudah terbukti bekerja:
+
+- `pnpm/action-setup@v4` benar-benar membaca field `packageManager`
+  (`"pnpm@9.12.0"`) dan menginstal `pnpm` versi itu di runner Ubuntu.
+- `pnpm install --no-frozen-lockfile` berhasil resolve SELURUH dependency
+  30+ paket dari registry npm publik tanpa konflik versi (tidak ada
+  `pnpm-lock.yaml` yang di-commit untuk memvalidasi ini sebelumnya - lihat
+  ADR-043 Keputusan Konteks poin (b)).
+- `services: postgres:16` container GitHub Actions benar-benar lulus
+  health-check (`pg_isready`) dalam waktu yang wajar sebelum step migrasi
+  berjalan.
+- `turbo run lint`/`turbo run typecheck` benar-benar MENEMUKAN script
+  `lint`/`typecheck` di seluruh 30 `package.json` paket (tidak ada
+  `pnpm-workspace.yaml` filter yang salah/`turbo.json` `dependsOn` yang
+  diam-diam men-skip suatu paket) - hanya diverifikasi via pembacaan
+  `turbo.json`+`package.json` manual, bukan eksekusi nyata `turbo`.
+- Kecepatan/timeout keseluruhan workflow (11+1 job, beberapa paralel dengan
+  `services:` masing-masing) dalam batas waktu wajar GitHub Actions.
+
+Sampai workflow ini benar-benar dijalankan sekali oleh GitHub Actions,
+`ci.yml` berstatus **plausible-but-unproven** untuk kelima poin di atas -
+BUKAN diklaim "sudah terbukti bekerja penuh".
+
+### 10. Traceability
+
+`DEFECT-LEDGER.md`: `ALT-DEF-054`/`ALT-DEF-055` baru, DITUTUP (perbaikan
+config dependency-cruiser). `ALT-DEF-056` baru, TIDAK ditutup (eslint gap,
+deferred ke batch aplikasi).
+
+`DECISION-LOG.md`: ADR-043 baru - job list lengkap, keputusan pengelompokan
+concurrency/security (logis, bukan fisik), realita lint/typecheck/depcheck,
+strategi artifact, batasan branch-protection.
+
+`docs/engineering/CORRECTION-LOOP-STATUS.md`: catatan superseded ditambahkan
+di kepala dokumen (dokumen itu membekukan snapshot 2026-07-25, sebelum deep
+correction loop - rewrite penuh didorong ke batch FINAL, bukan batch ini).
