@@ -4046,3 +4046,220 @@ pengganti disiplin transaksi service-layer, jadi separuh app-level itu
 belum benar-benar "diverifikasi ada kodenya" (belum ada command-handler
 yang ditulis, di luar scope batch ini). `ALT-DEF-038` ditutup (`DITUTUP`) di
 `DEFECT-LEDGER.md` - lihat entri untuk checklist penutupan lengkap.
+
+## ADR-039: Pengerasan transactional outbox - versioning, dedup, ordering, partial-mutability, dead-letter (menutup ALT-DEF-042 sebagian - eventType catalog)
+
+**Konteks.** `DomainOutboxEvent` sejak ADR-016 punya bentuk minimal (`id,
+tenantId, outletId?, aggregateType, aggregateId, eventType, payload, status,
+attemptCount, availableAt, processedAt?, lastError?, createdAt`) - cukup
+untuk membuktikan pola outbox dasar (event ditulis bersama transaksi
+bisnis), tapi TIDAK punya versioning, deduplikasi, correlation/causation
+tracking, atau jaminan ordering. Instruksi batch ini meminta 9 kolom baru, 2
+constraint baru, dan sejumlah "required behavior" (beberapa DB-enforceable,
+beberapa app-level) - migrasi
+`prisma/schema/migrations/20260726160000_harden_transactional_outbox/migration.sql`.
+
+**Keputusan 1 - `eventVersion` vs `schemaVersion`: dua sumbu versioning yang
+BERBEDA, bukan duplikat.** Instruksi eksplisit meminta memikirkan kenapa dua
+kolom ini perlu ada terpisah. Kesimpulan: keduanya mengukur hal yang BEDA
+secara struktural -
+- `eventVersion` (Int, default 1) mengukur versi **PAYLOAD** untuk
+  `eventType` SPESIFIK - "order.accepted" v1 (mis. `{ pesananId }`) vs v2
+  (mis. `{ pesananId, kanal, totalAkhir }`) bila bentuk payload event itu
+  berubah di masa depan. Consumer LAMA yang hanya paham v1 bisa membaca
+  kolom ini untuk menolak/menerjemahkan payload v2, bukan asal parse dan
+  gagal diam-diam.
+- `schemaVersion` (String, default "1.0") mengukur versi **ENVELOPE**
+  outbox itu sendiri - kolom TOP-LEVEL apa saja yang ada di baris ini
+  (`aggregateVersion`/`correlationId`/`causationId`/dst, yang batch INI
+  tambahkan, adalah PERUBAHAN ENVELOPE, bukan perubahan payload eventType
+  manapun). Consumer generik yang memproses banyak eventType sekaligus
+  (mis. relay worker yang hanya meneruskan JSON ke broker tanpa peduli
+  eventType spesifik) butuh tahu bentuk ENVELOPE, terpisah dari bentuk
+  payload tiap event.
+- Independensi: `eventType` yang sama bisa tetap `eventVersion=1` sementara
+  `schemaVersion` naik (envelope berubah, payload tidak), atau sebaliknya
+  payload "order.accepted" naik ke `eventVersion=2` sementara envelope
+  (`schemaVersion`) tetap sama. Batch ini SENDIRI adalah kenaikan
+  `schemaVersion` pertama sejak ADR-016 ("1.0") - default baru untuk semua
+  baris yang akan ditulis mulai sekarang.
+
+**Keputusan 2 - `correlationId` vs `causationId`: grup vs rantai kausal.**
+- `correlationId` (String, wajib): SATU nilai yang SAMA untuk SEMUA
+  event/command yang berasal dari SATU operasi bisnis akar. Contoh: command
+  "terima pesanan" memicu `order.accepted` DAN `stock.reserved` - keduanya
+  berbagi `correlationId` yang SAMA (mereka "milik" operasi akar yang sama),
+  memudahkan query "semua efek dari satu command X".
+- `causationId` (String, nullable): ID event/command yang LANGSUNG
+  menyebabkan event ini - rantai KAUSAL point-to-point, BUKAN grup. Contoh:
+  `order.accepted` menyebabkan `kitchen.ticket_created` menyebabkan
+  `notification.sent` - `kitchen.ticket_created.causationId` = id event
+  `order.accepted`, `notification.sent.causationId` = id event
+  `kitchen.ticket_created`, TAPI ketiganya tetap berbagi `correlationId`
+  yang SAMA (akar operasinya tetap satu). Nullable karena event AKAR (yang
+  memulai rantai, dipicu langsung command pengguna, bukan event lain) tidak
+  punya causation.
+
+**Keputusan 3 - `publishedAt` vs `processedAt`: BUKAN kolom duplikat,
+makna `processedAt` DIPERSEMPIT.** `processedAt` sudah ada sejak ADR-016
+dengan makna AMBIGU (bisa dibaca "selesai diproses" ATAU "berhasil
+dikirim" - schema lama tidak pernah mendisambiguasi). Instruksi batch ini
+eksplisit meminta memutuskan apakah `publishedAt` menggantikan/mensuperseed
+`processedAt` atau genuinely berbeda. Keputusan: GENUINELY BERBEDA, dua
+titik pipeline -
+- `publishedAt` (baru, nullable): kapan relay worker BERHASIL mem-publish
+  event ke konsumen eksternal (WebSocket/broker/job agregasi) - diisi
+  SEKALI, pada saat SUKSES PERTAMA, bersamaan `status -> TERKIRIM`. Tidak
+  pernah berubah lagi setelah itu (murni penanda sukses, immutable secara
+  efektif meski tidak ditegakkan trigger secara terpisah dari kolom state
+  lain).
+- `processedAt` (makna dipersempit): kapan relay worker TERAKHIR KALI
+  menyelesaikan SATU upaya pemrosesan baris ini, APA PUN HASILNYA (sukses
+  MAUPUN gagal) - diisi ULANG setiap upaya, bersamaan `attemptCount` naik/
+  `lastError` diisi bila gagal, atau bersamaan `publishedAt` bila sukses.
+  Berguna untuk observability "kapan terakhir baris ini disentuh worker"
+  untuk baris yang masih GAGAL berulang - sesuatu yang `publishedAt` (murni
+  penanda sukses) TIDAK BISA jawab.
+
+Kedua kolom dipertahankan dengan makna yang didekonflikkan eksplisit ini -
+`publishedAt` TIDAK menggantikan `processedAt`.
+
+**Keputusan 4 - dua unique constraint dedup, KEDUANYA dibutuhkan, bukan
+salah satu cukup.**
+1. `@@unique([aggregateType, aggregateId, aggregateVersion, eventType])` -
+   dedup WRITE-SIDE: mencegah event type yang SAMA tercatat DUA KALI untuk
+   aggregate yang sama PADA VERSI yang sama - menangkap bug/race di kode
+   PENULIS (producer) yang mencoba menulis event duplikat untuk transisi
+   aggregate yang SAMA PERSIS (mis. dua transaksi konkuren sama-sama
+   menulis "order.accepted" untuk Pesanan versi 5).
+2. `@@unique([deduplicationKey])` - dedup TERPISAH, consumer/business-logic
+   supplied, cakupannya BISA BERBEDA dari #1 (mis. kunci dedup yang
+   dikonstruksi dari `Idempotency-Key` klien, independen dari
+   aggregateVersion - lihat test `testUniqueDeduplicationKeyMenolakDuplikatLintasAggregate`
+   yang membuktikan constraint ini menolak duplikat BAHKAN ketika
+   aggregateType/aggregateId/aggregateVersion/eventType SEMUANYA berbeda).
+
+Kedua constraint menangkap MODE KEGAGALAN yang berbeda - constraint #1 saja
+tidak melindungi dari kunci dedup consumer yang dipakai ulang lintas
+aggregate berbeda; constraint #2 saja tidak melindungi dari producer yang
+menulis event duplikat tanpa pernah menghitung deduplicationKey dengan
+benar. Keduanya dibutuhkan bersama.
+
+**Keputusan 5 - trigger partial-mutability, pola BARU (BUKAN pure
+append-only seperti `ledger_tolak_ubah()` ADR-032).** Instruksi "retry
+tidak mengubah payload" IS DB-enforceable, tapi tabel ini BUKAN append-only
+murni seperti ledger (`mutasi_stok`/`poin_riwayat`/dst.) - `status`/
+`attemptCount`/`availableAt`/`processedAt`/`publishedAt`/`lastError`
+LEGITIMATELY perlu berubah seiring baris diproses/di-retry. Trigger baru
+`outbox_tolak_ubah_kolom_bisnis()` (migrasi
+`20260726160000_harden_transactional_outbox`) membedakan dua kelompok
+kolom secara eksplisit:
+- **Kolom konten bisnis (TIDAK BOLEH berubah):** `id`, `tenantId`,
+  `outletId`, `aggregateType`, `aggregateId`, `aggregateVersion`,
+  `eventType`, `eventVersion`, `schemaVersion`, `correlationId`,
+  `causationId`, `deduplicationKey`, `payload`, `occurredAt`, `createdAt`.
+- **Kolom state pemrosesan (BOLEH berubah):** `status`, `attemptCount`,
+  `availableAt`, `processedAt`, `publishedAt`, `lastError`.
+
+Ini GENUINELY pola berbeda dari `ledger_tolak_ubah()` (yang menolak SEMUA
+UPDATE tanpa kecuali) - trigger reject-all akan mematikan fungsi inti relay
+worker (yang harus bisa update status/attemptCount saat memproses). Diuji
+lewat 9 kasus UPDATE kolom bisnis (semua ditolak) + 1 kasus UPDATE gabungan
+kolom state (berhasil) di `outbox-versioning-dedup-invariants.test.ts`.
+
+**Keputusan 6 - ordering per aggregate: index mendukung, TIDAK menegakkan.**
+Index unique dari Keputusan 4 #1 (`aggregateType, aggregateId,
+aggregateVersion, eventType`) sudah menjadi B-tree yang leftmost prefix-nya
+PERSIS `(aggregateType, aggregateId, aggregateVersion)` - cukup untuk query
+"ambil event aggregate ini terurut versi" tanpa index kedua yang duplikatif
+(diverifikasi `pg_indexes`, lihat test `testOrderingIndexAdaDiPgIndexes`).
+Index terpisah SENGAJA TIDAK ditambah - kolom-prefix-nya identik dengan
+index unique yang sudah ada, menambah index kedua hanya akan menggandakan
+biaya write tanpa manfaat query nyata (anti-pola over-engineering). Ordering
+DELIVERY sebenarnya (relay worker benar-benar memproses event per-aggregate
+secara berurutan, bukan hanya BISA query berurutan) adalah disiplin
+APP-LEVEL - Postgres tidak menjamin urutan dequeue tanpa `ORDER BY` eksplisit
+di setiap query consumer; ini TIDAK BISA dipaksakan skema/index manapun,
+didokumentasikan jujur sebagai gap kategori C.
+
+**Keputusan 7 - "event ditulis dalam transaksi yang sama": kontrak inti,
+TIDAK ADA trigger generik untuk menegakkannya.** Instruksi meminta
+eksplisit mempertimbangkan apakah pola CONSTRAINT TRIGGER DEFERRABLE dari
+ADR-036 (`cek_konsistensi_pembayaran_pesanan`) bisa diperluas untuk
+mendeteksi "state bisnis berubah tanpa outbox event yang cocok" secara
+GENERIK. Kesimpulan: TIDAK REALISTIS - trigger `cek_konsistensi_pembayaran_pesanan`
+ADR-036 bekerja karena ia tahu PERSIS aturan spesifik satu pasangan tabel
+(`Pembayaran`/`Pesanan`, satu kondisi konsistensi). "Setiap perubahan state
+bisnis harus punya outbox event yang cocok" butuh TAHU aturan pemetaan
+transisi -> eventType untuk SETIAP aggregate/domain (yang berbeda-beda dan
+terus bertambah) - sebuah trigger generik yang mengklaim menegakkan ini
+tanpa parameter pemetaan itu tidak benar-benar menegakkan apa pun yang
+berarti (ia hanya bisa mengecek "APAKAH ada baris outbox", bukan "apakah
+baris outbox yang BENAR untuk transisi yang BENAR ada"). Diputuskan JUJUR:
+tidak dibangun, didokumentasikan sebagai kontrak APLIKASI (kategori C di
+`INVARIAN-BELUM-DITEGAKKAN.md`), bukan dipaksakan menjadi trigger yang
+terlihat generik tapi sebenarnya tidak menegakkan apa-apa.
+
+**Keputusan 8 - dead-letter: `DEAD_LETTER` sebagai status terminal baru,
+kebijakan transisi tetap app-level.** `StatusOutboxEvent` sebelumnya hanya
+punya `GAGAL` (retriable) tanpa status "menyerah permanen". Menambah
+`DEAD_LETTER` sebagai nilai enum terminal - kebijakan KAPAN memindahkan
+`GAGAL -> DEAD_LETTER` (ambang `attemptCount`, mis. 10x) adalah keputusan
+OPERASIONAL relay worker, bukan constraint database (database tidak bisa
+tahu kebijakan retry yang "benar" untuk semua kasus).
+
+**Keputusan 9 - `outletId` composite-FK: diverifikasi ULANG, TETAP
+informational (tidak ada gap).** Instruksi meminta verifikasi eksplisit
+(bukan asumsi) bahwa `DomainOutboxEvent.outletId` sudah dapat perlakuan
+composite-FK tenant-safe dari batch ADR-033, karena model ini MUNGKIN
+ditambah setelah batch itu berjalan. Diverifikasi langsung: `DomainOutboxEvent`
+dibuat pada batch ADR-016 yang SAMA dengan `IdempotencyKey` (batch composite-
+FK ADR-033 datang BELAKANGAN dan sudah mendokumentasikan eksplisit di
+komentar `IdempotencyKey` bahwa `outletId` di kedua model itu SENGAJA
+informational-nullable, pola sama seperti `AuditLog.outletId` - hanya ada
+SATU relasi tenant-owned independen, `Tenant` langsung, tidak ada relasi
+tenant-owned KEDUA yang perlu didisambiguasi). Kesimpulan: TIDAK ADA gap -
+keputusan desain ADR-016 yang sudah benar sejak awal, bukan sesuatu yang
+"terlewat" batch ADR-033.
+
+**Keputusan 10 - perluasan katalog `eventType` (menutup `ALT-DEF-042`
+untuk BAGIAN eventType catalog).** `ALT-DEF-042` mencatat 16 `eventType`
+lama tidak mencakup retur/split/reopen/merge pesanan, refund kasir, atau
+penukaran poin/stempel. `retur.*` (5 event) sudah ditambahkan batch ADR-036
+sebelumnya (diverifikasi masih ada). Batch INI menambah 8 eventType lagi:
+`order.split`, `order.reopened`, `order.merged` (ALT-PES-014/015/016/017/018
+- state machine/model split/reopen/merge PENUH belum ada di schema, eventType
+didaftarkan sebagai KONTRAK NAMA untuk batch fitur mendatang, pola yang sama
+sejak ADR-016 untuk seluruh daftar ini), `payment.refunded` (ALT-KSR-007,
+model `PembayaranRefund` sudah ada), `membership.point_redeemed`/
+`membership.stamp_redeemed` (ALT-MBR-010/016, ledger `PoinRiwayat`/
+`LedgerStempel` append-only sudah ada dari ADR-032). Ditambah 2 eventType
+BARU yang DIUSULKAN batch ini sendiri (bukan dari `ALT-DEF-042`):
+`promo.applied`/`promo.repeat_applied`, melengkapi `PromoPemakaian.jumlahPenerapan`
+dari ADR-038 yang butuh event saat promo repeatable diterapkan/diterapkan-ulang.
+
+**Verifikasi nyata.** Migrasi diterapkan ke `altora_resto_dev` via alur
+`prisma migrate diff --from-schema-datasource --to-schema-datamodel` ->
+tinjau -> `psql` -> `prisma migrate resolve --applied` (tabel kosong 0
+baris, aman tanpa backfill). Diverifikasi `\d domain_outbox_event` (9 kolom
+baru, 2 unique index baru, trigger terpasang). Test baru
+`outbox-versioning-dedup-invariants.test.ts` (6 skenario, semua PASS)
+membuktikan: kedua unique constraint menolak duplikat genuine (termasuk
+dedup lintas-aggregate berbeda), trigger partial-mutability mengizinkan
+kolom state berubah dan menolak SEMBILAN kolom konten bisnis, index
+ordering-support ada di `pg_indexes` dengan prefix yang benar, status
+`DEAD_LETTER` bisa dipakai. Redeploy fresh-database (`DROP DATABASE` +
+`CREATE DATABASE` + `prisma migrate deploy` dari kosong, 13 migrasi,
+struktur identik) + re-run SELURUH test (22 architecture + 12
+database-integration, termasuk file baru) + `tsc --noEmit -p
+packages/test-support` (exit 0) - lihat `RELEASE-EVIDENCE.md` bagian
+ADR-039 untuk transkrip lengkap.
+
+**Yang TETAP di luar cakupan batch ini (app-level, kategori C):**
+"consumer idempotent" (harus benar-benar dipakai kode consumer yang belum
+ada), "event diproses berurutan" (disiplin `ORDER BY` di kode relay
+worker), "event ditulis dalam transaksi bisnis yang sama" (disiplin
+transaksi handler yang belum ada), kebijakan dead-letter konkret (ambang
+`attemptCount`). Publisher/consumer/relay-worker nyata TETAP tidak
+diimplementasikan - scope batch ini murni schema+migrasi+dokumentasi+test
+integrasi struktural, sama seperti seluruh batch platform sejak ADR-016.

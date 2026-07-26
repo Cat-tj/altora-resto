@@ -1058,6 +1058,43 @@ konsumen. Lihat daftar `eventType` lengkap dan rasional pola outbox di
 `docs/database/15-platform-infra.md` bagian `DomainOutboxEvent` dan
 `docs/engineering/DECISION-LOG.md` ADR-016 Keputusan 3.
 
+**ADR-039 (pengerasan versioning/dedup/ordering) - KONTRAK WAJIB untuk relay
+worker/consumer manapun yang akan dibangun di batch berikutnya (di luar
+scope batch ini):**
+
+- **Consumer idempotent WAJIB.** Setiap consumer/relay yang memproses baris
+  `DomainOutboxEvent` HARUS memakai `deduplicationKey` untuk mendeteksi dan
+  melewati (skip) event yang sudah pernah diproses sebelumnya - lihat unique
+  constraint `@@unique([deduplicationKey])` di skema. Ini kontrak
+  APLIKASI (consumer harus benar-benar cek sebelum memproses efek),
+  constraint DB hanya mencegah DUA BARIS punya key yang sama, bukan mencegah
+  consumer memproses baris yang SAMA dua kali kalau ia tidak menyimpan
+  catatan "sudah diproses key X".
+- **Event diproses berurutan per aggregate - tanggung jawab CONSUMER, bukan
+  DB.** Skema menyediakan index yang mendukung query
+  `ORDER BY "aggregateVersion"` per `(aggregateType, aggregateId)` secara
+  efisien (lihat index unique `(aggregateType, aggregateId, aggregateVersion,
+  eventType)`), TAPI Postgres tidak menjamin urutan dequeue tanpa
+  `ORDER BY` eksplisit di SETIAP query consumer - relay worker WAJIB query
+  dengan `ORDER BY "aggregateVersion" ASC` (atau `createdAt` bila lintas
+  aggregate) secara disiplin; ini bukan sesuatu yang bisa dipaksakan
+  database.
+- **Retry tidak mengubah payload - DITEGAKKAN DATABASE.** Trigger
+  `outbox_tolak_ubah_kolom_bisnis()` menolak keras UPDATE apa pun terhadap
+  kolom konten bisnis (`payload`, `eventType`, `aggregateType`,
+  `aggregateId`, `aggregateVersion`, `eventVersion`, `schemaVersion`,
+  `correlationId`, `causationId`, `deduplicationKey`, `occurredAt`,
+  `createdAt`, `id`, `tenantId`, `outletId`) - relay worker HANYA boleh
+  UPDATE kolom state pemrosesan (`status`, `attemptCount`, `availableAt`,
+  `processedAt`, `publishedAt`, `lastError`).
+- **Dead-letter.** Kebijakan kapan memindahkan baris `GAGAL` ke
+  `DEAD_LETTER` (mis. setelah `attemptCount` melewati ambang N) adalah
+  keputusan OPERASIONAL relay worker, bukan bagian skema/constraint.
+
+Lihat `docs/engineering/DECISION-LOG.md` ADR-039 untuk rasional lengkap
+setiap kolom baru dan `docs/database/15-platform-infra.md` untuk deskripsi
+field-by-field terbaru.
+
 ## 18. Status implementasi
 
 Semua endpoint pada dokumen ini berstatus **BELUM DIKERJAKAN** kecuali dicatat lain

@@ -3734,3 +3734,201 @@ lengkap dicek di entrinya (migrasi diterapkan, constraint SQL terpasang,
 test integrasi lulus, test arsitektur diperbarui+lulus, typecheck bersih
 untuk perubahan batch ini, fresh-database redeploy identik, traceability
 diperbarui, bukti tersedia di sini).
+
+## ADR-039: Pengerasan transactional outbox (versioning/dedup/ordering/partial-mutability/dead-letter)
+
+### 1. Schema diff (`prisma migrate diff --from-schema-datasource --to-schema-datamodel`)
+
+```
+-- AlterEnum
+ALTER TYPE "StatusOutboxEvent" ADD VALUE 'DEAD_LETTER';
+
+-- AlterTable
+ALTER TABLE "domain_outbox_event" ADD COLUMN     "aggregateVersion" INTEGER NOT NULL,
+ADD COLUMN     "causationId" TEXT,
+ADD COLUMN     "correlationId" TEXT NOT NULL,
+ADD COLUMN     "deduplicationKey" TEXT NOT NULL,
+ADD COLUMN     "eventVersion" INTEGER NOT NULL DEFAULT 1,
+ADD COLUMN     "occurredAt" TIMESTAMP(3) NOT NULL,
+ADD COLUMN     "publishedAt" TIMESTAMP(3),
+ADD COLUMN     "schemaVersion" TEXT NOT NULL DEFAULT '1.0';
+
+-- CreateIndex
+CREATE UNIQUE INDEX "domain_outbox_event_aggregateType_aggregateId_aggregateVers_key" ON "domain_outbox_event"("aggregateType", "aggregateId", "aggregateVersion", "eventType");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "domain_outbox_event_deduplicationKey_key" ON "domain_outbox_event"("deduplicationKey");
+```
+
+Ditinjau manual, ditulis tangan ke migrasi resmi
+`prisma/schema/migrations/20260726160000_harden_transactional_outbox/migration.sql`
+DITAMBAH bagian (D) trigger partial-mutability (Prisma DSL tidak bisa
+menyatakan trigger). `domain_outbox_event` dikonfirmasi KOSONG (0 baris)
+sebelum migrasi diterapkan:
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -c "SELECT count(*) FROM domain_outbox_event;"
+ count
+-------
+     0
+```
+
+Aman menambah kolom NOT NULL tanpa default (aggregateVersion, correlationId,
+deduplicationKey) tanpa backfill.
+
+### 2. Penerapan migrasi (alur manual resmi)
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -f prisma/schema/migrations/20260726160000_harden_transactional_outbox/migration.sql
+ALTER TYPE
+ALTER TABLE
+CREATE INDEX
+CREATE INDEX
+CREATE FUNCTION
+CREATE TRIGGER
+
+$ npx prisma migrate resolve --applied 20260726160000_harden_transactional_outbox
+Migration 20260726160000_harden_transactional_outbox marked as applied.
+
+$ npx prisma migrate status
+13 migrations found in prisma/migrations
+Database schema is up to date!
+```
+
+### 3. Verifikasi struktur nyata (`\d domain_outbox_event`)
+
+```
+Indexes:
+    "domain_outbox_event_pkey" PRIMARY KEY, btree (id)
+    "domain_outbox_event_aggregateType_aggregateId_aggregateVers_key" UNIQUE, btree ("aggregateType", "aggregateId", "aggregateVersion", "eventType")
+    "domain_outbox_event_deduplicationKey_key" UNIQUE, btree ("deduplicationKey")
+    "domain_outbox_event_status_availableAt_idx" btree (status, "availableAt")
+Foreign-key constraints:
+    "domain_outbox_event_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES tenant(id) ON UPDATE CASCADE ON DELETE RESTRICT
+Triggers:
+    trg_domain_outbox_event_partial_mutability BEFORE UPDATE ON domain_outbox_event FOR EACH ROW EXECUTE FUNCTION outbox_tolak_ubah_kolom_bisnis()
+```
+
+Kedua unique constraint, index polling lama, FK tenant, dan trigger baru
+SEMUANYA terkonfirmasi ada persis seperti didesain.
+
+### 4. Test database-integration baru (`outbox-versioning-dedup-invariants.test.ts`)
+
+```
+$ ./packages/test-support/node_modules/.bin/tsx packages/test-support/src/database-integration/outbox-versioning-dedup-invariants.test.ts
+OK: database-integration ADR-039 (outbox versioning/dedup/ordering/partial-mutability/dead-letter) lulus.
+```
+
+6 skenario dibuktikan SECARA PERILAKU (bukan hanya "constraint ada"):
+1. `@@unique([aggregateType, aggregateId, aggregateVersion, eventType])` menolak
+   duplikat genuine, TAPI eventType berbeda untuk aggregate+versi sama tetap
+   berhasil (constraint tidak menolak lebih dari yang seharusnya).
+2. `@@unique([deduplicationKey])` menolak duplikat BAHKAN ketika aggregateType/
+   aggregateId/aggregateVersion/eventType SEMUANYA berbeda - membuktikan
+   independensi penuh dari constraint #1.
+3. Trigger partial-mutability MENGIZINKAN UPDATE gabungan
+   status/attemptCount/publishedAt/processedAt/lastError/availableAt.
+4. Trigger partial-mutability MENOLAK 9 kasus UPDATE terpisah (payload,
+   eventType, aggregateVersion, aggregateType, aggregateId, eventVersion,
+   correlationId, deduplicationKey, occurredAt) - masing-masing pesan error
+   dikonfirmasi menyebut "bersifat partial-mutable".
+5. Index unique ordering-support dikonfirmasi ada di `pg_indexes` dengan
+   prefix kolom yang benar.
+6. Status `DEAD_LETTER` dikonfirmasi bisa dipakai (INSERT GAGAL lalu UPDATE
+   ke DEAD_LETTER berhasil).
+
+### 5. Seluruh test SEBELUM redeploy (34 file: 22 architecture + 12 database-integration)
+
+```
+$ for f in packages/test-support/src/architecture/*.test.ts; do node --experimental-strip-types "$f"; done
+(22 files, seluruhnya exit 0)
+
+$ for f in packages/test-support/src/database-integration/*.test.ts; do ./packages/test-support/node_modules/.bin/tsx "$f"; done
+(12 files, seluruhnya exit 0 - termasuk outbox-versioning-dedup-invariants.test.ts baru)
+```
+
+Naik dari 33 file (22 architecture + 11 database-integration, angka SEBELUM
+batch ini) menjadi 34 file (22 architecture + 12 database-integration) -
+satu file database-integration baru.
+
+### 6. Typecheck (`tsc --noEmit -p packages/test-support`)
+
+Dua fixture diperbarui agar sinkron dengan field baru
+`DomainOutboxEvent` (pelajaran `ALT-DEF-049` diterapkan - dicek SEMUA
+fixture yang menyentuh model ini, bukan hanya yang jelas terlihat):
+- `packages/test-support/src/architecture/prisma-client-shape-platform-infra.test.ts`
+  (`contohDomainOutboxEvent` type-shape fixture) - ditambah `aggregateVersion`,
+  `correlationId`, `deduplicationKey`, `occurredAt`.
+- `packages/test-support/src/architecture/idempotency-outbox-notification-constraints.test.ts`
+  (assertion teks schema) - assertion spacing kolom disesuaikan dengan output
+  `prisma format`, ditambah assertion untuk 9 field baru + 2 unique constraint
+  + status DEAD_LETTER + 8 eventType baru katalog.
+
+```
+$ npx tsc --noEmit -p packages/test-support
+$ echo "EXIT: $?"
+EXIT: 0
+```
+
+Exit 0, NOL error - dijalankan NYATA (bukan diasumsikan), sesuai pelajaran
+`ALT-DEF-049`.
+
+### 7. Fresh-database redeploy (dari kosong, 13 migrasi)
+
+```
+$ psql -U icat -h localhost -d postgres -c "DROP DATABASE IF EXISTS altora_resto_dev;"
+DROP DATABASE
+$ psql -U icat -h localhost -d postgres -c "CREATE DATABASE altora_resto_dev;"
+CREATE DATABASE
+$ npx prisma migrate deploy
+13 migrations found in prisma/migrations
+Applying migration `20260725154045_baseline_correction_loop`
+...
+Applying migration `20260726160000_harden_transactional_outbox`
+All migrations have been successfully applied.
+```
+
+```
+$ psql -U icat -h localhost -d altora_resto_dev -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';"
+   136
+```
+
+`\d domain_outbox_event` setelah redeploy IDENTIK dengan sebelum drop (9
+kolom baru, 2 unique index, trigger `trg_domain_outbox_event_partial_mutability`
+semua ada).
+
+Seluruh 34 file test (22 architecture + 12 database-integration) dijalankan
+ulang terhadap database fresh - SEMUA lulus lagi:
+
+```
+architecture fresh: 22 passed, 0 failed
+database-integration fresh: 12 passed, 0 failed
+```
+
+**Before/after batch ini:** SEBELUM = 33 file (22 architecture + 11
+database-integration), 33/33 passed. SESUDAH = 34 file (22 architecture +
+12 database-integration), 34/34 passed - baik sebelum maupun sesudah
+fresh-database redeploy. `tsc --noEmit -p packages/test-support` exit 0
+baik sebelum maupun sesudah redeploy (kode TypeScript tidak berubah oleh
+redeploy database, hanya diverifikasi ulang untuk kelengkapan).
+
+### 8. Traceability
+
+`INVARIAN-BELUM-DITEGAKKAN.md`: baris baru `INV-057` (kategori A - dua
+unique constraint dedup, trigger partial-mutability, index ordering-support),
+`INV-058`/`INV-059` (kategori C - kontrak transaksi-sama + dead-letter
+policy, consumer idempotent + ordering delivery). Ditemukan DAN diperbaiki
+dalam batch yang sama: ringkasan angka kategori C sudah STALE sejak batch
+ADR-036/ADR-037 (tidak memasukkan INV-053/054/055 yang sudah ada di tabel) -
+dicatat sebagai `ALT-DEF-050` (defect baru, DITUTUP dalam batch yang sama).
+Hitungan ulang NYATA dari tabel (`awk`/`grep -c` langsung, bukan diasumsikan
+dari ringkasan lama): kategori A=22, B=3, C=17, D=6, E=13, total=61 baris.
+
+`DEFECT-LEDGER.md`: `ALT-DEF-042` DIPERBARUI - status TETAP
+`SIAP_DIVERIFIKASI` (BUKAN `DITUTUP` penuh), karena defect ini punya DUA
+sub-gap (model platform hilang + katalog eventType) dan batch ini HANYA
+mengerjakan sub-gap eventType (8 eventType baru ditambahkan + diverifikasi
+tekstual). Sub-gap model platform (`UndanganTenant`/`BackupJob`/
+`AntrianCetak`) TETAP terbuka sepenuhnya, di luar scope batch ini. `ALT-DEF-050`
+(baru) DITUTUP dalam batch yang sama ia ditemukan (koreksi ringkasan angka
+`INVARIAN-BELUM-DITEGAKKAN.md`).
