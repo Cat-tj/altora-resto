@@ -106,38 +106,97 @@ export function jalankanSemuaAssertion(): void {
   const outboxBody = getModelBody(schema, "DomainOutboxEvent");
   assertContains(
     outboxBody,
-    "aggregateType String",
+    "aggregateType    String",
     "DomainOutboxEvent harus punya aggregateType.",
   );
   assertContains(
     outboxBody,
-    "aggregateId   String",
+    "aggregateId      String",
     "DomainOutboxEvent harus punya aggregateId.",
   );
+  // ADR-039: aggregateVersion - versi aggregate root SAAT event ditulis.
   assertContains(
     outboxBody,
-    "eventType     String",
-    "DomainOutboxEvent harus punya eventType.",
+    "aggregateVersion Int",
+    "DomainOutboxEvent harus punya aggregateVersion (versi aggregate saat event ditulis, ADR-039).",
   );
   assertContains(
     outboxBody,
-    "payload       Json",
+    "eventType        String",
+    "DomainOutboxEvent harus punya eventType.",
+  );
+  // ADR-039: eventVersion (skema payload per eventType) vs schemaVersion
+  // (skema envelope keseluruhan) - dua kolom berbeda, lihat dokumentasi di
+  // schema.prisma dan DECISION-LOG.md ADR-039.
+  assertContains(
+    outboxBody,
+    "eventVersion     Int               @default(1)",
+    "DomainOutboxEvent harus punya eventVersion default 1 (versi skema payload per eventType, ADR-039).",
+  );
+  assertContains(
+    outboxBody,
+    'schemaVersion    String            @default("1.0")',
+    'DomainOutboxEvent harus punya schemaVersion default "1.0" (versi envelope outbox, ADR-039).',
+  );
+  // ADR-039: correlationId (grup satu operasi akar) vs causationId (rantai
+  // kausal langsung) - dua kolom berbeda.
+  assertContains(
+    outboxBody,
+    "correlationId    String",
+    "DomainOutboxEvent harus punya correlationId (ADR-039).",
+  );
+  assertContains(
+    outboxBody,
+    "causationId      String?",
+    "DomainOutboxEvent.causationId harus nullable (event akar tidak disebabkan event lain, ADR-039).",
+  );
+  assertContains(
+    outboxBody,
+    "deduplicationKey String",
+    "DomainOutboxEvent harus punya deduplicationKey (consumer idempotency, ADR-039).",
+  );
+  assertContains(
+    outboxBody,
+    "payload          Json",
     "DomainOutboxEvent harus punya payload Json.",
   );
   assertContains(
     outboxBody,
-    "status        StatusOutboxEvent @default(TERTUNDA)",
+    "status           StatusOutboxEvent @default(TERTUNDA)",
     "DomainOutboxEvent.status harus enum StatusOutboxEvent dengan default TERTUNDA.",
   );
   assertContains(
     outboxBody,
-    "attemptCount  Int               @default(0)",
+    "attemptCount     Int               @default(0)",
     "DomainOutboxEvent harus punya attemptCount default 0.",
   );
   assertContains(
     outboxBody,
-    "availableAt   DateTime",
+    "availableAt      DateTime",
     "DomainOutboxEvent harus punya availableAt (retry backoff scheduling).",
+  );
+  // ADR-039: occurredAt (waktu bisnis nyata) vs createdAt (waktu tulis baris).
+  assertContains(
+    outboxBody,
+    "occurredAt       DateTime",
+    "DomainOutboxEvent harus punya occurredAt (waktu peristiwa bisnis nyata, ADR-039).",
+  );
+  // ADR-039: publishedAt (sukses publish, sekali isi) vs processedAt
+  // (setiap upaya, sukses maupun gagal) - dua kolom berbeda, tidak redundan.
+  assertContains(
+    outboxBody,
+    "publishedAt      DateTime?",
+    "DomainOutboxEvent harus punya publishedAt (kapan relay worker sukses publish, ADR-039).",
+  );
+  assertContains(
+    outboxBody,
+    "@@unique([aggregateType, aggregateId, aggregateVersion, eventType])",
+    "DomainOutboxEvent harus punya unique constraint write-side dedup #1 (aggregate+versi+eventType, ADR-039).",
+  );
+  assertContains(
+    outboxBody,
+    "@@unique([deduplicationKey])",
+    "DomainOutboxEvent harus punya unique constraint write-side dedup #2 (deduplicationKey, ADR-039, terpisah dari dedup #1).",
   );
   assertContains(
     outboxBody,
@@ -145,10 +204,11 @@ export function jalankanSemuaAssertion(): void {
     "DomainOutboxEvent harus punya index (status, availableAt) untuk polling/dispatch relay worker.",
   );
   assertContains(schema, "enum StatusOutboxEvent {", "Enum StatusOutboxEvent harus ada.");
-  for (const varian of ["TERTUNDA", "DIPROSES", "TERKIRIM", "GAGAL"]) {
+  for (const varian of ["TERTUNDA", "DIPROSES", "TERKIRIM", "GAGAL", "DEAD_LETTER"]) {
     assertContains(schema, varian, `StatusOutboxEvent harus punya varian ${varian}.`);
   }
-  // Daftar eventType lengkap harus terdokumentasi di komentar model (ADR-016).
+  // Daftar eventType lengkap harus terdokumentasi di komentar model (ADR-016,
+  // diperluas ADR-039/ALT-DEF-042).
   for (const eventType of [
     "order.submitted",
     "order.accepted",
@@ -166,11 +226,19 @@ export function jalankanSemuaAssertion(): void {
     "shift.opened",
     "shift.closed",
     "attendance.created",
+    "order.split",
+    "order.reopened",
+    "order.merged",
+    "payment.refunded",
+    "membership.point_redeemed",
+    "membership.stamp_redeemed",
+    "promo.applied",
+    "promo.repeat_applied",
   ]) {
     assertContains(
       schema,
       eventType,
-      `Daftar eventType DomainOutboxEvent harus mendokumentasikan "${eventType}" (master spec).`,
+      `Daftar eventType DomainOutboxEvent harus mendokumentasikan "${eventType}" (master spec + ALT-DEF-042).`,
     );
   }
 

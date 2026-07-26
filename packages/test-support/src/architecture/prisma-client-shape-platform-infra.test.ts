@@ -28,7 +28,14 @@ const contohDomainOutboxEvent = {
   outletId: "01J...OUTLET",
   aggregateType: "Pesanan",
   aggregateId: "01J...PESANAN",
+  // ADR-039: versi Pesanan SAAT event ini ditulis.
+  aggregateVersion: 1,
   eventType: "order.submitted",
+  // ADR-039: correlationId wajib (root operasi), deduplicationKey wajib
+  // (consumer-side idempotency), occurredAt wajib (waktu bisnis nyata).
+  correlationId: "01J...CORRELATION",
+  deduplicationKey: "01J...DEDUP",
+  occurredAt: new Date(),
   payload: { pesananId: "01J...PESANAN" },
   status: "TERTUNDA",
   availableAt: new Date(),
