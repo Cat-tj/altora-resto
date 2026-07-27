@@ -23,6 +23,7 @@
     "@altora/desain": "workspace:*",
     "@altora/ui": "workspace:*",
     "@playwright/test": "^1.47.0",
+    "@types/react": "19.2.17",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   }
