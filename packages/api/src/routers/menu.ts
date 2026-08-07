@@ -293,7 +293,13 @@ export const menuRouter = router({
       .mutation(async ({ ctx, input }) => {
         try {
           const { id, ...data } = input;
-          return await updateKategori(ctx.db, id, data);
+          const opts: Parameters<typeof updateKategori>[2] = {
+            ...(data.nama ? { nama: data.nama } : {}),
+            ...(data.urutan !== undefined ? { urutan: data.urutan } : {}),
+            ...(data.status ? { status: data.status } : {}),
+            ...(data.outletId ? { outletId: data.outletId } : {}),
+          };
+          return await updateKategori(ctx.db, id, opts);
         } catch (error) {
           handleMenuError(error);
         }
