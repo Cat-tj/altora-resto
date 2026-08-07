@@ -142,7 +142,14 @@ export const karyawanRouter = router({
     list: tenantProcedure
       .input(listAbsensiSchema)
       .query(async ({ ctx, input }) => {
-        return listAbsensi(ctx.db, input);
+        const opts: Parameters<typeof listAbsensi>[1] = {
+          ...(input.outletId ? { outletId: input.outletId } : {}),
+          ...(input.karyawanId ? { karyawanId: input.karyawanId } : {}),
+          ...(input.dariTanggal ? { dariTanggal: input.dariTanggal } : {}),
+          ...(input.sampaiTanggal ? { sampaiTanggal: input.sampaiTanggal } : {}),
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        };
+        return listAbsensi(ctx.db, opts);
       }),
 
     /** Get attendance report for date range. */
