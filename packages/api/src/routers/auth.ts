@@ -231,15 +231,15 @@ export const authRouter = router({
       await revokeSession(ctx.db, ctx.ctx.sesi.id, "pindah-tenant");
 
       // Create new session with tenant scope
-      const result = await createSession(ctx.db, {
+      const sessionResult = await createSession(ctx.db, {
         penggunaId: ctx.ctx.pengguna.id,
         keanggotaanTenantId: membership.id,
-        ipHash: ctx.ctx.sesi.ipHash,
-        userAgent: ctx.ctx.sesi.userAgent,
+        ...(ctx.ctx.sesi.ipHash ? { ipHash: ctx.ctx.sesi.ipHash } : {}),
+        ...(ctx.ctx.sesi.userAgent ? { userAgent: ctx.ctx.sesi.userAgent } : {}),
       });
 
       return {
-        token: result.rawToken,
+        token: sessionResult.rawToken,
         tenant: {
           id: membership.tenantId,
           isOwner: membership.isOwner,
