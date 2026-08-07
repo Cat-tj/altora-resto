@@ -146,7 +146,7 @@ export const authRouter = router({
             outletId: keanggotaanOutlet.outletId,
           }
         : null,
-      daftarTenant: memberships.map((m) => ({
+      daftarTenant: memberships.map((m: any) => ({
         keanggotaanTenantId: m.id,
         tenantId: m.tenantId,
         nama: m.tenant.nama,
