@@ -186,11 +186,12 @@ export async function registerUser(
 
   return db.pengguna.create({
     data: {
+      id: crypto.randomUUID(),
       namaLengkap: input.namaLengkap,
       email,
       passwordHash,
       status: "AKTIF",
-    },
+    } as any,
   });
 }
 
