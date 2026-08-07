@@ -14,7 +14,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@altora/db": "workspace:*",
+    "zod": "^3.23.0"
+  },
   "devDependencies": {
     "typescript": "^5.6.0"
   }

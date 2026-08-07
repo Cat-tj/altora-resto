@@ -26,13 +26,22 @@
     "test:concurrency": "bash scripts/test-database-integration.sh 'konkurensi-dua-koneksi-lanjutan|optimistic-locking-version-invariants'",
     "test:security": "bash scripts/test-database-integration.sh 'actor-keanggotaan-tenant-outlet-invariants|notification-target-lintas-tenant-invariants'",
     "test:migration-invariants": "bash scripts/test-database-integration.sh 'inventaris-trigger-constraint-lengkap'",
-    "clean": "turbo run clean && rimraf node_modules"
+    "clean": "turbo run clean && rimraf node_modules",
+    "db:seed": "tsx prisma/seed/demo.seed.ts",
+    "db:reset": "pnpm prisma migrate reset --force && pnpm db:seed"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed/demo.seed.ts"
   },
   "devDependencies": {
-    "turbo": "^2.1.0",
-    "typescript": "^5.6.0",
     "dependency-cruiser": "^16.4.0",
     "prisma": "^5.20.0",
-    "rimraf": "^6.0.0"
+    "rimraf": "^6.0.0",
+    "tsx": "^4.19.0",
+    "turbo": "^2.1.0",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0"
   }
 }

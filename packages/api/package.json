@@ -1,0 +1,34 @@
+{
+  "name": "@altora/api",
+  "version": "0.0.0",
+  "private": true,
+  "description": "tRPC API layer for Altora Resto.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@altora/auth": "workspace:*",
+    "@altora/dapur": "workspace:*",
+    "@altora/db": "workspace:*",
+    "@altora/karyawan": "workspace:*",
+    "@altora/meja": "workspace:*",
+    "@altora/menu": "workspace:*",
+    "@altora/order": "workspace:*",
+    "@altora/pembayaran": "workspace:*",
+    "@altora/persediaan": "workspace:*",
+    "@trpc/server": "^11.0.0",
+    "superjson": "^2.2.6",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}
