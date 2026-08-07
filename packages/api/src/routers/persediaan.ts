@@ -225,10 +225,18 @@ export const persediaanRouter = router({
       .input(deductStockSchema)
       .mutation(async ({ ctx, input }) => {
         try {
-          return await deductStock(ctx.db, ctx.ctx.tenantId!, {
-            ...input,
+          const { hargaPerolehan, lokasiSumberId, lokasiTujuanId, satuanId, batchStokId, catatan, ...rest } = input;
+          const opts: Parameters<typeof deductStock>[2] = {
+            ...rest,
             dibuatOlehId: ctx.ctx.keanggotaanOutlet!.id,
-          });
+            ...(lokasiSumberId ? { lokasiSumberId } : {}),
+            ...(lokasiTujuanId ? { lokasiTujuanId } : {}),
+            ...(satuanId ? { satuanId } : {}),
+            ...(batchStokId ? { batchStokId } : {}),
+            ...(catatan ? { catatan } : {}),
+            ...(hargaPerolehan != null ? { hargaPerolehan: BigInt(hargaPerolehan) } : {}),
+          };
+          return await deductStock(ctx.db, ctx.ctx.tenantId!, opts);
         } catch (error) {
           handlePersediaanError(error);
         }
@@ -280,8 +288,13 @@ export const persediaanRouter = router({
       .input(createPoSchema)
       .mutation(async ({ ctx, input }) => {
         try {
+          const { items, ...rest } = input;
           return await createPurchaseOrder(ctx.db, ctx.ctx.tenantId!, {
-            ...input,
+            ...rest,
+            items: items.map((item) => ({
+              ...item,
+              hargaSatuan: BigInt(item.hargaSatuan),
+            })),
             dibuatOlehId: ctx.ctx.keanggotaanOutlet!.id,
           });
         } catch (error) {
@@ -317,9 +330,14 @@ export const persediaanRouter = router({
     .input(receiveGoodsSchema)
     .mutation(async ({ ctx, input }) => {
       try {
+        const { items, ...rest } = input;
         return await receiveGoods(ctx.db, ctx.ctx.tenantId!, {
-          ...input,
-          diterimaOlehId: ctx.ctx.keanggotaanTenant!.id,
+          ...rest,
+          items: items.map((item) => ({
+            ...item,
+            hargaSatuanAktual: BigInt(item.hargaSatuanAktual),
+          })),
+          diterimaOlehId: ctx.ctx.keanggotaanOutlet!.id,
         });
       } catch (error) {
         handlePersediaanError(error);
