@@ -324,7 +324,7 @@ export const menuRouter = router({
       .input(listItemsSchema)
       .query(async ({ ctx, input }) => {
         return listItem(ctx.db, {
-          kategoriId: input.kategoriId,
+          ...(input.kategoriId ? { kategoriId: input.kategoriId } : {}),
           includeRelations: input.includeRelations,
           includeNonActive: input.includeNonActive,
         });
