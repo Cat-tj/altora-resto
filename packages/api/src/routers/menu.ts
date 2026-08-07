@@ -406,14 +406,12 @@ export const menuRouter = router({
       .input(createVarianSchema)
       .mutation(async ({ ctx, input }) => {
         try {
-          return await createVarian(ctx.db, {
+          const createData: Parameters<typeof createVarian>[1] = {
             itemMenuId: input.itemMenuId,
             nama: input.nama,
-            hargaTambahan:
-              input.hargaTambahan != null
-                ? BigInt(input.hargaTambahan)
-                : undefined,
-          });
+            ...(input.hargaTambahan != null ? { hargaTambahan: BigInt(input.hargaTambahan) } : {}),
+          };
+          return await createVarian(ctx.db, createData);
         } catch (error) {
           handleMenuError(error);
         }
@@ -425,12 +423,12 @@ export const menuRouter = router({
       .mutation(async ({ ctx, input }) => {
         try {
           const { id, ...data } = input;
-          return await updateVarian(ctx.db, id, {
-            ...data,
-            ...(data.hargaTambahan != null && {
-              hargaTambahan: BigInt(data.hargaTambahan),
-            }),
-          });
+          const updateData: Parameters<typeof updateVarian>[2] = {
+            ...(data.nama ? { nama: data.nama } : {}),
+            ...(data.status ? { status: data.status } : {}),
+            ...(data.hargaTambahan != null ? { hargaTambahan: BigInt(data.hargaTambahan) } : {}),
+          };
+          return await updateVarian(ctx.db, id, updateData);
         } catch (error) {
           handleMenuError(error);
         }
@@ -474,7 +472,13 @@ export const menuRouter = router({
       .mutation(async ({ ctx, input }) => {
         try {
           const { id, ...data } = input;
-          return await updateModifierGrup(ctx.db, id, data);
+          const updateData: Parameters<typeof updateModifierGrup>[2] = {
+            ...(data.nama ? { nama: data.nama } : {}),
+            ...(data.wajibPilih !== undefined ? { wajibPilih: data.wajibPilih } : {}),
+            ...(data.minPilihan !== undefined ? { minPilihan: data.minPilihan } : {}),
+            ...(data.maxPilihan !== undefined ? { maxPilihan: data.maxPilihan } : {}),
+          };
+          return await updateModifierGrup(ctx.db, id, updateData);
         } catch (error) {
           handleMenuError(error);
         }
@@ -527,7 +531,12 @@ export const menuRouter = router({
       .input(attachModifierGrupSchema)
       .mutation(async ({ ctx, input }) => {
         try {
-          return await attachModifierGrup(ctx.db, input);
+          const attachData: Parameters<typeof attachModifierGrup>[1] = {
+            itemMenuId: input.itemMenuId,
+            modifierGrupId: input.modifierGrupId,
+            ...(input.urutan !== undefined ? { urutan: input.urutan } : {}),
+          };
+          return await attachModifierGrup(ctx.db, attachData);
         } catch (error) {
           handleMenuError(error);
         }
