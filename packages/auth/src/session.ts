@@ -87,7 +87,7 @@ export async function createSession(
       ...(input.perangkatId ? { perangkatId: input.perangkatId } : {}),
       tokenHash,
       dibuatPada: now,
-      kadaluarsaPada: expiresAt,
+      kadaluarsaPada: new Date(now.getTime() + durationMs),
       terakhirAktifPada: now,
       ...(input.ipHash ? { ipHash: input.ipHash } : {}),
       ...(input.userAgent ? { userAgent: input.userAgent } : {}),
