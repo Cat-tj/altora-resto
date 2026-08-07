@@ -348,11 +348,12 @@ export const menuRouter = router({
     withHarga: tenantProcedure
       .input(listItemDenganHargaSchema)
       .query(async ({ ctx, input }) => {
-        return listItemDenganHarga(ctx.db, {
-          kategoriId: input.kategoriId,
-          outletId: input.outletId,
-          includeNonActive: input.includeNonActive,
-        });
+        const filterOpts: Parameters<typeof listItemDenganHarga>[1] = {
+          ...(input.kategoriId ? { kategoriId: input.kategoriId } : {}),
+          ...(input.outletId ? { outletId: input.outletId } : {}),
+          ...(input.includeNonActive !== undefined ? { includeNonActive: input.includeNonActive } : {}),
+        };
+        return listItemDenganHarga(ctx.db, filterOpts);
       }),
 
     /** Create a new menu item. */
@@ -372,7 +373,15 @@ export const menuRouter = router({
       .mutation(async ({ ctx, input }) => {
         try {
           const { id, ...data } = input;
-          return await updateItem(ctx.db, id, data);
+          const updateOpts: Parameters<typeof updateItem>[2] = {
+            ...(data.kategoriId ? { kategoriId: data.kategoriId } : {}),
+            ...(data.nama ? { nama: data.nama } : {}),
+            ...(data.deskripsi ? { deskripsi: data.deskripsi } : {}),
+            ...(data.gambarUrl ? { gambarUrl: data.gambarUrl } : {}),
+            ...(data.stokTakTerbatas !== undefined ? { stokTakTerbatas: data.stokTakTerbatas } : {}),
+            ...(data.status ? { status: data.status } : {}),
+          };
+          return await updateItem(ctx.db, id, updateOpts);
         } catch (error) {
           handleMenuError(error);
         }
