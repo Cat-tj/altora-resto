@@ -232,10 +232,11 @@ export async function generateResetToken(
 
   await db.tokenResetKataSandi.create({
     data: {
+      id: crypto.randomUUID(),
       penggunaId: user.id,
       tokenHash,
       kadaluarsaPada: new Date(Date.now() + RESET_TOKEN_VALIDITY_MS),
-    },
+    } as any,
   });
 
   return { rawToken, userId: user.id };
@@ -302,10 +303,11 @@ async function logLoginAttempt(
   // Append-only — no FK to Pengguna (email might not exist)
   await db.percobaanLogin.create({
     data: {
+      id: crypto.randomUUID(),
       email: email.toLowerCase().trim(),
       berhasil,
-      ipHash,
-      userAgent,
-    },
+      ...(ipHash ? { ipHash } : {}),
+      ...(userAgent ? { userAgent } : {}),
+    } as any,
   });
 }
