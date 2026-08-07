@@ -11,7 +11,7 @@
  */
 
 import { z } from "zod";
-import { router, tenantProcedure, TRPCError } from "../trpc.js";
+import { router, tenantProcedure, TRPCError } from "../trpc"
 import {
   listKaryawan,
   getKaryawan,

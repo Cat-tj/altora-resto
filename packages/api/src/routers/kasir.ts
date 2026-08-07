@@ -11,7 +11,7 @@
  * single atomic operations.
  */
 
-import { router, outletProcedure, TRPCError } from "../trpc.js";
+import { router, outletProcedure, TRPCError } from "../trpc"
 import {
   getActiveOrders,
   kasirCheckout,

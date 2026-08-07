@@ -14,7 +14,7 @@
  * - order.reject: Reject an order (from MENUNGGU_PERSETUJUAN)
  */
 
-import { router, outletProcedure, TRPCError } from "../trpc.js";
+import { router, outletProcedure, TRPCError } from "../trpc"
 import {
   createPesanan,
   addItem,

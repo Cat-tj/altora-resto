@@ -4,16 +4,16 @@
  * Aggregates all domain-specific routers into a single app router.
  */
 
-import { router } from "../trpc.js";
-import { authRouter } from "./auth.js";
-import { menuRouter } from "./menu.js";
-import { orderRouter } from "./order.js";
-import { kasirRouter } from "./kasir.js";
-import { kitchenRouter } from "./kitchen.js";
-import { mejaRouter } from "./meja.js";
-import { persediaanRouter } from "./persediaan.js";
-import { pembayaranRouter } from "./pembayaran.js";
-import { karyawanRouter } from "./karyawan.js";
+import { router } from "../trpc"
+import { authRouter } from "./auth"
+import { menuRouter } from "./menu"
+import { orderRouter } from "./order"
+import { kasirRouter } from "./kasir"
+import { kitchenRouter } from "./kitchen"
+import { mejaRouter } from "./meja"
+import { persediaanRouter } from "./persediaan"
+import { pembayaranRouter } from "./pembayaran"
+import { karyawanRouter } from "./karyawan"
 
 /**
  * The root tRPC router.

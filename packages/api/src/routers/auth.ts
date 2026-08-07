@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { router, publicProcedure, protectedProcedure, TRPCError } from "../trpc.js";
+import { router, publicProcedure, protectedProcedure, TRPCError } from "../trpc"
 import {
   loginWithEmail,
   registerUser,

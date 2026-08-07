@@ -18,7 +18,7 @@
  */
 
 import { z } from "zod";
-import { router, tenantProcedure, outletProcedure, TRPCError } from "../trpc.js";
+import { router, tenantProcedure, outletProcedure, TRPCError } from "../trpc"
 import {
   // Area
   listArea,
