@@ -125,11 +125,11 @@ export async function resolveContext(
   return {
     pengguna,
     sesi: session,
-    keanggotaanTenant,
-    keanggotaanOutlet,
-    tenantId: keanggotaanTenant?.tenantId,
-    outletId: keanggotaanOutlet?.outletId,
-  };
+    ...(keanggotaanTenant ? { keanggotaanTenant } : {}),
+    ...(keanggotaanOutlet ? { keanggotaanOutlet } : {}),
+    ...(keanggotaanTenant ? { tenantId: keanggotaanTenant.tenantId } : {}),
+    ...(keanggotaanOutlet ? { outletId: keanggotaanOutlet.outletId } : {}),
+  } as RequestContext;
 }
 
 /**
@@ -172,9 +172,9 @@ export async function resolveContextFromToken(
   return {
     pengguna,
     sesi: session,
-    keanggotaanTenant,
-    keanggotaanOutlet,
-    tenantId: keanggotaanTenant?.tenantId,
-    outletId: keanggotaanOutlet?.outletId,
-  };
+    ...(keanggotaanTenant ? { keanggotaanTenant } : {}),
+    ...(keanggotaanOutlet ? { keanggotaanOutlet } : {}),
+    ...(keanggotaanTenant ? { tenantId: keanggotaanTenant.tenantId } : {}),
+    ...(keanggotaanOutlet ? { outletId: keanggotaanOutlet.outletId } : {}),
+  } as RequestContext;
 }
