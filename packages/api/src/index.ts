@@ -28,31 +28,31 @@ export {
   outletProcedure,
   router,
   TRPCError,
-} from "./trpc.js";
+} from "./trpc";
 
 // Context creation
-export { createContext, type TRPCContext } from "./context.js";
+export { createContext, type TRPCContext } from "./context";
 
 // Root router + type
-export { appRouter, type AppRouter } from "./routers/index.js";
+export { appRouter, type AppRouter } from "./routers/index";
 
 // Auth router (for direct import if needed)
-export { authRouter } from "./routers/auth.js";
+export { authRouter } from "./routers/auth";
 
 // Menu router (for direct import if needed)
-export { menuRouter } from "./routers/menu.js";
+export { menuRouter } from "./routers/menu";
 
 // Kitchen router (for direct import if needed)
-export { kitchenRouter } from "./routers/kitchen.js";
+export { kitchenRouter } from "./routers/kitchen";
 
 // Meja router (for direct import if needed)
-export { mejaRouter } from "./routers/meja.js";
+export { mejaRouter } from "./routers/meja";
 
 // Persediaan router (for direct import if needed)
-export { persediaanRouter } from "./routers/persediaan.js";
+export { persediaanRouter } from "./routers/persediaan";
 
 // Pembayaran router (for direct import if needed)
-export { pembayaranRouter } from "./routers/pembayaran.js";
+export { pembayaranRouter } from "./routers/pembayaran";
 
 // Karyawan router (for direct import if needed)
-export { karyawanRouter } from "./routers/karyawan.js";
+export { karyawanRouter } from "./routers/karyawan";
