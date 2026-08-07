@@ -44,7 +44,7 @@ export type {
   ListMutasiStokOptions,
   ListPurchaseOrderOptions,
   ListStokOpnameOptions,
-} from "./types.js";
+} from "./types"
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -78,7 +78,7 @@ export {
   getStokOpnameSchema,
   // Alerts
   lowStockAlertSchema,
-} from "./schemas.js";
+} from "./schemas"
 
 // ─── Service ────────────────────────────────────────────────────────────────
 
@@ -102,4 +102,4 @@ export {
   receiveGoods,
   // Alerts
   getLowStockAlerts,
-} from "./persediaan.js";
+} from "./persediaan"

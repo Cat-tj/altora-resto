@@ -52,7 +52,7 @@ export type {
   UpdateAturanRoutingInput,
   ListTiketOptions,
   ListStasiunOptions,
-} from "./types.js";
+} from "./types"
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -75,7 +75,7 @@ export {
   // List queries
   listTiketQuerySchema,
   listStasiunQuerySchema,
-} from "./schemas.js";
+} from "./schemas"
 
 // ─── Service ────────────────────────────────────────────────────────────────
 
@@ -101,4 +101,4 @@ export {
   // Helpers
   resolveStasiunUntukItem,
   getItemPrepTime,
-} from "./dapur.js";
+} from "./dapur"

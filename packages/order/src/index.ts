@@ -73,7 +73,7 @@ export type {
   // Query
   ListPesananOptions,
   GetPesananOptions,
-} from "./types.js";
+} from "./types"
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -101,7 +101,7 @@ export {
   getActiveOrdersSchema,
   // POS
   kasirCheckoutSchema,
-} from "./schemas.js";
+} from "./schemas"
 
 // ─── Status Machine ─────────────────────────────────────────────────────────
 
@@ -124,7 +124,7 @@ export {
   canPembayaranTransition,
   validatePembayaranTransition,
   canItemTransition,
-} from "./status-machine.js";
+} from "./status-machine"
 
 // ─── Service ────────────────────────────────────────────────────────────────
 
@@ -147,4 +147,4 @@ export {
   // POS
   getActiveOrders,
   kasirCheckout,
-} from "./order.js";
+} from "./order"

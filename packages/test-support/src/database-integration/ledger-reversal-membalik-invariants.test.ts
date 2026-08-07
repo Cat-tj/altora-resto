@@ -37,7 +37,7 @@ import {
   fixtureId,
   withTransaction,
   DATABASE_URL,
-} from "./_pg-helper.js";
+} from "./_pg-helper"
 import pg from "pg";
 
 const TABLES = ["mutasi_stok", "poin_riwayat", "ledger_stempel", "ledger_saldo_toko"] as const;

@@ -14,7 +14,7 @@ import type {
   GudangDenganRingkasan,
   PurchaseOrderLengkap,
   StokOpnameLengkap,
-} from "./types.js";
+} from "./types"
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

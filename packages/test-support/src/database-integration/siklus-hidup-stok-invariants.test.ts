@@ -32,7 +32,7 @@ import {
   fixtureId,
   withTransaction,
   DATABASE_URL,
-} from "./_pg-helper.js";
+} from "./_pg-helper"
 import pg from "pg";
 
 async function testObjectsExist(): Promise<void> {

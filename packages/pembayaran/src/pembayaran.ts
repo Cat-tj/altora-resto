@@ -15,7 +15,7 @@ import type { PrismaClient } from "@prisma/client";
 import type {
   PembayaranLengkap,
   RingkasanPembayaran,
-} from "./types.js";
+} from "./types"
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

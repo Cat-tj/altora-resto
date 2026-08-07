@@ -60,7 +60,7 @@ export type {
   ListMejaOptions,
   ListReservasiOptions,
   ListAreaOptions,
-} from "./types.js";
+} from "./types"
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -84,7 +84,7 @@ export {
   listMejaQuerySchema,
   listReservasiQuerySchema,
   listAreaQuerySchema,
-} from "./schemas.js";
+} from "./schemas"
 
 // ─── Service ────────────────────────────────────────────────────────────────
 
@@ -109,4 +109,4 @@ export {
   createReservasi,
   updateReservasiStatus,
   cancelReservasi,
-} from "./meja.js";
+} from "./meja"

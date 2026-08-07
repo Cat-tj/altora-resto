@@ -51,7 +51,7 @@
 //
 // Jalankan: npx tsx packages/test-support/src/database-integration/konkurensi-dua-koneksi-lanjutan.test.ts
 
-import { assertTrue, fixtureId, createPesananFixture, createReservasiFixture, DATABASE_URL } from "./_pg-helper.js";
+import { assertTrue, fixtureId, createPesananFixture, createReservasiFixture, DATABASE_URL } from "./_pg-helper"
 import pg from "pg";
 
 async function withCleanupPool<T>(fn: (pool: pg.Pool) => Promise<T>): Promise<T> {

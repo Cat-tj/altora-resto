@@ -20,7 +20,7 @@
 //
 // Jalankan: npx tsx packages/test-support/src/database-integration/atomik-pembayaran-pesanan-invariants.test.ts
 
-import { assertTrue, fixtureId, createPesananFixture, DATABASE_URL } from "./_pg-helper.js";
+import { assertTrue, fixtureId, createPesananFixture, DATABASE_URL } from "./_pg-helper"
 import pg from "pg";
 
 async function testUrutanSalahDitolakSaatCommit(): Promise<void> {

@@ -24,7 +24,7 @@
  */
 
 // Password hashing
-export { hashPassword, verifyPassword } from "./password.js";
+export { hashPassword, verifyPassword } from "./password"
 
 // Session management
 export {
@@ -36,7 +36,7 @@ export {
   revokeAllSessions,
   type CreateSessionInput,
   type SessionResult,
-} from "./session.js";
+} from "./session"
 
 // Auth service (login, register, password reset)
 export {
@@ -48,7 +48,7 @@ export {
   type LoginInput,
   type RegisterInput,
   type AuthErrorCode,
-} from "./auth.js";
+} from "./auth"
 
 // Request context resolution
 export {
@@ -56,4 +56,4 @@ export {
   resolveContext,
   resolveContextFromToken,
   type RequestContext,
-} from "./context.js";
+} from "./context"

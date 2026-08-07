@@ -26,7 +26,7 @@
 //
 // Jalankan: npx tsx packages/test-support/src/database-integration/outbox-versioning-dedup-invariants.test.ts
 
-import { assertTrue, fixtureId, createBaseFixtures, withTransaction, expectReject } from "./_pg-helper.js";
+import { assertTrue, fixtureId, createBaseFixtures, withTransaction, expectReject } from "./_pg-helper"
 import pg from "pg";
 
 async function insertOutboxEvent(

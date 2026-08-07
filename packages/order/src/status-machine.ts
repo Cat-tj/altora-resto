@@ -12,7 +12,7 @@
  * async checks (e.g., checking payment status, stock availability).
  */
 
-import type { StatusPesanan } from "./types.js";
+import type { StatusPesanan } from "./types"
 
 // ─── Transition Map ─────────────────────────────────────────────────────────
 
@@ -136,7 +136,7 @@ export function requiresApprovalForCancel(status: StatusPesanan): boolean {
 
 // ─── Payment Status Guards ──────────────────────────────────────────────────
 
-import type { StatusPembayaran } from "./types.js";
+import type { StatusPembayaran } from "./types"
 
 /**
  * Payment state machine transitions.
@@ -166,7 +166,7 @@ export function validatePembayaranTransition(from: StatusPembayaran, to: StatusP
 
 // ─── Item Status Guards ─────────────────────────────────────────────────────
 
-import type { StatusItemPesanan } from "./types.js";
+import type { StatusItemPesanan } from "./types"
 
 /**
  * Item-level status transitions.

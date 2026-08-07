@@ -29,7 +29,7 @@ import {
   fixtureId,
   withTransaction,
   DATABASE_URL,
-} from "./_pg-helper.js";
+} from "./_pg-helper"
 import pg from "pg";
 
 const INT4_MAX = 2147483647n;

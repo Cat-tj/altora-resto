@@ -19,7 +19,7 @@
 //
 // Jalankan: npx tsx packages/test-support/src/database-integration/persediaan-stok-invariants.test.ts
 
-import { assertTrue, createBaseFixtures, expectReject, fixtureId, withTransaction, DATABASE_URL } from "./_pg-helper.js";
+import { assertTrue, createBaseFixtures, expectReject, fixtureId, withTransaction, DATABASE_URL } from "./_pg-helper"
 import pg from "pg";
 
 async function testObjectsExist(): Promise<void> {

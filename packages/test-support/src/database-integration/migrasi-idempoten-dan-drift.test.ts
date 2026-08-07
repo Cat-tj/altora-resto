@@ -32,7 +32,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { assertTrue, DATABASE_URL, ROOT } from "./_pg-helper.js";
+import { assertTrue, DATABASE_URL, ROOT } from "./_pg-helper"
 import pg from "pg";
 
 const PRISMA_BIN = resolve(ROOT, "node_modules/.bin/prisma");

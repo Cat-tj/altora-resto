@@ -15,7 +15,7 @@ import type {
   ReservasiDenganMeja,
   StatusMeja,
   StatusReservasi,
-} from "./types.js";
+} from "./types"
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

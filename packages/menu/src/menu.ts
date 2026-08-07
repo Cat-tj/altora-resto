@@ -14,7 +14,7 @@ import type {
   KategoriMenuDenganItem,
   ItemMenuLengkap,
   ItemMenuDenganHarga,
-} from "./types.js";
+} from "./types"
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

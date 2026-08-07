@@ -20,12 +20,12 @@ import {
   canAddItems,
   requiresApprovalForCancel,
   InvalidTransitionError,
-} from "./status-machine.js";
+} from "./status-machine"
 import type {
   PesananLengkap,
   PembayaranLengkap,
   StatusPesanan,
-} from "./types.js";
+} from "./types"
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

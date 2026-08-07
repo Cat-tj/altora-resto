@@ -28,7 +28,7 @@ export type {
   ConfirmQrisInput,
   ListPembayaranOptions,
   ListMetodeBayarOptions,
-} from "./types.js";
+} from "./types"
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -49,7 +49,7 @@ export {
   listMetodeBayarSchema,
   // QRIS Config
   getKonfigurasiQrisSchema,
-} from "./schemas.js";
+} from "./schemas"
 
 // ─── Service ────────────────────────────────────────────────────────────────
 
@@ -67,4 +67,4 @@ export {
   listPembayaran,
   getPembayaran,
   listMetodeBayar,
-} from "./pembayaran.js";
+} from "./pembayaran"

@@ -51,7 +51,7 @@ export type {
   SetHargaItemOutletInput,
   ListKategoriOptions,
   ListItemOptions,
-} from "./types.js";
+} from "./types"
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -83,7 +83,7 @@ export {
   // List queries
   listKategoriQuerySchema,
   listItemsQuerySchema,
-} from "./schemas.js";
+} from "./schemas"
 
 // ─── Service ────────────────────────────────────────────────────────────────
 
@@ -121,4 +121,4 @@ export {
   // Harga
   setHargaItemOutlet,
   removeHargaItemOutlet,
-} from "./menu.js";
+} from "./menu"

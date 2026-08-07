@@ -31,7 +31,7 @@
 //
 // Jalankan: npx tsx packages/test-support/src/database-integration/optimistic-locking-version-invariants.test.ts
 
-import { assertTrue, fixtureId, withTransaction, DATABASE_URL } from "./_pg-helper.js";
+import { assertTrue, fixtureId, withTransaction, DATABASE_URL } from "./_pg-helper"
 import pg from "pg";
 
 const ALL_TABLES = [

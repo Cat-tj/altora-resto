@@ -39,7 +39,7 @@ import {
   expectReject,
   fixtureId,
   withTransaction,
-} from "./_pg-helper.js";
+} from "./_pg-helper"
 import type pg from "pg";
 
 interface PeranFixture {

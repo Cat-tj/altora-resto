@@ -24,7 +24,7 @@
 //
 // Jalankan: npx tsx packages/test-support/src/database-integration/retur-void-produksi-invariants.test.ts
 
-import { assertTrue, fixtureId, createPesananFixture, expectReject, withTransaction, DATABASE_URL } from "./_pg-helper.js";
+import { assertTrue, fixtureId, createPesananFixture, expectReject, withTransaction, DATABASE_URL } from "./_pg-helper"
 import pg from "pg";
 
 async function testReturSebagianLaluPenuh(): Promise<void> {

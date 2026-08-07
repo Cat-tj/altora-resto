@@ -29,7 +29,7 @@
 //
 // Jalankan: npx tsx packages/test-support/src/database-integration/inventaris-trigger-constraint-lengkap.test.ts
 
-import { assertTrue, DATABASE_URL } from "./_pg-helper.js";
+import { assertTrue, DATABASE_URL } from "./_pg-helper"
 import pg from "pg";
 
 // Diekstrak lewat:

@@ -30,7 +30,7 @@
 //
 // Jalankan: npx tsx packages/test-support/src/database-integration/tiket-dapur-order-ready-predikat.test.ts
 
-import { assertTrue, fixtureId, createPesananFixture, withTransaction } from "./_pg-helper.js";
+import { assertTrue, fixtureId, createPesananFixture, withTransaction } from "./_pg-helper"
 import pg from "pg";
 
 const ORDER_READY_SQL = `

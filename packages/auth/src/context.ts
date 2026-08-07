@@ -9,7 +9,7 @@
  */
 
 import type { PrismaClient, Sesi, Pengguna, KeanggotaanTenant, KeanggotaanOutlet } from "@prisma/client";
-import { validateSession } from "./session.js";
+import { validateSession } from "./session"
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 

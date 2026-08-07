@@ -13,7 +13,7 @@ import type {
   TiketDapurLengkap,
   StasiunDapurDenganAturan,
   StatusTiketDapur,
-} from "./types.js";
+} from "./types"
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

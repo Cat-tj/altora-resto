@@ -12,7 +12,7 @@ import type { PrismaClient } from "@prisma/client";
 import type {
   KaryawanLengkap,
   LaporanAbsensi,
-} from "./types.js";
+} from "./types"
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

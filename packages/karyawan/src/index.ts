@@ -27,7 +27,7 @@ export type {
   ClockOutInput,
   ListKaryawanOptions,
   AbsensiReportOptions,
-} from "./types.js";
+} from "./types"
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -45,7 +45,7 @@ export {
   // Attendance
   absensiReportSchema,
   listAbsensiSchema,
-} from "./schemas.js";
+} from "./schemas"
 
 // ─── Service ────────────────────────────────────────────────────────────────
 
@@ -62,4 +62,4 @@ export {
   // Attendance
   getAttendanceReport,
   listAbsensi,
-} from "./karyawan.js";
+} from "./karyawan"

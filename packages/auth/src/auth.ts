@@ -12,12 +12,12 @@
  */
 
 import type { PrismaClient, Pengguna } from "@prisma/client";
-import { hashPassword, verifyPassword } from "./password.js";
+import { hashPassword, verifyPassword } from "./password"
 import {
   createSession,
   revokeAllSessions,
   type SessionResult,
-} from "./session.js";
+} from "./session"
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
