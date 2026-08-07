@@ -144,12 +144,13 @@ export async function loginWithEmail(
   await logLoginAttempt(db, input.email, true, input.ipHash, input.userAgent);
 
   // Create session
-  return createSession(db, {
+  const sessionInput: Parameters<typeof createSession>[1] = {
     penggunaId: user.id,
-    keanggotaanTenantId: input.keanggotaanTenantId,
-    ipHash: input.ipHash,
-    userAgent: input.userAgent,
-  });
+    ...(input.keanggotaanTenantId ? { keanggotaanTenantId: input.keanggotaanTenantId } : {}),
+    ...(input.ipHash ? { ipHash: input.ipHash } : {}),
+    ...(input.userAgent ? { userAgent: input.userAgent } : {}),
+  };
+  return createSession(db, sessionInput);
 }
 
 // ─── Registration ───────────────────────────────────────────────────────────
