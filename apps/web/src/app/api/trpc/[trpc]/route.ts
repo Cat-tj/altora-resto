@@ -12,7 +12,7 @@ function handler(request: Request) {
   return fetchRequestHandler({
     endpoint: "/api/trpc",
     req: request,
-    Router: appRouter,
+    router: appRouter,
     createContext: () => createContext(prisma, request),
     onError:
       process.env.NODE_ENV === "development"
