@@ -9,20 +9,20 @@ import { appRouter, createContext } from "@altora/api";
 import { prisma } from "@altora/db";
 
 function handler(request: Request) {
-  return fetchRequestHandler({
+  const opts: Parameters<typeof fetchRequestHandler>[0] = {
     endpoint: "/api/trpc",
     req: request,
     router: appRouter,
     createContext: () => createContext(prisma, request),
-    onError:
-      process.env.NODE_ENV === "development"
-        ? ({ path, error }) => {
-            console.error(
-              `❌ tRPC failed on ${path ?? "<no-path>"}: ${error.message}`,
-            );
-          }
-        : undefined,
-  });
+  };
+  if (process.env.NODE_ENV === "development") {
+    opts.onError = ({ path, error }) => {
+      console.error(
+        `❌ tRPC failed on ${path ?? "<no-path>"}: ${error.message}`
+      );
+    };
+  }
+  return fetchRequestHandler(opts);
 }
 
 export { handler as GET, handler as POST };
