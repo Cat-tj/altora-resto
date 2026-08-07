@@ -129,7 +129,14 @@ export const pembayaranRouter = router({
   list: tenantProcedure
     .input(listPembayaranSchema)
     .query(async ({ ctx, input }) => {
-      return listPembayaran(ctx.db, input);
+      const opts: Parameters<typeof listPembayaran>[1] = {
+        ...(input.outletId ? { outletId: input.outletId } : {}),
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.dariTanggal ? { dariTanggal: input.dariTanggal } : {}),
+        ...(input.sampaiTanggal ? { sampaiTanggal: input.sampaiTanggal } : {}),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      };
+      return listPembayaran(ctx.db, opts);
     }),
 
   /** Get single payment with all relations. */
