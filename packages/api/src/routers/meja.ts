@@ -220,12 +220,12 @@ export const mejaRouter = router({
   list: tenantProcedure
     .input(listMejaSchema)
     .query(async ({ ctx, input }) => {
-      return listMeja(ctx.db, {
-        ...(input.outletId && { outletId: input.outletId }),
-        ...(input.areaMejaId && { areaMejaId: input.areaMejaId }),
-        ...(input.status && { status: input.status }),
-        includeArea: input.includeArea,
-      });
+      const opts: Parameters<typeof listMeja>[1] = {
+        ...(input.areaMejaId ? { areaMejaId: input.areaMejaId } : {}),
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.includeArea !== undefined ? { includeArea: input.includeArea } : {}),
+      };
+      return listMeja(ctx.db, opts);
     }),
 
   /** Get a single table with full details. */

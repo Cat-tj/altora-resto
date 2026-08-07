@@ -92,7 +92,12 @@ export const karyawanRouter = router({
   list: tenantProcedure
     .input(listKaryawanSchema)
     .query(async ({ ctx, input }) => {
-      return listKaryawan(ctx.db, input);
+      const filterOptions: Parameters<typeof listKaryawan>[1] = {
+        ...(input.outletId ? { outletId: input.outletId } : {}),
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.includeRelations !== undefined ? { includeRelations: input.includeRelations } : {}),
+      };
+      return listKaryawan(ctx.db, filterOptions);
     }),
 
   /** Get single employee with relations. */
