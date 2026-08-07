@@ -66,9 +66,9 @@ export const authRouter = router({
         const result = await loginWithEmail(ctx.db, {
           email: input.email,
           password: input.password,
-          keanggotaanTenantId: input.keanggotaanTenantId,
+          ...(input.keanggotaanTenantId ? { keanggotaanTenantId: input.keanggotaanTenantId } : {}),
           ipHash: hashIp(ctx.request.headers.get("x-forwarded-for") ?? "unknown"),
-          userAgent: ctx.request.headers.get("user-agent") ?? undefined,
+          ...(ctx.request.headers.get("user-agent") ? { userAgent: ctx.request.headers.get("user-agent")! } : {}),
         });
 
         return {
