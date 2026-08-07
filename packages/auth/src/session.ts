@@ -81,16 +81,17 @@ export async function createSession(
 
   const session = await db.sesi.create({
     data: {
+      id: crypto.randomUUID(),
       penggunaId: input.penggunaId,
-      keanggotaanTenantId: input.keanggotaanTenantId,
-      perangkatId: input.perangkatId,
+      ...(input.keanggotaanTenantId ? { keanggotaanTenantId: input.keanggotaanTenantId } : {}),
+      ...(input.perangkatId ? { perangkatId: input.perangkatId } : {}),
       tokenHash,
       dibuatPada: now,
-      kadaluarsaPada: new Date(now.getTime() + durationMs),
+      kadaluarsaPada: expiresAt,
       terakhirAktifPada: now,
-      ipHash: input.ipHash,
-      userAgent: input.userAgent,
-    },
+      ...(input.ipHash ? { ipHash: input.ipHash } : {}),
+      ...(input.userAgent ? { userAgent: input.userAgent } : {}),
+    } as any,
   });
 
   return { session, rawToken };
