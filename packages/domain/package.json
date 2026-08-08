@@ -1,0 +1,22 @@
+{
+  "name": "@altora/domain",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Domain utilities for Altora Resto — money, business date, audit, permissions.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./money": "./src/money.ts",
+    "./business-date": "./src/business-date.ts",
+    "./audit": "./src/audit.ts",
+    "./permission": "./src/permission.ts"
+  },
+  "dependencies": {
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
