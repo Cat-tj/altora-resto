@@ -141,7 +141,7 @@ export function allocateDiscount(
   const toDistribute = totalDiscount - distributed;
 
   for (let i = 0; i < toDistribute; i++) {
-    floored[remainders[i].index]++;
+    floored[remainders[i]!.index]++;
   }
 
   // Verify invariant
