@@ -18,6 +18,7 @@ import {
   BookOpen,
   BarChart3,
   Settings,
+  LogOut,
 } from "lucide-react";
 
 interface NavItem {
@@ -63,49 +64,54 @@ const navSections: NavSection[] = [
 ];
 
 const mobileNavItems: NavItem[] = [
+  { href: "/", label: "Beranda", icon: Home },
   { href: "/kasir", label: "Kasir", icon: MonitorCheck },
-  { href: "/menu", label: "Menu", icon: UtensilsCrossed },
+  { href: "/pesanan", label: "Pesanan", icon: ClipboardList },
   { href: "/dapur", label: "Dapur", icon: ChefHat },
   { href: "/meja", label: "Meja", icon: LayoutGrid },
-  { href: "/pesanan", label: "Pesanan", icon: ClipboardList },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  const isActive = (href: string) =>
-    href === "/" ? pathname === "/" : pathname.startsWith(href);
+  const isActive = (href: string) => {
+    if (href === "/") return pathname === "/";
+    return pathname.startsWith(href);
+  };
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      {/* Sidebar */}
-      <aside className="hidden w-64 flex-col border-r bg-card lg:flex">
-        <div className="flex h-14 items-center border-b px-6">
-          <UtensilsCrossed className="mr-2 h-6 w-6 text-primary" />
-          <span className="text-lg font-bold">Altora Resto</span>
-        </div>
-        <nav className="flex-1 overflow-y-auto p-4">
-          {/* Beranda */}
-          <Link
-            href="/"
-            className={cn(
-              "flex items-center rounded-md px-3 py-2 text-sm font-medium transition-colors",
-              isActive("/")
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-            )}
+    <div className="altora-ambient min-h-screen">
+      {/* ═══ Floating glass sidebar (desktop) ═══ */}
+      <aside className="altora-glass fixed inset-y-4 left-4 z-20 hidden w-56 flex-col overflow-hidden rounded-[18px] lg:flex">
+        {/* Brand */}
+        <div className="flex items-center gap-2.5 px-3.5 pb-2.5 pt-3">
+          <div
+            className="grid h-8 w-8 flex-none place-items-center rounded-[9px] text-white"
+            style={{
+              background:
+                "linear-gradient(135deg, #7c5ce8 0%, #c05bc8 100%)",
+            }}
           >
-            <Home className="mr-2 h-4 w-4" />
-            Beranda
-          </Link>
+            <UtensilsCrossed className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <strong className="block truncate text-[0.82rem] font-bold text-[hsl(var(--ink))]">
+              Altora Resto
+            </strong>
+            <small className="text-[0.62rem] text-muted-foreground">
+              Operasional Restoran
+            </small>
+          </div>
+        </div>
 
-          {/* Section groups */}
+        {/* Nav */}
+        <nav className="flex-1 overflow-y-auto px-2 py-1">
           {navSections.map((section) => (
-            <div key={section.title} className="mt-4">
-              <p className="mb-1 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <div key={section.title} className="mb-3">
+              <h2 className="mx-2 mb-1 text-[0.6rem] font-extrabold uppercase tracking-[0.09em] text-muted-foreground/70">
                 {section.title}
-              </p>
-              <div className="space-y-1">
+              </h2>
+              <div className="space-y-0.5">
                 {section.items.map((item) => {
                   const active = isActive(item.href);
                   return (
@@ -113,13 +119,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                       key={item.href}
                       href={item.href}
                       className={cn(
-                        "flex items-center rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                        "flex min-h-8 items-center gap-2 rounded-lg px-2 text-[0.78rem] font-medium no-underline transition-colors",
                         active
-                          ? "bg-primary text-primary-foreground"
-                          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                          ? "bg-[hsl(var(--accent-soft))] font-bold text-[hsl(var(--accent))]"
+                          : "text-[hsl(var(--ink-2))] hover:bg-[hsl(var(--paper))] hover:text-[hsl(var(--ink))]"
                       )}
                     >
-                      <item.icon className="mr-2 h-4 w-4" />
+                      <item.icon className="h-4 w-4 flex-none" />
                       {item.label}
                     </Link>
                   );
@@ -128,20 +134,45 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           ))}
         </nav>
-        <div className="border-t p-4 text-xs text-muted-foreground">
-          v0.1.0 &middot; Altora Resto
+
+        {/* Footer */}
+        <div className="flex items-center gap-2 border-t px-3.5 py-2.5">
+          <div className="grid h-7 w-7 place-items-center rounded-lg bg-[hsl(var(--accent-soft))] text-[0.72rem] font-extrabold text-[hsl(var(--accent))]">
+            AD
+          </div>
+          <div className="min-w-0 flex-1">
+            <strong className="block truncate text-[0.72rem] font-bold text-[hsl(var(--ink))]">
+              Admin
+            </strong>
+            <small className="text-[0.62rem] text-muted-foreground">
+              Owner
+            </small>
+          </div>
+          <button className="flex-none cursor-pointer rounded-md border px-2 py-0.5 text-[0.68rem] font-semibold text-muted-foreground transition-colors hover:border-red-500 hover:text-red-500">
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
         </div>
       </aside>
 
-      {/* Mobile header */}
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="flex h-14 items-center border-b px-4 lg:hidden">
-          <UtensilsCrossed className="mr-2 h-5 w-5 text-primary" />
-          <span className="font-bold">Altora Resto</span>
+      {/* ═══ Main column ═══ */}
+      <div className="flex min-h-screen flex-col lg:pl-60">
+        {/* Mobile header */}
+        <header className="altora-glass sticky top-0 z-10 flex h-14 items-center gap-2 border-b px-4 lg:hidden">
+          <div
+            className="grid h-7 w-7 place-items-center rounded-lg text-white"
+            style={{
+              background: "linear-gradient(135deg, #7c5ce8 0%, #c05bc8 100%)",
+            }}
+          >
+            <UtensilsCrossed className="h-3.5 w-3.5" />
+          </div>
+          <span className="text-sm font-bold text-[hsl(var(--ink))]">
+            Altora Resto
+          </span>
         </header>
 
         {/* Mobile bottom nav */}
-        <nav className="flex border-b lg:hidden">
+        <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t bg-white/90 backdrop-blur-xl lg:hidden">
           {mobileNavItems.map((item) => {
             const active = isActive(item.href);
             return (
@@ -149,8 +180,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "flex flex-1 flex-col items-center gap-1 py-2 text-xs font-medium transition-colors",
-                  active ? "text-primary" : "text-muted-foreground"
+                  "flex flex-1 flex-col items-center gap-0.5 py-2 text-[0.62rem] font-medium transition-colors",
+                  active ? "text-[hsl(var(--accent))]" : "text-muted-foreground"
                 )}
               >
                 <item.icon className="h-4 w-4" />
@@ -161,7 +192,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
 
         {/* Main content */}
-        <main className="flex-1 overflow-auto p-4 lg:p-6">{children}</main>
+        <main className="flex-1 overflow-auto p-4 pb-20 lg:p-6 lg:pb-6">
+          {children}
+        </main>
       </div>
     </div>
   );

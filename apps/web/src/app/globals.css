@@ -4,44 +4,78 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* ═══ Token Altora (sumber: packages/ui/src/tokens.css) ═══
+       Teks navy, accent purple, permukaan off-white.
+       UI Altora WAJIB: #f8f7fc + ambient radial gradient + glassmorphism. */
+
+    /* teks */
+    --ink: 224 66% 19%;          /* #10224f */
+    --ink-2: 224 53% 24%;        /* #1c2f5c */
+
+    /* permukaan */
+    --paper: 245 45% 98%;        /* #f8f7fc */
+    --surface: 0 0% 100%;        /* #ffffff */
+    --line: 245 32% 92%;         /* #e9e6f2 */
+    --line-2: 248 38% 95%;       /* #f1eef8 */
+
+    /* aksen — Altora Resto memakai purple (default produk) */
+    --accent: 251 75% 64%;       /* #7c5ce8 */
+    --accent-soft: 252 83% 95%;  /* #eee9fd */
+    --green: 160 79% 27%;        /* #0e7a57 */
+    --green-soft: 157 63% 93%;   /* #e4f5ee */
+    --red: 0 84% 60%;            /* #ef4444 */
+    --red-soft: 355 85% 95%;     /* #fdeaec */
+    --amber: 38 92% 50%;         /* #f59e0b */
+    --amber-soft: 39 96% 93%;    /* #fef2dc */
+    --blue: 217 91% 60%;         /* #3b82f6 */
+
+    /* Mapping ke variabel shadcn (HSL) */
+    --background: 245 45% 98%;
+    --foreground: 224 66% 19%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-    --radius: 0.5rem;
+    --card-foreground: 224 66% 19%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 66% 19%;
+    --primary: 224 66% 19%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 252 83% 95%;
+    --secondary-foreground: 251 75% 64%;
+    --muted: 248 38% 95%;
+    --muted-foreground: 225 15% 49%;
+    --accent-foreground: 251 75% 64%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 245 32% 92%;
+    --input: 245 32% 92%;
+    --ring: 251 75% 64%;
+    --radius: 0.9rem;
+
+    /* Shadow navy (bukan hitam) */
+    --sh-sm: 0 2px 8px rgba(28, 26, 60, 0.05);
+    --sh: 0 10px 30px -12px rgba(38, 32, 84, 0.16);
+    --sh-lg: 0 30px 70px -30px rgba(38, 32, 84, 0.3);
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
+    --background: 224 66% 9%;
+    --foreground: 245 45% 96%;
+    --card: 224 66% 12%;
+    --card-foreground: 245 45% 96%;
+    --popover: 224 66% 12%;
+    --popover-foreground: 245 45% 96%;
+    --primary: 251 75% 64%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 224 66% 18%;
+    --secondary-foreground: 245 45% 96%;
+    --muted: 224 66% 18%;
+    --muted-foreground: 224 20% 65%;
+    --accent: 251 75% 64%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 62% 40%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 224 40% 20%;
+    --input: 224 40% 20%;
+    --ring: 251 75% 64%;
   }
 }
 
@@ -51,5 +85,35 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@layer components {
+  /* ═══ Ambient radial gradient — fondasi glassmorphism Altora ═══ */
+  .altora-ambient {
+    background:
+      radial-gradient(circle at 8% 6%, rgba(168, 85, 247, 0.09), transparent 32%),
+      radial-gradient(circle at 91% 8%, rgba(96, 165, 250, 0.08), transparent 30%),
+      radial-gradient(circle at 88% 90%, rgba(236, 72, 153, 0.055), transparent 34%),
+      radial-gradient(circle at 15% 92%, rgba(129, 140, 248, 0.05), transparent 30%),
+      hsl(var(--paper));
+  }
+
+  /* ═══ Glass surface — sidebar, header, kartu ═══ */
+  .altora-glass {
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(16px) saturate(1.4);
+    -webkit-backdrop-filter: blur(16px) saturate(1.4);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    box-shadow:
+      0 20px 40px rgba(15, 23, 42, 0.06),
+      inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  }
+
+  /* Fallback: tanpa backdrop-filter → hampir solid */
+  @supports not (backdrop-filter: blur(1px)) {
+    .altora-glass {
+      background: rgba(255, 255, 255, 0.96);
+    }
   }
 }
