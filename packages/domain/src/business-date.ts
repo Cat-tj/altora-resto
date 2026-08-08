@@ -97,7 +97,7 @@ function formatDate(date: Date): string {
 }
 
 function parseDate(dateStr: string, cutoffHour = 4): Date {
-  const [y, m, d] = dateStr.split("-").map(Number);
+  const parts = dateStr.split("-").map(Number); const y = parts[0] ?? 0; const m = parts[1] ?? 1; const d = parts[2] ?? 1;
   const date = new Date(y, m - 1, d, cutoffHour);
   return date;
 }
