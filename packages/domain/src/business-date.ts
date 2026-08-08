@@ -112,7 +112,7 @@ function endOfDay(date: Date): Date {
  * Format business date for display (e.g., "2026-08-08" → "8 Agustus 2026")
  */
 export function displayBusinessDate(businessDate: string): string {
-  const [y, m, d] = businessDate.split("-").map(Number);
+  const parts = businessDate.split("-").map(Number); const y = parts[0] ?? 2026; const m = parts[1] ?? 1; const d = parts[2] ?? 1;
   const months = [
     "Januari", "Februari", "Maret", "April", "Mei", "Juni",
     "Juli", "Agustus", "September", "Oktober", "November", "Desember",
