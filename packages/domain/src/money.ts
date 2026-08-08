@@ -148,7 +148,7 @@ export function allocateDiscount(
   const toDistribute = totalDiscount - distributed;
 
   for (let i = 0; i < toDistribute; i++) {
-    const idx = allocations[i].index;
+    const alloc = allocations[i]; if (!alloc) continue; const idx = alloc.index;
     result[idx] = result[idx] + 1;
   }
 
