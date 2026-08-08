@@ -30,11 +30,6 @@ export default function MasukPage() {
       if (result?.token) {
         // Store session token in cookie
         document.cookie = `altora-session=${result.token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax; Secure`;
-        
-        // Store user info
-        if (result.user) {
-          localStorage.setItem("altora-user", JSON.stringify(result.user));
-        }
 
         // Redirect to intended page or home
         router.push(from);
