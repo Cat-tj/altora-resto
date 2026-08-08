@@ -149,7 +149,7 @@ export function allocateDiscount(
 
   for (let i = 0; i < toDistribute; i++) {
     const alloc = allocations[i]; if (!alloc) continue; const idx = alloc.index;
-    result[idx] = result[idx] + 1;
+    result[idx] = (result[idx] ?? 0) + 1;
   }
 
   // Verify invariant
