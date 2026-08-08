@@ -96,7 +96,7 @@ function formatDate(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-function parseDate(dateStr: string, cutoffHour: number = 4): Date {
+function parseDate(dateStr: string, cutoffHour = 4): Date {
   const [y, m, d] = dateStr.split("-").map(Number);
   const date = new Date(y, m - 1, d, cutoffHour);
   return date;
