@@ -131,7 +131,7 @@ export function allocateDiscount(
 
   const raw = amounts.map((a) => (a * totalDiscount) / total);
   const floored = raw.map((r) => Math.floor(r));
-  const remainders = raw.map((r, i) => ({ index: i, diff: r - floored[i] ?? 0 }));
+  const remainders = raw.map((r, i) => ({ index: i, diff: r - (floored[i] as number) }));
 
   // Sort by largest remainder
   remainders.sort((a, b) => b.diff - a.diff);
