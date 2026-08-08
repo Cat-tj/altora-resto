@@ -129,19 +129,35 @@ import { type PermissionCode, hasPermission } from "@altora/domain";
 export function permissionProcedure(...requiredPermissions: PermissionCode[]) {
   return outletProcedure.use(async ({ ctx, next }) => {
     const reqCtx = ctx.ctx;
-    if (!reqCtx?.pengguna?.peran) {
+    if (!reqCtx?.keanggotaanTenant) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: "Anda tidak memiliki peran yang valid",
+        message: "Anda harus memilih tenant terlebih dahulu",
       });
     }
 
-    // Get user's permissions from their role
-    const userPermissions = reqCtx.pengguna.peran.izin?.map((i: any) => i.kode) ?? [];
+    // Load roles + permissions for this tenant membership
+    // keanggotaanPeran → peran → peranIzin → izin
+    const keanggotaanPeran = (reqCtx.keanggotaanTenant as any).keanggotaanPeran;
+    if (!keanggotaanPeran || keanggotaanPeran.length === 0) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Anda tidak memiliki peran di tenant ini",
+      });
+    }
+
+    // Collect all permissions from all roles
+    const userPermissions = new Set<string>();
+    for (const kp of keanggotaanPeran) {
+      const izinList = kp.peran?.peranIzin ?? kp.peran?.izin ?? [];
+      for (const izin of izinList) {
+        userPermissions.add(izin.kode ?? izin.izin?.kode ?? "");
+      }
+    }
 
     // Check if user has ALL required permissions
     for (const required of requiredPermissions) {
-      if (!hasPermission(userPermissions as any[], required)) {
+      if (!userPermissions.has(required)) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: `Anda tidak memiliki izin: ${required}`,
