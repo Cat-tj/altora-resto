@@ -132,7 +132,7 @@ export function allocateDiscount(
   // Calculate raw proportional allocations
   const allocations: { index: number; raw: number; floor: number; diff: number }[] = [];
   for (let i = 0; i < amounts.length; i++) {
-    const raw = (amounts[i] * totalDiscount) / total;
+    const amt = amounts[i] ?? 0; const raw = (amt * totalDiscount) / total;
     const floor = Math.floor(raw);
     allocations.push({ index: i, raw, floor, diff: raw - floor });
   }
