@@ -117,3 +117,38 @@ export const outletProcedure = tenantProcedure.use(outletMiddleware);
 export const router = t.router;
 export const middleware = t.middleware;
 export { TRPCError };
+
+// ─── Permission Procedure ──────────────────────────────────────────────────
+
+import { type PermissionCode, hasPermission } from "@altora/domain";
+
+/**
+ * Create a permission-gated procedure.
+ * Usage: permissionProcedure("order.void") — checks if user's role has the permission.
+ */
+export function permissionProcedure(...requiredPermissions: PermissionCode[]) {
+  return outletProcedure.use(async ({ ctx, next }) => {
+    const reqCtx = ctx.ctx;
+    if (!reqCtx?.pengguna?.peran) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Anda tidak memiliki peran yang valid",
+      });
+    }
+
+    // Get user's permissions from their role
+    const userPermissions = reqCtx.pengguna.peran.izin?.map((i: any) => i.kode) ?? [];
+
+    // Check if user has ALL required permissions
+    for (const required of requiredPermissions) {
+      if (!hasPermission(userPermissions as any[], required)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `Anda tidak memiliki izin: ${required}`,
+        });
+      }
+    }
+
+    return next({ ctx });
+  });
+}
