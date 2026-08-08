@@ -129,28 +129,36 @@ export function allocateDiscount(
   const total = amounts.reduce((a, b) => a + b, 0);
   if (total === 0) return amounts.map(() => 0);
 
-  const raw = amounts.map((a) => (a * totalDiscount) / total);
-  const floored = raw.map((r) => Math.floor(r));
-  const remainders = raw.map((r, i) => ({ index: i, diff: r - (floored[i] as number) }));
+  // Calculate raw proportional allocations
+  const allocations: { index: number; raw: number; floor: number; diff: number }[] = [];
+  for (let i = 0; i < amounts.length; i++) {
+    const raw = (amounts[i] * totalDiscount) / total;
+    const floor = Math.floor(raw);
+    allocations.push({ index: i, raw, floor, diff: raw - floor });
+  }
 
   // Sort by largest remainder
-  remainders.sort((a, b) => b.diff - a.diff);
+  allocations.sort((a, b) => b.diff - a.diff);
+
+  // Start with floored values
+  const result: Money[] = allocations.map((a) => a.floor);
 
   // Distribute rounding difference
-  let distributed = floored.reduce((a, b) => a + b, 0);
+  let distributed = result.reduce((a, b) => a + b, 0);
   const toDistribute = totalDiscount - distributed;
 
   for (let i = 0; i < toDistribute; i++) {
-    floored[remainders[i]!.index as number]++;
+    const idx = allocations[i].index;
+    result[idx] = result[idx] + 1;
   }
 
   // Verify invariant
-  const sum = floored.reduce((a, b) => a + b, 0);
+  const sum = result.reduce((a, b) => a + b, 0);
   if (sum !== totalDiscount) {
     throw new Error(`Money: allocation invariant violated — sum(${sum}) !== discount(${totalDiscount})`);
   }
 
-  return floored;
+  return result;
 }
 
 // ─── Validation ─────────────────────────────────────────────────────────────
