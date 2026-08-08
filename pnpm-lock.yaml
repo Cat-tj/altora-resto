@@ -183,6 +183,9 @@ importers:
       '@altora/db':
         specifier: workspace:*
         version: link:../db
+      '@altora/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@altora/karyawan':
         specifier: workspace:*
         version: link:../karyawan
@@ -272,6 +275,16 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
+  packages/domain:
+    dependencies:
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+
   packages/dukungan:
     devDependencies:
       typescript:
@@ -298,6 +311,13 @@ importers:
         version: 5.9.3
 
   packages/keanggotaan:
+    dependencies:
+      '@altora/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@prisma/client':
+        specifier: ^6.0.0
+        version: 6.19.3(prisma@5.22.0)(typescript@5.9.3)
     devDependencies:
       typescript:
         specifier: ^5.6.0
@@ -950,6 +970,18 @@ packages:
       prisma: '*'
     peerDependenciesMeta:
       prisma:
+        optional: true
+
+  '@prisma/client@6.19.3':
+    resolution: {integrity: sha512-mKq3jQFhjvko5LTJFHGilsuQs+W+T3Gm451NzuTDGQxwCzwXHYnIu2zGkRoW+Exq3Rob7yp2MfzSrdIiZVhrBg==}
+    engines: {node: '>=18.18'}
+    peerDependencies:
+      prisma: '*'
+      typescript: '>=5.1.0'
+    peerDependenciesMeta:
+      prisma:
+        optional: true
+      typescript:
         optional: true
 
   '@prisma/debug@5.22.0':
@@ -3211,6 +3243,11 @@ snapshots:
   '@prisma/client@5.22.0(prisma@5.22.0)':
     optionalDependencies:
       prisma: 5.22.0
+
+  '@prisma/client@6.19.3(prisma@5.22.0)(typescript@5.9.3)':
+    optionalDependencies:
+      prisma: 5.22.0
+      typescript: 5.9.3
 
   '@prisma/debug@5.22.0': {}
 
