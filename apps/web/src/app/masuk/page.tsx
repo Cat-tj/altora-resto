@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Label } from "@/components/ui/label";
 import { UtensilsCrossed, Loader2 } from "lucide-react";
 
-export default function MasukPage() {
+function MasukForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const from = searchParams.get("from") ?? "/";
@@ -28,10 +28,7 @@ export default function MasukPage() {
       const result = await trpc.auth.login.mutate({ email, password });
 
       if (result?.token) {
-        // Store session token in cookie
         document.cookie = `altora-session=${result.token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax; Secure`;
-
-        // Redirect to intended page or home
         router.push(from);
         router.refresh();
       } else {
@@ -102,5 +99,19 @@ export default function MasukPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+export default function MasukPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      }
+    >
+      <MasukForm />
+    </Suspense>
   );
 }
