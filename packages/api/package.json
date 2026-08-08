@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@altora/auth": "workspace:*",
+    "@altora/domain": "workspace:*",
     "@altora/dapur": "workspace:*",
     "@altora/db": "workspace:*",
     "@altora/karyawan": "workspace:*",
